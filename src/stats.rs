@@ -63,6 +63,17 @@ pub struct Counters {
     pub events_dropped: u64,
 }
 
+/// A finished match, newest first in `Metrics::recent`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecentMatch {
+    pub name: String,
+    pub peak_tier: String,
+    pub peak_pps: f64,
+    pub duration_secs: u64,
+    pub ended: u64,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Metrics {
     pub version: String,
@@ -77,6 +88,9 @@ pub struct Metrics {
     /// Notes about other tuners sharing the machine (bpftune, ...).
     pub neighbours: Vec<String>,
     pub top: Vec<TopProc>,
+    /// Last few finished matches.
+    #[serde(default)]
+    pub recent: Vec<RecentMatch>,
 }
 
 pub fn now_unix() -> u64 {
@@ -204,6 +218,22 @@ impl Metrics {
         for n in &self.neighbours {
             writeln!(w, "Note: {n}")?;
         }
+        if !self.recent.is_empty() {
+            writeln!(w, "\nRecent matches:")?;
+            let now = now_unix();
+            for r in &self.recent {
+                writeln!(
+                    w,
+                    "  {:<16} peak {} @ {:.0} pkt/s, {} ({}), {} ago",
+                    r.name.chars().take(16).collect::<String>(),
+                    r.peak_tier,
+                    r.peak_pps,
+                    fmt_dur(r.duration_secs),
+                    r.reason,
+                    fmt_dur(now.saturating_sub(r.ended))
+                )?;
+            }
+        }
         if !self.top.is_empty() {
             writeln!(w, "\nBusiest UDP processes:")?;
             writeln!(
@@ -232,6 +262,65 @@ impl Metrics {
         }
         Ok(())
     }
+}
+
+fn pid_alive(pid: u32) -> bool {
+    let ok = unsafe { libc::kill(pid as i32, 0) } == 0;
+    ok || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// One line of JSON for a Waybar (or Polybar/i3blocks) custom module.
+/// `text` is empty outside a match, which hides the module.
+pub fn waybar(run_dir: &Path) -> String {
+    let m = match read(run_dir) {
+        Ok(m) if pid_alive(m.pid) => m,
+        _ => {
+            return serde_json::json!({
+                "text": "", "alt": "off", "class": "off",
+                "tooltip": "bpfrag is not running",
+            })
+            .to_string();
+        }
+    };
+    let last = m.recent.first().map(|r| {
+        format!(
+            "\nLast match: {} {} for {} ({})",
+            r.name,
+            r.peak_tier,
+            fmt_dur(r.duration_secs),
+            r.reason
+        )
+    });
+    let Some(s) = &m.session else {
+        return serde_json::json!({
+            "text": "", "alt": "idle", "class": "idle",
+            "tooltip": format!("bpfrag: waiting for a match{}", last.unwrap_or_default()),
+        })
+        .to_string();
+    };
+    let mut tip = format!(
+        "{} (pid {}): {} @ {:.0} pkt/s for {}\nwhy: {}",
+        s.name,
+        s.tgid,
+        s.tier,
+        s.pps,
+        fmt_dur(s.since_secs),
+        s.reason
+    );
+    if let Some(d) = &m.dscp {
+        tip += &format!("\nDSCP {} on {}", d.class, d.interfaces.join(", "));
+    }
+    for a in &m.applied {
+        tip += &format!("\n{} = {}", a.knob, a.value);
+    }
+    if m.dry_run {
+        tip += "\n(dry run: nothing applied)";
+    }
+    let lower = s.tier.to_lowercase();
+    serde_json::json!({
+        "text": s.tier, "alt": lower, "class": lower, "tooltip": tip,
+    })
+    .to_string()
 }
 
 /// `bpfrag --monitor N`: print the running instance's metrics every N

@@ -64,6 +64,7 @@ fighting the verifier.
 | `net.ipv4.udp_mem` (raise-only, per field) | 64K/427K/8M pages | 100K/853K/16M | 200K/1.7M/32M |
 | `net.ipv4.udp_early_demux` | 1 | 1 | 1 |
 | `vm.dirty_bytes` / `dirty_background_bytes` (lower-only) | untouched | 256 / 64 MiB | 256 / 64 MiB |
+| Wi-Fi power save (wireless interfaces) | untouched | off | off |
 
 The network values are the three profiles from the original bpftune
 gaming-tuner patches. "Raise-only" means bpfrag never shrinks something you
@@ -78,6 +79,10 @@ How much each knob actually matters:
   win on a busy wireless network. Routers running cake with diffserv honour it
   too. ISPs usually strip it, which is harmless. If the game already marks its
   own packets, bpfrag leaves them alone unless you set `override = true`.
+- **Wi-Fi power save** lets the radio doze between beacons. A steady 64-tick
+  stream mostly keeps it awake, but lulls (between rounds, slow tick servers)
+  let it doze, and waking it can add tens of milliseconds to the next packets.
+  It's off for the match and back on afterwards.
 - **Interrupt coalescing** at 0–10 µs removes up to tens of microseconds of
   receive jitter on wired NICs. Most Wi-Fi drivers don't support changing it,
   and bpfrag skips them quietly.
@@ -132,6 +137,11 @@ There's ±15 pkt/s of hysteresis around each threshold. Moving up takes 3
 confident windows, moving down takes 4, and tier changes are at least 5
 seconds apart. A match never drops back to CASUAL while traffic is still
 flowing.
+
+bpfrag tunes the interfaces carrying the default routes, or the ones you
+pass with `--iface`. During a match it re-checks them every 5 seconds, so
+docking, switching from Wi-Fi to Ethernet, or a VPN coming up is followed
+without waiting for the next match.
 
 A match ends **immediately when the game exits** (via the
 `sched_process_exit` hook), or after **15 quiet seconds**, for example back in
@@ -246,6 +256,7 @@ sudo bpfrag --dry-run -v            detect and log, change nothing
 bpfrag --monitor 1                  live view of the running instance
 sudo bpfrag --check                 capabilities + bpftune/sched_ext/gamemode status
 sudo bpfrag --selftest              run test packets through the DSCP marker on this kernel
+bpfrag --waybar                     one JSON line for a status bar
 sudo bpfrag --classify <PID>        would this process count as a game, and why
 bpfrag --dump-config                effective config, in the TOML file's format
 sudo bpfrag --restore               undo a crashed instance's changes
@@ -255,6 +266,24 @@ sudo bpfrag --dscp EF --iface wlan0 mark EF on wlan0 only
 sudo bpfrag --allow 'Moonlight'     treat a process as a game
 sudo bpfrag --stats 60              stats line in the log every minute
 ```
+
+### Waybar
+
+`bpfrag --waybar` prints one line of JSON and doesn't need root. Outside a
+match the text is empty, so the module hides itself. The tooltip shows the
+game, why it counts as a game, every applied setting and the last match.
+
+```jsonc
+"custom/bpfrag": {
+    "exec": "bpfrag --waybar",
+    "return-type": "json",
+    "interval": 2,
+    "format": "{}"
+}
+```
+
+`alt` and `class` are `off`, `idle`, `casual`, `competitive` or `intense`, for
+`format-icons` or CSS.
 
 For the service, put flags in `/etc/default/bpfrag` as `BPFRAG_FLAGS="..."`.
 Tiers, classifier lists and detector thresholds go in
@@ -304,6 +333,7 @@ src/knobs.rs             journalled, reversible knobs
 src/coexist.rs           bpftune / sched_ext / gamemode / tuned awareness
 src/bpf.rs               hook selection, map access, tc attach
 src/net.rs               interfaces + ethtool coalescing
+src/wifi.rs              Wi-Fi power save over nl80211 (generic netlink, no deps)
 src/stats.rs             Metrics, --stats, --monitor
 src/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
 dist/                    systemd unit, /etc/default file, example config
@@ -342,9 +372,9 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal (27 tests)
+cargo test                     # detector, classifier, config, journal, netlink (31 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (11 cases)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (21 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (27 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes
@@ -369,6 +399,8 @@ daemon-shaped noise, and checks:
 - every rewritten packet still has a valid IPv4 header checksum, the
   receiving kernel logs no checksum errors, and it echoes the packets back;
 - an outside change made mid-match is respected;
+- a new default route mid-match is followed;
+- the Waybar output is correct during and after a match;
 - bpftune's sysctls are yielded while bpftune runs;
 - `kill -9` followed by `--restore` puts everything back;
 - `--dry-run` changes nothing.

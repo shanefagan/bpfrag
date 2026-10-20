@@ -87,8 +87,10 @@ RX=$("$B" -c $W/cfg.toml --monitor 0 | awk '$2=="fakeshooter"{split($4,a,"/"); p
 [ "${RX:-0}" -gt 0 ] && ok "server echoed marked packets back (rx ${RX}/s)" || bad "no echoes: marked packets dropped?"
 echo 150 > $W/rate; sleep 10
 grep -q "COMPETITIVE -> INTENSE" $W/d.log && ok "rate increase -> INTENSE" || bad "no INTENSE"
+"$B" -c $W/cfg.toml --waybar | grep -q '"text":"INTENSE"' && ok "waybar shows the match" || bad "waybar: $("$B" -c $W/cfg.toml --waybar)"
 kill $G; sleep 2
 grep -q "GG" $W/d.log && ok "game exit ends the match immediately" || bad "no GG"
+"$B" -c $W/cfg.toml --waybar | grep -q '"alt":"idle".*Last match: fakeshooter INTENSE' && ok "waybar idle with last match" || bad "waybar idle: $("$B" -c $W/cfg.toml --waybar)"
 same "after game exit"
 kill $N1 $N2 $N3
 
@@ -121,7 +123,24 @@ echo "$SUM6" | grep -q "ipv6 dscp=32" && ok "IPv6 game packets carry CS4 traffic
 kill $G; kill -INT $D; wait $D; D=
 fi
 
-echo "== 6. --dry-run changes nothing"
+echo "== 6. network path changes mid-match are followed"
+# No fixed interface list: bpfrag uses the default-route interfaces. A
+# high-metric default route via the test veth appears mid-match (think
+# docking or a VPN coming up); within ~5s bpfrag should start marking there.
+sed '/^\[dscp\]/,/^interfaces/d' $W/cfg.toml > $W/cfg-auto.toml
+"$B" -c $W/cfg-auto.toml > $W/d7.log 2>&1 & D=$!; sleep 1
+game 64 180; sleep 6
+grep -q "Match detected" $W/d7.log && ok "match detected (auto interfaces)" || bad "no match"
+ip route add default via 10.99.0.2 dev bpfrag0 metric 4242
+sleep 7
+grep -q "network path changed" $W/d7.log && ok "path change noticed" || bad "path change not noticed"
+ip netns exec bpfrag-srv timeout 4 tcpdump -n -i bpfrag1 -c 60 -w $W/v4b.pcap 'udp and dst port 27015 and src 10.99.0.1' 2>/dev/null
+python3 "$HERE/pcap_check.py" $W/v4b.pcap | grep -q "ipv4 dscp=32 csum=ok" && ok "marking follows the game onto the new path" || bad "not marked after path change"
+ip route del default via 10.99.0.2 dev bpfrag0 metric 4242
+kill $G; kill -INT $D; wait $D; D=
+same "after path-change match"
+
+echo "== 7. --dry-run changes nothing"
 "$B" -c $W/cfg.toml --dry-run > $W/d5.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
 grep -q "would set" $W/d5.log && ok "dry run logs intended changes" || bad "dry run silent"
 same "dry run"; kill $G

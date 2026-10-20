@@ -374,6 +374,10 @@ pub struct Tier {
     /// Keep background writeback (downloads, shader caches) from building
     /// up huge dirty backlogs that flush in bursts mid-match.
     pub writeback: Option<Writeback>,
+    /// Turn Wi-Fi power save off on wireless interfaces for the match, so
+    /// the radio never dozes between packets.
+    #[serde(default)]
+    pub wifi_powersave_off: bool,
 }
 
 fn s(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
@@ -409,6 +413,7 @@ pub fn builtin_tiers() -> [Tier; 3] {
         coalesce_usecs: None,
         dscp: true,
         writeback: None,
+        wifi_powersave_off: false,
     };
     let competitive = Tier {
         name: TIER_NAMES[1].into(),
@@ -428,6 +433,7 @@ pub fn builtin_tiers() -> [Tier; 3] {
         coalesce_usecs: Some(10),
         dscp: true,
         writeback: wb,
+        wifi_powersave_off: true,
     };
     let intense = Tier {
         name: TIER_NAMES[2].into(),
@@ -447,6 +453,7 @@ pub fn builtin_tiers() -> [Tier; 3] {
         coalesce_usecs: Some(0),
         dscp: true,
         writeback: wb,
+        wifi_powersave_off: true,
     };
     [casual, competitive, intense]
 }
@@ -467,6 +474,7 @@ pub struct TierOverride {
     pub coalesce_usecs: Option<Setting<u32>>,
     pub dscp: Option<bool>,
     pub writeback: Option<Setting<Writeback>>,
+    pub wifi_powersave_off: Option<bool>,
 }
 
 fn merge_opt<T: Clone>(dst: &mut Option<T>, ov: &Option<Setting<T>>, what: &str) -> Result<()> {
@@ -512,6 +520,9 @@ impl TierOverride {
             tier.dscp = d;
         }
         merge_opt(&mut tier.writeback, &self.writeback, "writeback")?;
+        if let Some(w) = self.wifi_powersave_off {
+            tier.wifi_powersave_off = w;
+        }
         Ok(())
     }
 }
@@ -645,6 +656,7 @@ impl Config {
             dscp: bool,
             coalesce_usecs: toml::Value,
             writeback: toml::Value,
+            wifi_powersave_off: bool,
             sysctl: BTreeMap<String, String>,
         }
         #[derive(Serialize)]
@@ -665,6 +677,7 @@ impl Config {
                         .coalesce_usecs
                         .map(|u| toml::Value::Integer(u.into()))
                         .unwrap_or(toml::Value::Boolean(false)),
+                    wifi_powersave_off: t.wifi_powersave_off,
                     writeback: match t.writeback {
                         Some(w) => toml::Value::try_from(w).unwrap_or(toml::Value::Boolean(false)),
                         None => toml::Value::Boolean(false),
