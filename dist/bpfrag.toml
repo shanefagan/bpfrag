@@ -1,0 +1,43 @@
+# /etc/bpfrag/bpfrag.toml
+#
+# Everything here is optional: delete what you don't change. Run
+# `bpfrag --dump-config` to see the full effective configuration.
+
+[general]
+# hook = "auto"        # "tracepoint" (kernel >= 6.4) or "fexit" (5.17..6.3)
+# tick_ms = 1000       # sampling window
+# Sharing with bpftune. bpftune switches its own tuners off if anyone else
+# writes their sysctls, so by default bpfrag leaves those to it while it runs.
+# bpftune = "auto"     # "auto" | "yield" | "ignore"
+
+[detect]
+# min_pps = 25           # smoothed pkt/s (tx+rx) before a process counts
+# competitive_pps = 70   # tier thresholds, with +/- margin of hysteresis
+# intense_pps = 140
+# margin = 15
+# linger_secs = 15       # quiet time before the match is over
+# pin_tier = "competitive"   # ignore the tick rate, always use this tier
+
+[classify]
+# Native games launched outside Steam/Lutris/Heroic etc. can also be tagged
+# per launch with BPFRAG_GAME=1 in the environment (e.g. Steam launch
+# options: BPFRAG_GAME=1 %command%).
+# allow = ["mynativegame", "Moonlight"]
+# deny = ["some-voip-thing*"]
+# launchers = ["my-launcher"]
+
+[dscp]
+# class = "CS4"          # RFC 4594 real-time interactive; EF if your router wants it
+# override = false       # also rewrite packets the game already marked
+# interfaces = ["wlan0"] # default: interfaces with a default route
+
+# Tiers: [tier.all] applies to every tier, then [tier.casual],
+# [tier.competitive], [tier.intense]. `knob = false` turns a knob off.
+# sysctl values prefixed with ">=" are raise-only.
+
+# [tier.all]
+# writeback = false                         # leave dirty writeback alone
+
+# [tier.intense]
+# coalesce_usecs = 5                        # instead of 0
+# sysctl = { "net.core.busy_poll" = 50, "net.core.busy_read" = false }

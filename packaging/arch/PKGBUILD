@@ -1,0 +1,64 @@
+# Maintainer: Shane Fagan <mail@shanefagan.com>
+#
+# Builds bpfrag from the git checkout this PKGBUILD lives in:
+#   cd packaging/arch && makepkg -si
+# Only committed changes are built (makepkg clones the local repo).
+
+pkgname=bpfrag-git
+_pkgname=bpfrag
+pkgver=0.1.0.r1.g0000000
+pkgrel=1
+pkgdesc="eBPF-driven, self-reverting network tuning for competitive gaming"
+arch=('x86_64' 'aarch64')
+license=('MIT' 'GPL-2.0-only')
+depends=('gcc-libs' 'glibc' 'libelf' 'zlib')
+makedepends=('cargo' 'clang' 'git')
+optdepends=('bpftune: buffer/backlog auto-tuning; bpfrag yields those sysctls to it'
+            'scx-scheds: sched_ext schedulers; no overlap with bpfrag')
+provides=("$_pkgname")
+conflicts=("$_pkgname")
+backup=('etc/default/bpfrag' 'etc/bpfrag/bpfrag.toml')
+install=bpfrag.install
+# libbpf (vendored by libbpf-sys) is C built into a static lib; makepkg's
+# -flto objects in it don't link into the Rust binary.
+options=('!lto' '!debug')
+source=("$_pkgname::git+file://${startdir}/../..")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_pkgname"
+  local ver
+  ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+  printf '%s.r%s.g%s' "$ver" "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+}
+
+prepare() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo build --frozen --release
+}
+
+check() {
+  cd "$_pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  cargo test --frozen --release
+}
+
+package() {
+  cd "$_pkgname"
+  install -Dm755 target/release/bpfrag "$pkgdir/usr/bin/bpfrag"
+  install -Dm644 dist/bpfrag.service "$pkgdir/usr/lib/systemd/system/bpfrag.service"
+  install -Dm644 dist/bpfrag.default "$pkgdir/etc/default/bpfrag"
+  install -Dm644 dist/bpfrag.toml "$pkgdir/etc/bpfrag/bpfrag.toml"
+  install -Dm644 README.md "$pkgdir/usr/share/doc/$_pkgname/README.md"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  install -Dm644 LICENSE-GPL-2.0 "$pkgdir/usr/share/licenses/$pkgname/LICENSE-GPL-2.0"
+}

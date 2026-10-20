@@ -1,0 +1,307 @@
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2025-2026 Shane Fagan
+//
+// `bpfrag --selftest`: load the BPF object on *this* kernel and push
+// hand-built IPv4/IPv6 packets through the DSCP marker with
+// BPF_PROG_TEST_RUN. Nothing is attached and no system setting changes.
+// Checks the rewritten DSCP / traffic class, that ECN bits and the IPv6
+// flow label survive, that the IPv4 header checksum is still valid, and
+// that non-game, stale-owner and fragment packets are left untouched.
+
+use std::mem::MaybeUninit;
+
+use anyhow::{Context, Result};
+use libbpf_rs::skel::{OpenSkel, SkelBuilder};
+use libbpf_rs::{MapCore, MapFlags, ProgramInput};
+
+use crate::bpf_intf;
+use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
+use crate::config::{Config, parse_dscp};
+
+const GAME_TGID: u32 = 4242;
+const GAME_PORT: u16 = 27015;
+const STALE_PORT: u16 = 27016; // owner no longer marked
+const OTHER_PORT: u16 = 5000;
+const LOOPBACK_IFINDEX: u32 = 1; // test_run skbs come in on lo
+
+fn csum16(bytes: &[u8]) -> u16 {
+    let mut s: u32 = bytes
+        .chunks(2)
+        .map(|c| u32::from(u16::from_be_bytes([c[0], *c.get(1).unwrap_or(&0)])))
+        .sum();
+    while s >> 16 != 0 {
+        s = (s & 0xffff) + (s >> 16);
+    }
+    !(s as u16)
+}
+
+fn eth(ethertype: u16) -> Vec<u8> {
+    let mut p = vec![0x02, 0, 0, 0, 0, 0x02, 0x02, 0, 0, 0, 0, 0x01];
+    p.extend_from_slice(&ethertype.to_be_bytes());
+    p
+}
+
+fn udp(sport: u16, payload: usize) -> Vec<u8> {
+    let mut u = Vec::new();
+    u.extend_from_slice(&sport.to_be_bytes());
+    u.extend_from_slice(&GAME_PORT.to_be_bytes());
+    u.extend_from_slice(&((8 + payload) as u16).to_be_bytes());
+    u.extend_from_slice(&[0, 0]);
+    u.extend(std::iter::repeat_n(0x5a, payload));
+    u
+}
+
+/// IPv4 UDP packet; `options` adds 4-byte option words (ihl > 5).
+fn ipv4(tos: u8, sport: u16, frag_off: u16, options: u8) -> Vec<u8> {
+    let ihl = 5 + options;
+    let body = udp(sport, 120);
+    let mut ip = vec![
+        0x40 | ihl,
+        tos,
+        0,
+        0,
+        0x12,
+        0x34,
+        (frag_off >> 8) as u8,
+        frag_off as u8,
+        64,
+        17,
+        0,
+        0,
+        10,
+        99,
+        0,
+        1,
+        10,
+        99,
+        0,
+        2,
+    ];
+    for _ in 0..options {
+        ip.extend_from_slice(&[1, 1, 1, 0]); // NOP NOP NOP EOL
+    }
+    let tot = (ip.len() + body.len()) as u16;
+    ip[2..4].copy_from_slice(&tot.to_be_bytes());
+    let c = csum16(&ip);
+    ip[10..12].copy_from_slice(&c.to_be_bytes());
+    let mut p = eth(0x0800);
+    p.extend(ip);
+    p.extend(body);
+    p
+}
+
+fn ipv6(tc: u8, flow: u32, sport: u16) -> Vec<u8> {
+    let body = udp(sport, 120);
+    let first = (6u32 << 28) | (u32::from(tc) << 20) | (flow & 0xfffff);
+    let mut ip = first.to_be_bytes().to_vec();
+    ip.extend_from_slice(&(body.len() as u16).to_be_bytes());
+    ip.extend_from_slice(&[17, 64]);
+    ip.extend_from_slice(&[0xfd, 0, 0, 0x99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    ip.extend_from_slice(&[0xfd, 0, 0, 0x99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+    let mut p = eth(0x86dd);
+    p.extend(ip);
+    p.extend(body);
+    p
+}
+
+struct Case {
+    name: String,
+    pkt: Vec<u8>,
+    /// expected DSCP+ECN byte after the run (tos / traffic class)
+    expect: u8,
+}
+
+fn tos_of(p: &[u8]) -> u8 {
+    if p[12..14] == [0x08, 0x00] {
+        p[15]
+    } else {
+        ((p[14] & 0x0f) << 4) | (p[15] >> 4)
+    }
+}
+
+fn run_case(skel: &BpfSkel, c: &Case) -> Result<(), String> {
+    let mut out = vec![0u8; c.pkt.len() + 64];
+    let input = ProgramInput {
+        data_in: Some(&c.pkt),
+        data_out: Some(&mut out),
+        ..Default::default()
+    };
+    let res = skel
+        .progs
+        .bpfrag_dscp
+        .test_run(input)
+        .map_err(|e| format!("test_run failed: {e}"))?;
+    if res.return_value != 0 {
+        return Err(format!(
+            "returned {} instead of TC_ACT_OK",
+            res.return_value
+        ));
+    }
+    let got = res.data.ok_or("no output packet")?.to_vec();
+    if got.len() != c.pkt.len() {
+        return Err(format!("length changed {} -> {}", c.pkt.len(), got.len()));
+    }
+    let tos = tos_of(&got);
+    if tos != c.expect {
+        return Err(format!(
+            "tos/class 0x{tos:02x}, expected 0x{:02x}",
+            c.expect
+        ));
+    }
+    let is_v4 = got[12..14] == [0x08, 0x00];
+    // Only the DSCP byte (and, for IPv4, the header checksum) may change.
+    let allowed: &[usize] = if is_v4 { &[15, 24, 25] } else { &[14, 15] };
+    for (i, (a, b)) in c.pkt.iter().zip(&got).enumerate() {
+        if a != b && !allowed.contains(&i) {
+            return Err(format!("byte {i} changed 0x{a:02x} -> 0x{b:02x}"));
+        }
+    }
+    if is_v4 {
+        let ihl = usize::from(got[14] & 0x0f) * 4;
+        if csum16(&got[14..14 + ihl]) != 0 {
+            return Err("IPv4 header checksum invalid after rewrite".into());
+        }
+    } else {
+        let flow_in = u32::from_be_bytes(c.pkt[14..18].try_into().unwrap()) & 0xfffff;
+        let flow_out = u32::from_be_bytes(got[14..18].try_into().unwrap()) & 0xfffff;
+        if flow_in != flow_out || got[14] >> 4 != 6 {
+            return Err("IPv6 version/flow label damaged".into());
+        }
+    }
+    Ok(())
+}
+
+pub fn run(cfg: &Config) -> Result<bool> {
+    let dscp = parse_dscp(&cfg.dscp.class)?;
+    let over = cfg.dscp.override_app;
+
+    let mut open_object = MaybeUninit::uninit();
+    let mut open = BpfSkelBuilder::default()
+        .open(&mut open_object)
+        .context("opening BPF object")?;
+    let rodata = open
+        .maps
+        .rodata_data
+        .as_deref_mut()
+        .context("BPF rodata missing")?;
+    rodata.dscp = dscp;
+    rodata.dscp_override = over;
+    rodata.set_priority = cfg.dscp.set_priority;
+    // Only the tc program is under test; don't depend on the tracing hooks.
+    let p = &mut open.progs;
+    p.bpfrag_send_tp.set_autoload(false);
+    p.bpfrag_recv_tp.set_autoload(false);
+    p.bpfrag_udp_sendmsg.set_autoload(false);
+    p.bpfrag_udpv6_sendmsg.set_autoload(false);
+    p.bpfrag_udp_recvmsg.set_autoload(false);
+    p.bpfrag_udpv6_recvmsg.set_autoload(false);
+    p.bpfrag_exit.set_autoload(false);
+    p.bpfrag_dscp.set_autoload(true);
+    let skel = open.load().context("loading the DSCP marker")?;
+
+    let m = &skel.maps;
+    m.if_l2.update(
+        &LOOPBACK_IFINDEX.to_ne_bytes(),
+        &14u32.to_ne_bytes(),
+        MapFlags::ANY,
+    )?;
+    m.mark_tgids
+        .update(&GAME_TGID.to_ne_bytes(), &[1u8], MapFlags::ANY)?;
+    for (port, owner) in [(GAME_PORT, GAME_TGID), (STALE_PORT, 9999)] {
+        let pm = bpf_intf::port_mark {
+            tgid: owner,
+            ..Default::default()
+        };
+        let bytes = unsafe {
+            std::slice::from_raw_parts(
+                (&pm as *const bpf_intf::port_mark).cast::<u8>(),
+                size_of_val(&pm),
+            )
+        };
+        m.mark_ports
+            .update(&u32::from(port).to_ne_bytes(), bytes, MapFlags::ANY)?;
+    }
+
+    let d = dscp << 2;
+    let ef = 46u8 << 2;
+    let cases = vec![
+        Case {
+            name: "IPv4 game port, unmarked".into(),
+            pkt: ipv4(0x00, GAME_PORT, 0x4000, 0),
+            expect: d,
+        },
+        Case {
+            name: "IPv4 game port, ECT(1) kept".into(),
+            pkt: ipv4(0x01, GAME_PORT, 0x4000, 0),
+            expect: d | 1,
+        },
+        Case {
+            name: "IPv4 game port, CE kept".into(),
+            pkt: ipv4(0x03, GAME_PORT, 0, 0),
+            expect: d | 3,
+        },
+        Case {
+            name: format!(
+                "IPv4 game port, app chose EF ({})",
+                if over { "override" } else { "respected" }
+            ),
+            pkt: ipv4(ef, GAME_PORT, 0x4000, 0),
+            expect: if over { d } else { ef },
+        },
+        Case {
+            name: "IPv4 game port with IP options".into(),
+            pkt: ipv4(0x00, GAME_PORT, 0x4000, 2),
+            expect: d,
+        },
+        Case {
+            name: "IPv4 non-first fragment untouched".into(),
+            pkt: ipv4(0x00, GAME_PORT, 0x00b9, 0),
+            expect: 0,
+        },
+        Case {
+            name: "IPv4 other process's port untouched".into(),
+            pkt: ipv4(0x00, OTHER_PORT, 0x4000, 0),
+            expect: 0,
+        },
+        Case {
+            name: "IPv4 port of an unmarked owner untouched".into(),
+            pkt: ipv4(0x00, STALE_PORT, 0x4000, 0),
+            expect: 0,
+        },
+        Case {
+            name: "IPv6 game port, flow label kept".into(),
+            pkt: ipv6(0x00, 0xabcde, GAME_PORT),
+            expect: d,
+        },
+        Case {
+            name: "IPv6 game port, ECT(0) kept".into(),
+            pkt: ipv6(0x02, 0x12345, GAME_PORT),
+            expect: d | 2,
+        },
+        Case {
+            name: "IPv6 other process's port untouched".into(),
+            pkt: ipv6(0x00, 0x1, OTHER_PORT),
+            expect: 0,
+        },
+    ];
+
+    let kernel = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    println!(
+        "bpfrag selftest: DSCP marker on kernel {} ({} = {dscp}, override {})",
+        kernel.trim(),
+        cfg.dscp.class,
+        if over { "on" } else { "off" }
+    );
+    let mut failed = 0;
+    for c in &cases {
+        match run_case(&skel, c) {
+            Ok(()) => println!("  PASS {}", c.name),
+            Err(e) => {
+                failed += 1;
+                println!("  FAIL {}: {e}", c.name);
+            }
+        }
+    }
+    println!("{}/{} passed", cases.len() - failed, cases.len());
+    Ok(failed == 0)
+}
