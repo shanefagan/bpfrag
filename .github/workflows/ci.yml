@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: MIT
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    # GitHub's Ubuntu runners have kernel BTF, the sock_*_length tracepoints
+    # (>= 6.4), tcx (>= 6.6) and passwordless sudo, so the BPF side runs for
+    # real here, not just compiles.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build and test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev libelf-dev zlib1g-dev pkg-config tcpdump iproute2
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy,rustfmt
+          rustup default stable
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: Unit tests
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --locked --release
+
+      - name: What the runner supports
+        run: sudo ./target/release/bpfrag --check || true
+
+      - name: BPF selftest (packet vectors through the DSCP marker)
+        run: sudo ./target/release/bpfrag --selftest
+
+      - name: End-to-end (netns, fake game, noise, crash recovery)
+        run: sudo tests/rig/e2e.sh target/release/bpfrag

@@ -1,0 +1,10 @@
+# /etc/default/bpfrag - flags for the bpfrag systemd service.
+# See `bpfrag --help`. Tier and classifier details live in
+# /etc/bpfrag/bpfrag.toml.
+#
+# Examples:
+#   BPFRAG_FLAGS="--stats 60"                 a stats line in the journal every minute
+#   BPFRAG_FLAGS="--dscp EF --iface wlan0"    mark game packets EF on wlan0 only
+#   BPFRAG_FLAGS="--tier competitive"         same profile for every match
+#   BPFRAG_FLAGS="--dry-run -v"               watch what it would do, change nothing
+BPFRAG_FLAGS=""

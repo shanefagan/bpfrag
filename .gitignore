@@ -1,0 +1,7 @@
+target/
+# makepkg output in packaging/arch
+packaging/arch/src/
+packaging/arch/pkg/
+packaging/arch/bpfrag/
+packaging/arch/*.pkg.tar.*
+packaging/arch/*.log
