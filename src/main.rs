@@ -17,6 +17,7 @@ mod net;
 mod selftest;
 mod stats;
 mod util;
+mod wifi;
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -106,6 +107,10 @@ struct Opts {
     #[clap(long, value_name = "SECS")]
     stats: Option<f64>,
 
+    /// Don't run: print one line of JSON for a Waybar custom module.
+    #[clap(long)]
+    waybar: bool,
+
     /// Don't run: show the running instance's stats every SECS (0 = once).
     #[clap(long, value_name = "SECS")]
     monitor: Option<f64>,
@@ -167,6 +172,12 @@ impl Opts {
         }
         cfg.validate()
     }
+}
+
+fn iface_names(ifaces: &[Iface]) -> Vec<String> {
+    let mut v: Vec<String> = ifaces.iter().map(|i| i.name.clone()).collect();
+    v.sort();
+    v
 }
 
 /// Exclusive lock so two instances never fight over the same knobs.
@@ -251,6 +262,13 @@ struct Tuner<'a> {
     bpftune_note: Option<String>,
     /// Other tuners on the box; rescanned every 30s, not every tick.
     neighbours: (Vec<String>, Option<Instant>),
+    /// Interfaces the current tier was applied to, and when we last looked.
+    applied_ifaces: Vec<String>,
+    last_iface_check: Instant,
+    /// Peak tier / pps of the running match, and finished matches.
+    peak: (usize, f64),
+    last_session_name: Option<String>,
+    recent: std::collections::VecDeque<stats::RecentMatch>,
 }
 
 impl<'a> Tuner<'a> {
@@ -335,6 +353,11 @@ impl<'a> Tuner<'a> {
             logged_ignores: HashSet::new(),
             bpftune_note: None,
             neighbours: (Vec::new(), None),
+            applied_ifaces: Vec::new(),
+            last_iface_check: Instant::now(),
+            peak: (0, 0.0),
+            last_session_name: None,
+            recent: std::collections::VecDeque::new(),
         })
     }
 
@@ -361,6 +384,8 @@ impl<'a> Tuner<'a> {
     fn apply_tier(&mut self, s: &SessionInfo) {
         let tier = self.cfg.tiers[s.tier.min(2)].clone();
         let ifaces = self.ifaces_for(s);
+        self.applied_ifaces = iface_names(&ifaces);
+        self.last_iface_check = Instant::now();
 
         let (skip, note) = coexist::skip_set(&self.cfg);
         if note.is_some() && note != self.bpftune_note {
@@ -434,6 +459,8 @@ impl<'a> Tuner<'a> {
                     s.reason
                 );
                 self.session_start = Some(Instant::now());
+                self.peak = (s.tier, s.pps);
+                self.last_session_name = Some(s.name.clone());
                 self.apply_tier(&s);
             }
             Action::Retier { from, to, pps } => {
@@ -448,6 +475,20 @@ impl<'a> Tuner<'a> {
                 }
             }
             Action::End { reason } => {
+                if let Some(name) = self.last_session_name.take() {
+                    self.recent.push_front(stats::RecentMatch {
+                        name,
+                        peak_tier: TIER_NAMES[self.peak.0.min(2)].into(),
+                        peak_pps: self.peak.1,
+                        duration_secs: self
+                            .session_start
+                            .map(|t| t.elapsed().as_secs())
+                            .unwrap_or(0),
+                        ended: stats::now_unix(),
+                        reason: reason.clone(),
+                    });
+                    self.recent.truncate(5);
+                }
                 let tgid = self.last_tgid.take();
                 let took = self
                     .session_start
@@ -474,6 +515,36 @@ impl<'a> Tuner<'a> {
                     debug!("still ignoring {name} (pid {tgid}): {reason}");
                 }
             }
+        }
+    }
+
+    /// Per-tick upkeep while a match runs: remember its peak, and follow
+    /// the game if its traffic moves to another interface (docking, Wi-Fi
+    /// to Ethernet, a VPN coming up).
+    fn track_session(&mut self) {
+        let Some(s) = self.detector.session().cloned() else {
+            return;
+        };
+        if s.tier > self.peak.0 {
+            self.peak.0 = s.tier;
+        }
+        if s.pps > self.peak.1 {
+            self.peak.1 = s.pps;
+        }
+        if self.last_iface_check.elapsed() < Duration::from_secs(5) {
+            return;
+        }
+        self.last_iface_check = Instant::now();
+        let now = iface_names(&self.ifaces_for(&s));
+        if now != self.applied_ifaces {
+            info!(
+                "{}: network path changed ({} -> {}); re-applying {}",
+                s.name,
+                self.applied_ifaces.join(","),
+                now.join(","),
+                TIER_NAMES[s.tier.min(2)]
+            );
+            self.apply_tier(&s);
         }
     }
 
@@ -557,6 +628,7 @@ impl<'a> Tuner<'a> {
             counters,
             neighbours,
             top,
+            recent: self.recent.iter().cloned().collect(),
         }
     }
 
@@ -635,6 +707,8 @@ impl<'a> Tuner<'a> {
             if let Err(e) = stats::write(&self.run_dir, &m) {
                 debug!("stats write: {e:#}");
             }
+            self.track_session();
+
             if let Some(ns) = next_stats
                 && now >= ns
             {
@@ -671,6 +745,10 @@ fn main() -> Result<()> {
             .context("setting signal handler")?;
     }
 
+    if opts.waybar {
+        println!("{}", stats::waybar(&run_dir));
+        return Ok(());
+    }
     if let Some(intv) = opts.monitor {
         return stats::monitor(&run_dir, intv, shutdown);
     }

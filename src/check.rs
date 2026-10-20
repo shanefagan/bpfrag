@@ -85,14 +85,20 @@ pub fn run(cfg: &Config) -> bool {
         );
     }
     for i in &ifaces {
-        let wireless = Path::new(&format!("/sys/class/net/{}/wireless", i.name)).exists()
-            || Path::new(&format!("/sys/class/net/{}/phy80211", i.name)).exists();
+        let wireless = crate::wifi::is_wireless(&i.name);
         let kind = match (i.l2_len, wireless) {
             (14, true) => "wifi",
             (14, false) => "ethernet",
             _ => "L3 tunnel",
         };
-        let co = if i.physical {
+        let co = if wireless {
+            // Wi-Fi drivers rarely do coalescing; power save is the knob there.
+            match crate::wifi::get_power_save(i.ifindex) {
+                Ok(true) => "power save on, turned off during COMPETITIVE/INTENSE".to_string(),
+                Ok(false) => "power save already off".to_string(),
+                Err(e) => format!("power save unreadable via nl80211 ({e})"),
+            }
+        } else if i.physical {
             match net::get_coalesce(&i.name) {
                 Ok(c) => format!("coalescing {}", c.describe()),
                 Err(e) => format!("coalescing unsupported ({e})"),

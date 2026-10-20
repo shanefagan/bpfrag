@@ -27,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use crate::config::{Tier, Writeback};
 use crate::net::{self, Coalesce, Iface};
 use crate::util::{norm_ws, read_trim, sysctl_path, write_str};
+use crate::wifi;
 
 const MIB: u64 = 1024 * 1024;
 
@@ -54,6 +55,8 @@ pub enum Saved {
     },
     /// legacy (non-tcx) tc filter that must be removed by hand
     TcLegacy { ifindex: i32 },
+    /// Wi-Fi power save state before the match (we only ever turn it off)
+    WifiPs { ifname: String, enabled: bool },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -175,6 +178,26 @@ pub fn restore_one(saved: &Saved) -> Result<Outcome> {
                 write_str(&rp, &ratio.to_string())?;
                 Ok(Outcome::Restored(format!("vm.{which}_ratio = {ratio}")))
             }
+        }
+        Saved::WifiPs { ifname, enabled } => {
+            let Some(ifc) = net::iface_by_name(ifname) else {
+                return Ok(Outcome::Kept(format!(
+                    "{ifname} is gone; nothing to restore"
+                )));
+            };
+            if !*enabled {
+                return Ok(Outcome::Kept(format!(
+                    "{ifname} power save was already off"
+                )));
+            }
+            if wifi::get_power_save(ifc.ifindex).unwrap_or(false) {
+                return Ok(Outcome::Kept(format!(
+                    "{ifname} power save was turned back on by someone else; leaving it"
+                )));
+            }
+            wifi::set_power_save(ifc.ifindex, true)
+                .with_context(|| format!("re-enabling power save on {ifname}"))?;
+            Ok(Outcome::Restored(format!("{ifname} wifi power save on")))
         }
         Saved::TcLegacy { ifindex } => {
             crate::bpf::detach_legacy_tc(*ifindex);
@@ -317,6 +340,9 @@ impl Knobs {
         }
         if let Some(wb) = tier.writeback {
             self.apply_writeback(wb, &mut wanted, &mut changes);
+        }
+        if tier.wifi_powersave_off {
+            self.apply_wifi_ps(ifaces, &mut wanted, &mut changes);
         }
 
         // revert what this tier no longer wants (newest first)
@@ -612,6 +638,60 @@ impl Knobs {
         }
     }
 
+    fn apply_wifi_ps(
+        &mut self,
+        ifaces: &[Iface],
+        wanted: &mut HashSet<String>,
+        changes: &mut Vec<String>,
+    ) {
+        for ifc in ifaces.iter().filter(|i| wifi::is_wireless(&i.name)) {
+            let key = format!("wifi_ps:{}", ifc.name);
+            let on = match wifi::get_power_save(ifc.ifindex) {
+                Ok(on) => on,
+                Err(e) => {
+                    self.warn_once(&key, || {
+                        format!("{}: cannot read wifi power save ({e})", ifc.name)
+                    });
+                    continue;
+                }
+            };
+            wanted.insert(key.clone());
+            if !on {
+                continue; // already off (by us earlier, or by the user)
+            }
+            if self.dry_run {
+                changes.push(format!("would turn {} wifi power save off", ifc.name));
+                self.current.insert(key, "off".into());
+                continue;
+            }
+            let fresh = self.saved_get(&key).is_none();
+            if fresh {
+                self.save(
+                    &key,
+                    Saved::WifiPs {
+                        ifname: ifc.name.clone(),
+                        enabled: true,
+                    },
+                );
+                self.persist();
+            }
+            match wifi::set_power_save(ifc.ifindex, false) {
+                Ok(()) => {
+                    changes.push(format!("{} wifi power_save=off", ifc.name));
+                    self.current.insert(key, "off".into());
+                }
+                Err(e) => {
+                    if fresh {
+                        self.unsave(&key);
+                    }
+                    self.warn_once(&format!("w:{key}"), || {
+                        format!("{}: cannot turn power save off: {e}", ifc.name)
+                    });
+                }
+            }
+        }
+    }
+
     /// Put everything back. Returns (restored, kept-because-changed) notes.
     pub fn restore_all(&mut self) -> (Vec<String>, Vec<String>) {
         let mut done = Vec::new();
@@ -642,6 +722,9 @@ impl Knobs {
                     Some(Saved::Coalesce { words, .. }) => {
                         format!("{}us", words.get(1).copied().unwrap_or(0))
                     }
+                    Some(Saved::WifiPs { enabled, .. }) => {
+                        (if *enabled { "on" } else { "off" }).into()
+                    }
                     Some(Saved::Dirty { bytes, ratio, .. }) => {
                         if *bytes > 0 {
                             format!("{} MiB", bytes / MIB)
@@ -653,6 +736,7 @@ impl Knobs {
                 };
                 let knob = match k.split_once(':') {
                     Some(("coalesce", ifname)) => format!("{ifname} coalescing"),
+                    Some(("wifi_ps", ifname)) => format!("{ifname} wifi power save"),
                     Some(("writeback", which)) => format!("vm.{which}_bytes"),
                     Some((_, rest)) => rest.to_string(),
                     None => k.clone(),
