@@ -11,6 +11,7 @@ mod classify;
 mod coexist;
 mod config;
 mod detect;
+mod egress;
 mod knobs;
 mod logger;
 mod net;
@@ -241,6 +242,10 @@ impl Oracle for ProcOracle {
     }
 }
 
+/// How long per-interface knobs wait for the marker to see which link the
+/// game uses before they go on every candidate.
+const EGRESS_GRACE: Duration = Duration::from_secs(5);
+
 /// Interface names the current tier was applied to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct Paths {
@@ -282,6 +287,8 @@ struct Tuner<'a> {
     neighbours_at: Option<Instant>,
     applied_paths: Paths,
     last_path_check: Instant,
+    /// Which links the game's packets actually leave on.
+    egress: egress::Egress,
     /// Finished matches, newest first.
     recent: VecDeque<RecentMatch>,
 }
@@ -370,6 +377,7 @@ impl<'a> Tuner<'a> {
             neighbours_at: None,
             applied_paths: Paths::default(),
             last_path_check: Instant::now(),
+            egress: egress::Egress::default(),
             recent: VecDeque::new(),
         })
     }
@@ -393,20 +401,35 @@ impl<'a> Tuner<'a> {
         v
     }
 
+    /// Links the game's packets have been seen leaving on.
+    fn seen_egress(&self) -> Vec<Iface> {
+        self.egress
+            .ifaces()
+            .into_iter()
+            .filter_map(net::iface_by_index)
+            .collect()
+    }
+
     /// (marker interfaces, knob interfaces). The DSCP marker sits on every
     /// candidate so it can see where the game's packets go; per-interface
     /// knobs (coalescing, Wi-Fi power save) only go where they actually
-    /// leave, once the marker has seen that. Packets seen only in an L3
-    /// tunnel (WireGuard, OpenVPN tun, PPPoE) still leave through a real
-    /// link underneath, so the knobs then stay on every candidate.
+    /// leave. For the first few seconds, while the marker finds that out,
+    /// they wait. Packets seen only in an L3 tunnel (WireGuard, OpenVPN tun,
+    /// PPPoE), or not seen at all, leave through some real link the marker
+    /// can't tell apart, so the knobs then go on every candidate.
     fn targets(&self, s: &SessionInfo) -> (Vec<Iface>, Vec<Iface>) {
         let marker = self.candidates(s);
-        let seen: Vec<Iface> = bpf::game_egress(&self.skel, s.tgid, Duration::from_secs(10))
-            .into_iter()
-            .filter_map(net::iface_by_index)
-            .collect();
+        let seen = self.seen_egress();
+        let learning = seen.is_empty()
+            && self.cfg.profile(s.tier).dscp
+            && !self.dry_run
+            && self
+                .session_start
+                .is_none_or(|t| t.elapsed() < EGRESS_GRACE);
         let knobs = if seen.iter().any(|i| !i.is_tunnel()) {
             seen
+        } else if learning {
+            Vec::new()
         } else {
             marker.clone()
         };
@@ -469,6 +492,7 @@ impl<'a> Tuner<'a> {
         for l in self.tc.detach_all(&self.skel) {
             self.knobs.untrack_tc_legacy(l);
         }
+        self.egress.reset();
         let (done, kept) = self.knobs.restore_all();
         if !done.is_empty() {
             debug!("restored: {}", done.join(", "));
@@ -487,6 +511,7 @@ impl<'a> Tuner<'a> {
                     s.name, s.tgid, s.pps, s.tx_pps, s.rx_pps, s.tier, s.reason
                 );
                 self.session_start = Some(Instant::now());
+                self.egress.reset();
                 self.apply_tier(&s);
             }
             Action::Retier { from, to } => {
@@ -552,11 +577,14 @@ impl<'a> Tuner<'a> {
             return;
         }
         self.last_path_check = Instant::now();
+        self.egress
+            .update(&bpf::game_packets(&self.skel), self.last_path_check);
         let (marker, knobs) = self.targets(&s);
         let now = Paths::new(&marker, &knobs);
         if now == self.applied_paths {
             return;
         }
+        let seen = iface_names(&self.seen_egress());
         if now.marker != self.applied_paths.marker {
             info!(
                 "{}: network path changed ({} -> {}); re-applying {}",
@@ -565,10 +593,23 @@ impl<'a> Tuner<'a> {
                 now.marker.join(","),
                 s.tier
             );
-        } else {
+        } else if seen.is_empty() {
+            info!(
+                "{}: no game traffic seen on {} yet; per-interface settings go on all of them",
+                s.name,
+                now.knobs.join(",")
+            );
+        } else if seen == now.knobs {
             info!(
                 "{}: game traffic leaves via {}; per-interface settings follow it",
                 s.name,
+                seen.join(",")
+            );
+        } else {
+            info!(
+                "{}: game traffic leaves via tunnel {}; per-interface settings go on {}",
+                s.name,
+                seen.join(","),
                 now.knobs.join(",")
             );
         }
@@ -586,11 +627,7 @@ impl<'a> Tuner<'a> {
                 .session_start
                 .map(|t| t.elapsed().as_secs())
                 .unwrap_or(0),
-            egress: bpf::game_egress(&self.skel, s.tgid, Duration::from_secs(10))
-                .into_iter()
-                .filter_map(net::iface_by_index)
-                .map(|i| i.name)
-                .collect(),
+            egress: iface_names(&self.seen_egress()),
         });
         let applied = self
             .knobs

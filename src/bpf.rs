@@ -162,37 +162,30 @@ pub fn set_marking(skel: &BpfSkel, tgid: u32, on: bool) {
     }
 }
 
-fn monotonic_ns() -> u64 {
-    let mut ts = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
-    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+/// (ifindex, game packets seen leaving there) for every interface the
+/// marker is attached to. Counts start at zero when the marker attaches.
+pub fn game_packets(skel: &BpfSkel) -> Vec<(u32, u64)> {
+    let map = &skel.maps.mark_ifaces;
+    map.keys()
+        .filter_map(|key| {
+            let v = map.lookup(&key, MapFlags::ANY).ok().flatten()?;
+            let mi: bpf_intf::mark_iface = from_bytes(&v);
+            Some((from_bytes::<u32>(&key), mi.game_pkts))
+        })
+        .collect()
 }
 
-/// Devices the tc marker saw this game's packets leave on within `max_age`
-/// (bpf_ktime_get_ns() is CLOCK_MONOTONIC).
-pub fn game_egress(skel: &BpfSkel, tgid: u32, max_age: std::time::Duration) -> Vec<u32> {
-    let now = monotonic_ns();
-    let max = max_age.as_nanos() as u64;
-    let ports = &skel.maps.mark_ports;
-    let mut out: Vec<u32> = Vec::new();
-    for key in ports.keys() {
-        let Ok(Some(v)) = ports.lookup(&key, MapFlags::ANY) else {
-            continue;
-        };
-        let pm: bpf_intf::port_mark = from_bytes(&v);
-        if pm.tgid == tgid
-            && pm.ifindex != 0
-            && now.saturating_sub(pm.last_ns) <= max
-            && !out.contains(&pm.ifindex)
-        {
-            out.push(pm.ifindex);
-        }
-    }
-    out.sort_unstable();
-    out
+/// Map value for an interface the marker attaches to.
+pub fn mark_iface_bytes(l2_len: u32) -> Vec<u8> {
+    let mi = bpf_intf::mark_iface {
+        l2_len,
+        ..Default::default()
+    };
+    let mut v = Vec::with_capacity(size_of_val(&mi));
+    v.extend_from_slice(&mi.l2_len.to_ne_bytes());
+    v.extend_from_slice(&mi._pad.to_ne_bytes());
+    v.extend_from_slice(&mi.game_pkts.to_ne_bytes());
+    v
 }
 
 pub fn marked_ports(skel: &BpfSkel) -> usize {
@@ -246,12 +239,12 @@ impl TcMarker {
             if self.attached.contains_key(&ifc.ifindex) {
                 continue;
             }
-            if let Err(e) = skel.maps.if_l2.update(
+            if let Err(e) = skel.maps.mark_ifaces.update(
                 &ifc.ifindex.to_ne_bytes(),
-                &ifc.l2_len.to_ne_bytes(),
+                &mark_iface_bytes(ifc.l2_len),
                 MapFlags::ANY,
             ) {
-                warn!("{}: if_l2 map update failed: {e}", ifc.name);
+                warn!("{}: mark_ifaces map update failed: {e}", ifc.name);
                 continue;
             }
             match attach_one(skel, ifc.ifindex) {
@@ -282,7 +275,7 @@ impl TcMarker {
                     }
                 }
             }
-            let _ = skel.maps.if_l2.delete(&ifindex.to_ne_bytes());
+            let _ = skel.maps.mark_ifaces.delete(&ifindex.to_ne_bytes());
             debug!("DSCP marker detached from {}", ifc.name);
         }
     }
