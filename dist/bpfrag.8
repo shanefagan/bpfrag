@@ -1,0 +1,181 @@
+.TH BPFRAG 8 "2026-10" "bpfrag 0.1.0" "System Administration"
+.SH NAME
+bpfrag \- eBPF network tuning for competitive gaming that undoes itself
+.SH SYNOPSIS
+.B bpfrag
+.RI [ options ]
+.br
+.B bpfrag
+.BR \-\-check " | " \-\-selftest " | " \-\-restore " | " \-\-dump\-config
+.br
+.B bpfrag \-\-classify
+.I pid
+.br
+.B bpfrag
+.BR \-\-monitor " \fIsecs\fR | " \-\-waybar
+.SH DESCRIPTION
+.B bpfrag
+counts UDP traffic per process with eBPF. When a game's network traffic
+appears (a steady, two\-way stream of small packets from a process that is
+a game), it applies a networking profile chosen from the tick rate:
+.BR CASUAL ,
+.B COMPETITIVE
+or
+.BR INTENSE .
+Depending on the tier, that covers socket busy\-polling, NIC interrupt
+coalescing, socket buffer headroom, DSCP marking of the game's packets,
+Wi\-Fi power save and, optionally, tighter dirty\-page writeback.
+.PP
+Each original value is written to a journal before it is changed. When
+the match ends or the game exits, every change is put back. If the daemon
+is killed,
+.B bpfrag \-\-restore
+(run by the systemd unit's
+.BR ExecStopPost )
+puts back whatever the journal records.
+.PP
+.B bpfrag
+never changes CPU scheduling, so it runs next to sched_ext schedulers.
+While
+.BR bpftune (8)
+is running, bpfrag leaves the sysctls bpftune tunes alone.
+.SH OPTIONS
+.TP
+.BR \-c ", " \-\-config " \fIfile\fR"
+TOML file with tiers, classifier lists and detector settings. Defaults to
+.I /etc/bpfrag/bpfrag.toml
+if it exists.
+.TP
+.BR \-n ", " \-\-dry\-run
+Detect and log what would change, but change nothing.
+.TP
+.BR \-t ", " \-\-tier " \fItier\fR"
+Use this tier for every match instead of following the tick rate:
+.BR casual ", " competitive " or " intense .
+.TP
+.BR \-d ", " \-\-dscp " \fIclass\fR"
+DSCP class for game packets
+.RB ( CS4 ", " EF ", " AF41 ,
+or a number 0\-63), or
+.B off
+to disable marking.
+.TP
+.BR \-i ", " \-\-iface " \fIiface\fR"
+Interface to tune and mark on. Repeatable. Default: the interfaces that
+carry the default routes.
+.TP
+.BR \-a ", " \-\-allow " \fIglob\fR"
+Process name glob that is always a game. Repeatable.
+.TP
+.BR \-\-deny " \fIglob\fR"
+Process name glob that is never a game. Repeatable.
+.TP
+.BR \-\-min\-pps " \fIpps\fR"
+Smoothed packets per second a process needs before it can count as a match.
+.TP
+.BR \-\-linger " \fIsecs\fR"
+Seconds without game traffic before a match is considered over.
+.TP
+.BR \-\-bpftune " \fImode\fR"
+How to share sysctls with bpftune:
+.B auto
+(yield while it runs, the default),
+.B yield
+(always) or
+.BR ignore .
+.TP
+.BR \-\-stats " \fIsecs\fR"
+Log a stats line every
+.I secs
+while running.
+.TP
+.B \-\-waybar
+Print one line of JSON for a Waybar custom module and exit.
+.TP
+.BR \-\-monitor " \fIsecs\fR"
+Show the running instance's stats every
+.I secs
+(0 shows them once) and exit.
+.TP
+.B \-\-restore
+Undo anything a crashed or killed instance left changed, then exit.
+.TP
+.B \-\-check
+Report what this kernel and these interfaces support, and which other
+tuners are active, then exit.
+.TP
+.BR \-\-classify " \fIpid\fR"
+Classify
+.I pid
+the way the daemon would and exit.
+.TP
+.B \-\-selftest
+Push test packets through the DSCP marker with BPF_PROG_TEST_RUN and
+exit. Nothing is attached and nothing is changed.
+.TP
+.B \-\-dump\-config
+Print the effective configuration as TOML and exit.
+.TP
+.BR \-v ", " \-\-verbose
+More output. Give it twice to include libbpf's messages.
+.TP
+.BR \-h ", " \-\-help
+Print help and exit.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.SH ENVIRONMENT
+.TP
+.B BPFRAG_GAME
+Set in a game's environment (for example in Steam launch options:
+.BR "BPFRAG_GAME=1 %command%" ).
+A true value marks the process as a game; a false value, such as
+.BR 0 ,
+excludes it.
+.TP
+.B BPFRAG_NO_TCX
+If set, attach the DSCP marker with a legacy tc clsact hook instead of a
+tcx link.
+.SH FILES
+.TP
+.I /etc/bpfrag/bpfrag.toml
+Configuration: tiers, allow and deny lists, detector settings.
+.TP
+.I /etc/default/bpfrag
+Extra command line flags for the systemd service
+.RB ( BPFRAG_FLAGS ).
+.TP
+.I /run/bpfrag/journal.json
+Original values of everything changed during the current match.
+.SH EXIT STATUS
+0 on success, 1 on error.
+.B \-\-check
+exits 1 if bpfrag cannot run on this machine, and
+.B \-\-selftest
+exits 1 if any test vector fails.
+.SH EXAMPLES
+Check the machine, then run in the foreground without changing anything:
+.PP
+.RS
+.nf
+sudo bpfrag \-\-check
+sudo bpfrag \-\-dry\-run \-v
+.fi
+.RE
+.PP
+Run as a service:
+.PP
+.RS
+.nf
+sudo systemctl enable \-\-now bpfrag
+journalctl \-u bpfrag \-f
+.fi
+.RE
+.SH SEE ALSO
+.BR bpftune (8),
+.BR ethtool (8),
+.BR iw (8),
+.BR tc\-bpf (8),
+.BR sysctl (8)
+.SH LICENSE
+MIT. The BPF program is dual\-licensed MIT and GPL\-2.0.

@@ -2,7 +2,7 @@
 name = "bpfrag"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.85"
 authors = ["Shane Fagan <mail@shanefagan.com>"]
 license = "MIT"
 description = "eBPF-driven, self-reverting network tuning for competitive gaming on Linux"
@@ -30,3 +30,36 @@ libbpf-cargo = "0.27"
 lto = "thin"
 codegen-units = 4
 strip = "debuginfo"
+
+# `cargo deb` (cargo install cargo-deb) builds a .deb from this.
+[package.metadata.deb]
+maintainer = "Shane Fagan <mail@shanefagan.com>"
+copyright = "2025-2026, Shane Fagan"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+bpfrag counts UDP traffic per process with eBPF. When a game's network \
+traffic appears (a steady, two-way, small-packet stream from a process \
+classified as a game), it applies a networking profile for the length of \
+the match: socket busy polling, NIC interrupt coalescing, buffer headroom, \
+DSCP marking of the game's packets and Wi-Fi power save. Every change is \
+journalled and restored when the match ends. It does not touch CPU \
+scheduling and yields bpftune's sysctls while bpftune runs."""
+section = "net"
+priority = "optional"
+depends = "$auto"
+recommends = "ethtool, iw"
+assets = [
+    ["target/release/bpfrag", "usr/bin/", "755"],
+    ["dist/bpfrag.default", "etc/default/bpfrag", "644"],
+    ["dist/bpfrag.toml", "etc/bpfrag/bpfrag.toml", "644"],
+    ["dist/bpfrag.8", "usr/share/man/man8/bpfrag.8", "644"],
+    ["README.md", "usr/share/doc/bpfrag/README.md", "644"],
+    ["LICENSE-GPL-2.0", "usr/share/doc/bpfrag/LICENSE-GPL-2.0", "644"],
+]
+conf-files = ["/etc/default/bpfrag", "/etc/bpfrag/bpfrag.toml"]
+# Installed but not enabled: run `bpfrag --check` first, then enable it.
+# On removal the unit is stopped while /usr/bin/bpfrag still exists, so
+# ExecStopPost can restore any settings changed during a match.
+changelog = "packaging/debian/changelog"
+maintainer-scripts = "packaging/debian/"
+systemd-units = { unit-scripts = "dist/", enable = false, start = false }
