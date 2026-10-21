@@ -531,13 +531,21 @@ impl<'a> Tuner<'a> {
                 reason,
                 pps,
             } => {
+                // Deliberate exclusions (deny list, BPFRAG_GAME=0) are expected
+                // and only logged at debug. A process with no game signals at
+                // all is logged once at info: it may be a native game that
+                // needs --allow.
+                let excluded = reason.starts_with("deny list") || reason.contains("BPFRAG_GAME=0");
                 let start = classify::start_time(Path::new("/proc"), tgid).unwrap_or(0);
-                if self.logged_ignores.insert((tgid, start)) {
+                let first = self.logged_ignores.insert((tgid, start));
+                if first && !excluded {
                     info!(
                         "Ignoring game-like UDP from {name} (pid {tgid}, ~{pps:.0} pkt/s): {reason}"
                     );
                 } else {
-                    debug!("still ignoring {name} (pid {tgid}): {reason}");
+                    debug!(
+                        "Ignoring game-like UDP from {name} (pid {tgid}, ~{pps:.0} pkt/s): {reason}"
+                    );
                 }
             }
         }
