@@ -70,7 +70,9 @@ $W/apps/firefox $W/client.py 300 1300 & N2=$!
 $W/apps/randomd $W/client.py 40 100 & N3=$!
 sleep 6
 grep -q "Match detected" $W/d.log && bad "noise started a match" || ok "noise alone starts nothing"
-grep -q "Ignoring game-like UDP from Discord" $W/d.log && ok "Discord rejected by deny list" || bad "Discord not rejected"
+"$B" -c $W/cfg.toml --monitor 0 | grep -q "Discord .*not a game: deny list 'discord'" && ok "Discord rejected by deny list" || bad "Discord not rejected"
+grep -q "Ignoring game-like UDP from Discord" $W/d.log && bad "deny-list rejection logged at info" || ok "deny-list rejection kept out of the info log"
+grep -q "Ignoring game-like UDP from randomd.*no game signals" $W/d.log && ok "unrecognised process logged once at info" || bad "randomd not logged"
 echo 64 > $W/rate; game 64 180 $W/rate; sleep 6
 grep -q "Match detected: fakeshooter.*COMPETITIVE" $W/d.log && ok "fake Steam game -> COMPETITIVE" || bad "game not detected"
 [ "$(sysctl -n net.core.busy_poll)" = 50 ] && ok "busy_poll=50" || bad "busy_poll not set"

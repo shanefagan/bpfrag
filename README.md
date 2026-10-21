@@ -17,7 +17,6 @@ alongside other tuners](#running-alongside-other-tuners)).
 $ sudo bpfrag
 20:14:02 INFO  counting UDP per process via socket tracepoints
 20:14:02 INFO  bpfrag 0.1.0 started; waiting for game traffic
-20:14:31 INFO  Ignoring game-like UDP from Discord (pid 4121, ~100 pkt/s): deny list 'discord'
 20:15:10 INFO  Match detected: Counter-Strike 2 (pid 6230) at ~128 pkt/s (tx 64, rx 64) -> COMPETITIVE [Steam app 730]
 20:15:10 INFO  COMPETITIVE profile: net.core.busy_poll=50, net.core.busy_read=50, enp6s0 coalescing=10us, ..., dscp=CS4 on enp6s0
 20:52:47 INFO  Match ended after 37m37s (game exited); settings restored
@@ -151,6 +150,10 @@ next match.
 A match ends **immediately when the game exits** (via the
 `sched_process_exit` hook), or after **15 quiet seconds**, for example back in
 the menus.
+
+Rejections by the deny list (or `BPFRAG_GAME=0`) are only logged at debug
+level (`-v`). A steady UDP process with no game signals at all is logged
+once at info, since it may be a native game that needs `--allow`.
 
 If you want to see the detector's view of your system, run
 `sudo bpfrag --dry-run -v` and `bpfrag --monitor 1` in another terminal. The
@@ -379,7 +382,7 @@ What's new:
 ```sh
 cargo test                     # detector, classifier, config, journal, netlink (33 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (11 cases)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (28 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (30 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes
