@@ -69,7 +69,11 @@ struct {
 	__type(value, struct port_mark);
 } mark_ports SEC(".maps");
 
-/* ifindex -> L2 header length (14 Ethernet/Wi-Fi, 0 for wg/tun/ppp) */
+/*
+ * ifindex -> L2 header length (14 Ethernet/Wi-Fi, 0 for wg/tun/ppp). The
+ * marker only checks zero/non-zero, so packet offsets stay constants the
+ * verifier can follow.
+ */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, MAX_IFACES);

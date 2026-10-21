@@ -13,7 +13,7 @@
 //   SteamAppId / SteamGameId                 anything Steam launched
 //   LD_PRELOAD with gamemode / MangoHud      people only use these on games
 //   exe/cmdline inside a game library        steamapps/common, ~/Games, ...
-//   Wine / Proton (*.exe on the cmdline)
+//   Wine / Proton                            wine* binary, or argv[0] is an .exe
 //   an ancestor that is a launcher           reaper, gamescope, lutris, umu...
 
 use std::fs;
@@ -22,21 +22,34 @@ use std::path::Path;
 use crate::config::Classify;
 use crate::util::first_match;
 
+/// The classifier's answer, with the signal that decided it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Verdict {
     Game(String),
+    /// Ruled out on purpose: a deny list entry or BPFRAG_GAME=0.
+    Excluded(String),
+    /// No game signals found.
     NotGame(String),
 }
 
-#[cfg(test)]
 impl Verdict {
-    pub fn is_game(&self) -> bool {
-        matches!(self, Verdict::Game(_))
-    }
     pub fn reason(&self) -> &str {
         match self {
-            Verdict::Game(r) | Verdict::NotGame(r) => r,
+            Verdict::Game(r) | Verdict::Excluded(r) | Verdict::NotGame(r) => r,
         }
+    }
+
+    /// "game: <why>" / "not a game: <why>", for status output.
+    pub fn describe(&self) -> String {
+        match self {
+            Verdict::Game(r) => format!("game: {r}"),
+            Verdict::Excluded(r) | Verdict::NotGame(r) => format!("not a game: {r}"),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn is_game(&self) -> bool {
+        matches!(self, Verdict::Game(_))
     }
 }
 
@@ -119,14 +132,15 @@ impl ProcInfo {
     }
 
     fn wine_exe(&self) -> Option<String> {
-        let a = self
-            .args
-            .iter()
-            .find(|a| a.to_lowercase().ends_with(".exe"))?;
+        let a = self.args.iter().find(|a| is_exe(a))?;
         let base = a.rsplit(['/', '\\']).next()?;
         let stem = &base[..base.len() - 4];
         (!stem.is_empty()).then(|| stem.to_string())
     }
+}
+
+fn is_exe(arg: &str) -> bool {
+    arg.len() > 4 && arg.as_bytes()[arg.len() - 4..].eq_ignore_ascii_case(b".exe")
 }
 
 /// `"name"  "Deadlock"` from a Steam appmanifest_<id>.acf.
@@ -250,7 +264,7 @@ impl Classifier {
             return if v {
                 Verdict::Game("tagged BPFRAG_GAME=1".into())
             } else {
-                Verdict::NotGame("tagged BPFRAG_GAME=0".into())
+                Verdict::Excluded("tagged BPFRAG_GAME=0".into())
             };
         }
 
@@ -259,14 +273,11 @@ impl Classifier {
             return Verdict::Game(format!("allow list '{pat}'"));
         }
         if let Some(pat) = first_match(&self.deny, &names) {
-            return Verdict::NotGame(format!("deny list '{pat}'"));
+            return Verdict::Excluded(format!("deny list '{pat}'"));
         }
 
         for key in ["SteamGameId", "SteamAppId"] {
-            if let Some(id) = p.env(key)
-                && !id.is_empty()
-                && id != "0"
-            {
+            if let Some(id) = p.env(key).filter(|id| !id.is_empty() && *id != "0") {
                 return Verdict::Game(format!("Steam app {id}"));
             }
         }
@@ -294,7 +305,8 @@ impl Classifier {
             return Verdict::Game(format!("lives in a game library ({gp})"));
         }
 
-        if p.exe_name().starts_with("wine") || cmd_l.contains(".exe") {
+        // Wine shows the Windows program as argv[0].
+        if p.exe_name().starts_with("wine") || p.args.first().is_some_and(|a| is_exe(a)) {
             return Verdict::Game("Wine/Proton process".into());
         }
 
@@ -525,7 +537,10 @@ mod tests {
         let c = classifier(&fp);
         for pid in [20, 21, 22, 23] {
             let v = c.classify(pid).0;
-            assert!(!v.is_game() && v.reason().contains("deny"), "{pid}: {v:?}");
+            assert!(
+                matches!(&v, Verdict::Excluded(r) if r.contains("deny")),
+                "{pid}: {v:?}"
+            );
         }
         for pid in [30, 31, 32] {
             assert!(c.classify(pid).0.is_game(), "{pid}");
@@ -569,7 +584,17 @@ mod tests {
             &["firefox"],
             &["BPFRAG_GAME=1"],
         );
+        fp.add(
+            42,
+            1,
+            "cs2",
+            "/opt/cs2/cs2",
+            &["cs2"],
+            &["SteamAppId=730", "BPFRAG_GAME=0"],
+        );
         fp.add(50, 1, "randomd", "/usr/bin/randomd", &["randomd"], &[]);
+        // a native tool that merely mentions an .exe is not Wine
+        fp.add(51, 1, "7z", "/usr/bin/7z", &["7z", "x", "setup.exe"], &[]);
         fp.add(
             60,
             1,
@@ -585,9 +610,11 @@ mod tests {
         );
         assert!(c.classify(32).0.reason().contains("launched by lutris"));
         assert!(c.classify(40).0.is_game());
-        // explicit tag beats the deny list
+        // explicit tags beat the deny list and Steam
         assert!(c.classify(41).0.is_game());
+        assert!(matches!(c.classify(42).0, Verdict::Excluded(_)));
         assert_eq!(c.classify(50).0, Verdict::NotGame("no game signals".into()));
+        assert_eq!(c.classify(51).0, Verdict::NotGame("no game signals".into()));
         assert!(c.classify(60).0.reason().contains("gamemode"));
         assert!(!c.classify(999).0.is_game());
         assert_eq!(start_time(&fp.dir, 20), Some(4242));

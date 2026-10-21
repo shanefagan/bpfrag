@@ -22,6 +22,7 @@ cleanup() {
   pkill -f "^[^ ]*(fakeshooter|Discord|firefox|randomd) $W/" 2>/dev/null
   [ -n "${SRV:-}" ] && kill $SRV 2>/dev/null
   [ -n "${D:-}" ] && kill -INT $D 2>/dev/null && wait $D 2>/dev/null
+  umount "$W/run8" 2>/dev/null
   ip netns del bpfrag-srv 2>/dev/null; ip link del bpfrag0 2>/dev/null
   "$B" -c $W/cfg.toml --restore >/dev/null 2>&1
   # W always comes from mktemp; refuse anything else
@@ -146,7 +147,22 @@ same "after path-change match"
 echo "== 7. --dry-run changes nothing"
 "$B" -c $W/cfg.toml --dry-run > $W/d5.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
 grep -q "would set" $W/d5.log && ok "dry run logs intended changes" || bad "dry run silent"
-same "dry run"; kill $G
+same "dry run"; kill $G; kill -INT $D; wait $D; D=
+
+echo "== 8. if the journal can't be written, nothing is changed"
+mkdir -p $W/run8
+sed "s#^run_dir = .*#run_dir = \"$W/run8\"#" $W/cfg.toml > $W/cfg8.toml
+"$B" -c $W/cfg8.toml > $W/d8.log 2>&1 & D=$!; sleep 1
+if mount --bind $W/run8 $W/run8 && mount -o remount,ro,bind $W/run8; then
+  game 64 180; sleep 6
+  grep -q "Match detected" $W/d8.log && ok "match still detected" || bad "no match with a read-only run dir"
+  grep -q "could not write restore journal" $W/d8.log && ok "journal failure reported" || bad "journal failure not reported"
+  same "mid-match with no journal"
+  kill $G; umount $W/run8
+else
+  echo "  skip cannot make a read-only bind mount here"
+fi
+kill -INT $D; wait $D; D=
 
 echo; echo "passed $PASS, failed $FAIL"
 [ $FAIL = 0 ]

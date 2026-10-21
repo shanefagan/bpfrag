@@ -58,7 +58,7 @@ pub fn run(cfg: &Config) -> bool {
     );
     fatal |= !btf;
     if btf {
-        match crate::bpf::pick_hook(&cfg.general.hook) {
+        match crate::bpf::pick_hook(cfg.general.hook) {
             Ok(h) => line(Some(true), "UDP counting hook", h.describe()),
             Err(e) => {
                 line(Some(false), "UDP counting hook", format!("{e:#}"));
@@ -94,8 +94,11 @@ pub fn run(cfg: &Config) -> bool {
         let co = if wireless {
             // Wi-Fi drivers rarely do coalescing; power save is the knob there.
             match crate::wifi::get_power_save(i.ifindex) {
-                Ok(true) => "power save on, turned off during COMPETITIVE/INTENSE".to_string(),
-                Ok(false) => "power save already off".to_string(),
+                Ok(true) => match cfg.tiers_where(|p| p.wifi_powersave_off) {
+                    Some(t) => format!("power save on, turned off during {t}"),
+                    None => "power save on, left alone (no tier turns it off)".into(),
+                },
+                Ok(false) => "power save already off".into(),
                 Err(e) => format!("power save unreadable via nl80211 ({e})"),
             }
         } else if i.physical {
@@ -114,9 +117,9 @@ pub fn run(cfg: &Config) -> bool {
     }
 
     let mut missing: Vec<&str> = cfg
-        .tiers
+        .profiles
         .iter()
-        .flat_map(|t| t.sysctl.keys())
+        .flat_map(|p| p.sysctl.keys())
         .filter(|k| !sysctl_path(k).is_some_and(|p| p.exists()))
         .map(String::as_str)
         .collect();
@@ -134,15 +137,16 @@ pub fn run(cfg: &Config) -> bool {
 
     let bytes = read_trim("/proc/sys/vm/dirty_bytes").unwrap_or_default();
     let ratio = read_trim("/proc/sys/vm/dirty_ratio").unwrap_or_default();
-    line(
-        None,
-        "writeback",
-        if bytes != "0" && !bytes.is_empty() {
-            format!("vm.dirty_bytes = {bytes}")
-        } else {
-            format!("vm.dirty_ratio = {ratio}% (tightened to bytes during COMPETITIVE/INTENSE)")
-        },
-    );
+    let now = if bytes != "0" && !bytes.is_empty() {
+        format!("vm.dirty_bytes = {bytes}")
+    } else {
+        format!("vm.dirty_ratio = {ratio}%")
+    };
+    let during = match cfg.tiers_where(|p| p.writeback.is_some()) {
+        Some(t) => format!("tightened during {t} if higher"),
+        None => "left alone".into(),
+    };
+    line(None, "writeback", format!("{now} ({during})"));
 
     println!();
     let (skip, note) = coexist::skip_set(cfg);

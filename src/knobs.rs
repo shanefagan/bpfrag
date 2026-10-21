@@ -24,7 +24,7 @@ use anyhow::{Context, Result};
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Tier, Writeback};
+use crate::config::{Profile, Writeback};
 use crate::net::{self, Coalesce, Iface};
 use crate::util::{norm_ws, read_trim, sysctl_path, write_str};
 use crate::wifi;
@@ -41,8 +41,13 @@ pub enum Saved {
         #[serde(default)]
         applied: String,
     },
-    /// ethtool coalescing words
-    Coalesce { ifname: String, words: Vec<u32> },
+    /// ethtool coalescing words, and the rx-usecs we set
+    Coalesce {
+        ifname: String,
+        words: Vec<u32>,
+        #[serde(default)]
+        applied: Option<u32>,
+    },
     /// vm.dirty[_background]_{bytes,ratio}: bytes and ratio are mutually
     /// exclusive, and *_bytes can't be written back to 0, so restoring a
     /// ratio-based setup means writing the ratio.
@@ -135,12 +140,19 @@ pub fn restore_one(saved: &Saved) -> Result<Outcome> {
             write_str(path, value).with_context(|| format!("writing {path}"))?;
             Ok(Outcome::Restored(format!("{label} = {value}")))
         }
-        Saved::Coalesce { ifname, words } => {
-            let mut w = [0u32; net::COALESCE_WORDS];
-            for (d, s) in w.iter_mut().zip(words) {
-                *d = *s;
+        Saved::Coalesce {
+            ifname,
+            words,
+            applied,
+        } => {
+            let changed_by_others = applied
+                .is_some_and(|a| net::get_coalesce(ifname).is_ok_and(|cur| cur.rx_usecs() != a));
+            if changed_by_others {
+                return Ok(Outcome::Kept(format!(
+                    "{ifname} coalescing was changed by someone else during the match; leaving it"
+                )));
             }
-            let c = Coalesce(w);
+            let c = Coalesce::from_words(words);
             if let Err(full) = net::set_coalesce(ifname, &c) {
                 // Some drivers reject parts of the very struct they reported
                 // (e.g. tx-usecs with paired queues). Put back just the
@@ -256,9 +268,11 @@ impl Knobs {
         }
     }
 
-    fn persist(&self) {
+    /// Write the journal. Returns false if it couldn't be written, in which
+    /// case callers must not change the knob they journalled for.
+    fn persist(&self) -> bool {
         if self.dry_run {
-            return;
+            return true;
         }
         let j = Journal {
             pid: std::process::id(),
@@ -283,10 +297,12 @@ impl Knobs {
         })();
         if let Err(e) = res {
             warn!(
-                "could not write restore journal {}: {e:#}",
+                "could not write restore journal {}: {e:#}; not changing anything it would cover",
                 self.journal_path.display()
             );
+            return false;
         }
+        true
     }
 
     fn saved_get(&self, key: &str) -> Option<&Saved> {
@@ -314,6 +330,17 @@ impl Knobs {
         self.current.remove(key);
     }
 
+    /// Undo a save() whose change didn't happen: back to `prev`, or gone.
+    fn put_back(&mut self, key: &str, prev: Option<Saved>) {
+        match prev {
+            Some(p) => self.save(key, p),
+            None => self.unsave(key),
+        }
+    }
+
+    /// A legacy tc filter is already attached when we hear of it; if the
+    /// journal can't record it, the filter's mark_tgids check still keeps
+    /// it from marking anything once we're gone.
     pub fn track_tc_legacy(&mut self, ifindex: i32) {
         self.save(&format!("tc:{ifindex}"), Saved::TcLegacy { ifindex });
         self.persist();
@@ -327,21 +354,26 @@ impl Knobs {
         }
     }
 
-    /// Make the system look like `tier`, reverting anything the previous
+    /// Make the system look like `profile`, reverting anything the previous
     /// tier changed that this one doesn't want. `skip` holds sysctls that
     /// belong to someone else right now (bpftune). Returns a change summary.
-    pub fn apply(&mut self, tier: &Tier, ifaces: &[Iface], skip: &HashSet<String>) -> Vec<String> {
+    pub fn apply(
+        &mut self,
+        profile: &Profile,
+        ifaces: &[Iface],
+        skip: &HashSet<String>,
+    ) -> Vec<String> {
         let mut changes = Vec::new();
         let mut wanted: HashSet<String> = HashSet::new();
 
-        self.apply_sysctls(tier, skip, &mut wanted, &mut changes);
-        if let Some(usecs) = tier.coalesce_usecs {
+        self.apply_sysctls(profile, skip, &mut wanted, &mut changes);
+        if let Some(usecs) = profile.coalesce_usecs {
             self.apply_coalesce(usecs, ifaces, &mut wanted, &mut changes);
         }
-        if let Some(wb) = tier.writeback {
+        if let Some(wb) = profile.writeback {
             self.apply_writeback(wb, &mut wanted, &mut changes);
         }
-        if tier.wifi_powersave_off {
+        if profile.wifi_powersave_off {
             self.apply_wifi_ps(ifaces, &mut wanted, &mut changes);
         }
 
@@ -367,7 +399,7 @@ impl Knobs {
 
     fn apply_sysctls(
         &mut self,
-        tier: &Tier,
+        profile: &Profile,
         skip: &HashSet<String>,
         wanted: &mut HashSet<String>,
         changes: &mut Vec<String>,
@@ -381,7 +413,7 @@ impl Knobs {
         }
         let mut pending: Vec<Pending> = Vec::new();
 
-        for (k, v) in &tier.sysctl {
+        for (k, v) in &profile.sysctl {
             if skip.contains(k) {
                 // Someone else owns it now. If we already changed it (they
                 // showed up mid-match) hold it until the match ends rather
@@ -475,7 +507,12 @@ impl Knobs {
         }
 
         // journal first, then touch the knobs
-        self.persist();
+        if !self.persist() {
+            for p in pending {
+                self.put_back(&p.key, p.prev);
+            }
+            return;
+        }
         for p in pending {
             match write_str(&p.path, &p.target) {
                 Ok(()) => {
@@ -483,10 +520,7 @@ impl Knobs {
                     self.current.insert(p.key, p.target);
                 }
                 Err(e) => {
-                    match p.prev {
-                        Some(prev) => self.save(&p.key, prev),
-                        None => self.unsave(&p.key),
-                    }
+                    self.put_back(&p.key, p.prev);
                     let (label, target) = (p.label.clone(), p.target.clone());
                     self.warn_once(&format!("w:{}", p.key), || {
                         format!("cannot set {label}={target}: {e}")
@@ -540,16 +574,21 @@ impl Knobs {
                 self.current.insert(key, format!("{usecs}us"));
                 continue;
             }
-            let fresh = self.saved_get(&key).is_none();
-            if fresh {
-                self.save(
+            let prev = self.saved_get(&key).cloned();
+            match self.saved_get_mut(&key) {
+                Some(Saved::Coalesce { applied, .. }) => *applied = Some(usecs),
+                _ => self.save(
                     &key,
                     Saved::Coalesce {
                         ifname: ifc.name.clone(),
                         words: cur.0.to_vec(),
+                        applied: Some(usecs),
                     },
-                );
-                self.persist();
+                ),
+            }
+            if !self.persist() {
+                self.put_back(&key, prev);
+                continue;
             }
             // Build from the device's current state, not the baseline:
             // drivers validate the whole struct, and e.g. a tx value that
@@ -562,9 +601,7 @@ impl Knobs {
                     self.current.insert(key, format!("{usecs}us"));
                 }
                 Err(e) => {
-                    if fresh {
-                        self.unsave(&key);
-                    }
+                    self.put_back(&key, prev);
                     let (name, drv, now) =
                         (ifc.name.clone(), net::driver(&ifc.name), cur.rx_usecs());
                     self.warn_once(&format!("w:{key}:{usecs}"), || {
@@ -614,9 +651,10 @@ impl Knobs {
                 self.current.insert(key, format!("{mb} MiB"));
                 continue;
             }
-            let fresh = self.saved_get(&key).is_none();
-            if fresh {
-                self.save(
+            let prev = self.saved_get(&key).cloned();
+            match self.saved_get_mut(&key) {
+                Some(Saved::Dirty { applied, .. }) => *applied = target,
+                _ => self.save(
                     &key,
                     Saved::Dirty {
                         which: which.into(),
@@ -624,20 +662,19 @@ impl Knobs {
                         ratio,
                         applied: target,
                     },
-                );
-            } else if let Some(Saved::Dirty { applied, .. }) = self.saved_get_mut(&key) {
-                *applied = target;
+                ),
             }
-            self.persist();
+            if !self.persist() {
+                self.put_back(&key, prev);
+                continue;
+            }
             match write_str(&bp, &target.to_string()) {
                 Ok(()) => {
                     changes.push(format!("vm.{which}_bytes={target}"));
                     self.current.insert(key, format!("{mb} MiB"));
                 }
                 Err(e) => {
-                    if fresh {
-                        self.unsave(&key);
-                    }
+                    self.put_back(&key, prev);
                     self.warn_once(&format!("w:{key}"), || {
                         format!("cannot set vm.{which}_bytes: {e}")
                     });
@@ -672,8 +709,8 @@ impl Knobs {
                 self.current.insert(key, "off".into());
                 continue;
             }
-            let fresh = self.saved_get(&key).is_none();
-            if fresh {
+            let prev = self.saved_get(&key).cloned();
+            if prev.is_none() {
                 self.save(
                     &key,
                     Saved::WifiPs {
@@ -681,7 +718,10 @@ impl Knobs {
                         enabled: true,
                     },
                 );
-                self.persist();
+                if !self.persist() {
+                    self.unsave(&key);
+                    continue;
+                }
             }
             match wifi::set_power_save(ifc.ifindex, false) {
                 Ok(()) => {
@@ -689,9 +729,7 @@ impl Knobs {
                     self.current.insert(key, "off".into());
                 }
                 Err(e) => {
-                    if fresh {
-                        self.unsave(&key);
-                    }
+                    self.put_back(&key, prev);
                     self.warn_once(&format!("w:{key}"), || {
                         format!("{}: cannot turn power save off: {e}", ifc.name)
                     });
@@ -728,7 +766,7 @@ impl Knobs {
                 let baseline = match self.saved_get(k) {
                     Some(Saved::File { value, .. }) => value.clone(),
                     Some(Saved::Coalesce { words, .. }) => {
-                        format!("{}us", words.get(1).copied().unwrap_or(0))
+                        format!("{}us", Coalesce::from_words(words).rx_usecs())
                     }
                     Some(Saved::WifiPs { enabled, .. }) => {
                         (if *enabled { "on" } else { "off" }).into()

@@ -14,7 +14,7 @@
 use std::collections::HashSet;
 use std::fs;
 
-use crate::config::{BPFTUNE_SYSCTLS, Config};
+use crate::config::{BPFTUNE_SYSCTLS, BpftuneMode, Config};
 use crate::util::read_trim;
 
 /// First pid whose comm is exactly `name`.
@@ -51,12 +51,11 @@ pub fn tuned_profile() -> Option<String> {
 
 /// Sysctls we must leave alone right now, plus a note explaining why.
 pub fn skip_set(cfg: &Config) -> (HashSet<String>, Option<String>) {
-    let mode = cfg.general.bpftune.as_str();
     let pid = bpftune_pid();
-    let yield_now = match mode {
-        "yield" => true,
-        "ignore" => false,
-        _ => pid.is_some(),
+    let yield_now = match cfg.general.bpftune {
+        BpftuneMode::Yield => true,
+        BpftuneMode::Ignore => false,
+        BpftuneMode::Auto => pid.is_some(),
     };
     if !yield_now {
         let note = pid.map(|p| {
@@ -65,9 +64,9 @@ pub fn skip_set(cfg: &Config) -> (HashSet<String>, Option<String>) {
         return (HashSet::new(), note);
     }
     let ours: HashSet<&str> = cfg
-        .tiers
+        .profiles
         .iter()
-        .flat_map(|t| t.sysctl.keys().map(String::as_str))
+        .flat_map(|p| p.sysctl.keys().map(String::as_str))
         .collect();
     let skip: HashSet<String> = BPFTUNE_SYSCTLS
         .iter()
@@ -89,9 +88,7 @@ pub fn skip_set(cfg: &Config) -> (HashSet<String>, Option<String>) {
 /// Human notes for --check and the stats output.
 pub fn neighbours() -> Vec<String> {
     let mut v = Vec::new();
-    if let Some((state, ops)) = sched_ext()
-        && state == "enabled"
-    {
+    if let Some((_, ops)) = sched_ext().filter(|(state, _)| state == "enabled") {
         v.push(format!(
             "sched_ext scheduler {} is active: no overlap, bpfrag never touches CPU scheduling",
             ops.unwrap_or_else(|| "?".into())

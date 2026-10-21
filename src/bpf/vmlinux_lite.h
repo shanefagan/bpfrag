@@ -30,7 +30,6 @@ typedef _Bool bool;
 
 /* uapi: enum bpf_map_type (subset) */
 #define BPF_MAP_TYPE_HASH 1
-#define BPF_MAP_TYPE_ARRAY 2
 #define BPF_MAP_TYPE_PERCPU_ARRAY 6
 #define BPF_MAP_TYPE_LRU_HASH 9
 #define BPF_MAP_TYPE_LRU_PERCPU_HASH 10
@@ -39,8 +38,6 @@ typedef _Bool bool;
 /* uapi: map update flags */
 #define BPF_ANY 0
 #define BPF_NOEXIST 1
-
-#define BPF_F_NO_PREALLOC (1U << 0)
 
 #define AF_INET 2
 #define AF_INET6 10

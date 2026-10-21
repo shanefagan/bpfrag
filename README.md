@@ -141,7 +141,9 @@ bpfrag puts the DSCP marker on the interfaces carrying the default routes,
 or the ones you pass with `--iface`. The marker records which interface the
 game's packets actually leave on. Per-interface settings (coalescing, Wi-Fi
 power save) then go only there, so a desktop with both Ethernet and Wi-Fi up
-doesn't touch the one the game isn't using.
+doesn't touch the one the game isn't using. If the packets only show up inside
+a tunnel (WireGuard, OpenVPN, PPPoE), they still leave through a real link
+underneath, so those settings stay on every default-route interface.
 
 During a match bpfrag re-checks every 2 seconds, so docking, switching from
 Wi-Fi to Ethernet, or a VPN coming up is followed without waiting for the
@@ -201,7 +203,8 @@ that.
 ## Safety
 
 - Every original value goes into a journal at `/run/bpfrag/journal.json`
-  **before** the knob is changed. Restores run newest-first.
+  **before** the knob is changed. If the journal can't be written, the knob
+  isn't changed. Restores run newest-first.
 - If the daemon is killed or crashes, `ExecStopPost=bpfrag --restore` in the
   systemd unit puts everything back, and the next start replays any leftover
   journal. `/run` is tmpfs, so a reboot clears the journal along with the
@@ -411,9 +414,9 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, netlink, packaging (35 tests)
+cargo test                     # detector, classifier, config, journal, netlink, packaging (39 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (11 cases)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (30 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (33 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes
@@ -438,6 +441,7 @@ daemon-shaped noise, and checks:
 - every rewritten packet still has a valid IPv4 header checksum, the
   receiving kernel logs no checksum errors, and it echoes the packets back;
 - an outside change made mid-match is respected;
+- nothing is changed while the journal can't be written;
 - a new default route mid-match is followed;
 - per-interface settings move to the interface the game's packets actually use;
 - the Waybar output is correct during and after a match;

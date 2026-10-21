@@ -21,6 +21,14 @@ pub struct Iface {
     pub physical: bool,
 }
 
+impl Iface {
+    /// An L3 tunnel (wg, tun, ppp): packets leave again through another
+    /// interface underneath.
+    pub fn is_tunnel(&self) -> bool {
+        self.l2_len == 0
+    }
+}
+
 pub fn iface_by_name(name: &str) -> Option<Iface> {
     let base = format!("/sys/class/net/{name}");
     let ifindex: u32 = read_trim(format!("{base}/ifindex")).ok()?.parse().ok()?;
@@ -143,6 +151,15 @@ pub fn set_coalesce(ifname: &str, c: &Coalesce) -> io::Result<()> {
 }
 
 impl Coalesce {
+    /// From journalled words; missing ones are zero.
+    pub fn from_words(words: &[u32]) -> Coalesce {
+        let mut c = Coalesce([0; COALESCE_WORDS]);
+        for (d, s) in c.0.iter_mut().zip(words) {
+            *d = *s;
+        }
+        c
+    }
+
     pub fn rx_usecs(&self) -> u32 {
         self.0[RX_USECS]
     }
