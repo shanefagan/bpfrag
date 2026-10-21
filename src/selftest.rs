@@ -200,18 +200,15 @@ pub fn run(cfg: &Config) -> Result<bool> {
     let skel = open.load().context("loading the DSCP marker")?;
 
     let m = &skel.maps;
-    m.if_l2.update(
+    m.mark_ifaces.update(
         &LOOPBACK_IFINDEX.to_ne_bytes(),
-        &14u32.to_ne_bytes(),
+        &crate::bpf::mark_iface_bytes(14),
         MapFlags::ANY,
     )?;
     m.mark_tgids
         .update(&GAME_TGID.to_ne_bytes(), &[1u8], MapFlags::ANY)?;
     for (port, owner) in [(GAME_PORT, GAME_TGID), (STALE_PORT, 9999)] {
-        let pm = bpf_intf::port_mark {
-            tgid: owner,
-            ..Default::default()
-        };
+        let pm = bpf_intf::port_mark { tgid: owner };
         let bytes = unsafe {
             std::slice::from_raw_parts(
                 (&pm as *const bpf_intf::port_mark).cast::<u8>(),
@@ -302,6 +299,23 @@ pub fn run(cfg: &Config) -> Result<bool> {
             }
         }
     }
-    println!("{}/{} passed", cases.len() - failed, cases.len());
+    // Every game packet that reached the marker is counted against the
+    // interface; that is how bpfrag learns which link the game uses.
+    let want = cases
+        .iter()
+        .filter(|c| c.name.contains("game port") && !c.name.contains("fragment"))
+        .count() as u64;
+    let got = crate::bpf::game_packets(&skel)
+        .into_iter()
+        .find(|(i, _)| *i == LOOPBACK_IFINDEX)
+        .map_or(0, |(_, n)| n);
+    let total = cases.len() + 1;
+    if got == want {
+        println!("  PASS game packets counted per interface ({got})");
+    } else {
+        failed += 1;
+        println!("  FAIL game packets counted per interface: {got}, expected {want}");
+    }
+    println!("{}/{total} passed", total - failed);
     Ok(failed == 0)
 }

@@ -70,16 +70,16 @@ struct {
 } mark_ports SEC(".maps");
 
 /*
- * ifindex -> L2 header length (14 Ethernet/Wi-Fi, 0 for wg/tun/ppp). The
- * marker only checks zero/non-zero, so packet offsets stay constants the
- * verifier can follow.
+ * ifindex -> interface the marker is attached to: its L2 header length and
+ * a count of game packets leaving through it, so userspace can tell which
+ * link the game really uses.
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, MAX_IFACES);
 	__type(key, __u32);
-	__type(value, __u32);
-} if_l2 SEC(".maps");
+	__type(value, struct mark_iface);
+} mark_ifaces SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -162,7 +162,6 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 
 		struct port_mark pm = {
 			.tgid = tgid,
-			.last_ns = bpf_ktime_get_ns(),
 		};
 		bpf_map_update_elem(&mark_ports, &port, &pm, BPF_ANY);
 	}
@@ -248,11 +247,8 @@ int BPF_PROG(bpfrag_exit, struct task_struct *p)
 
 /* ---- tc egress: DSCP marking --------------------------------------------- */
 
-/*
- * Is this a game's port? Also records which device the game's packets
- * actually leave on, so userspace can aim per-interface knobs at it.
- */
-static __always_inline bool is_game_port(__be16 sport, __u32 ifindex)
+/* Is this a game's port? Counts the packet against the interface if so. */
+static __always_inline bool is_game_port(__be16 sport, struct mark_iface *mi)
 {
 	__u32 port = bpf_ntohs(sport);
 	struct port_mark *pm = bpf_map_lookup_elem(&mark_ports, &port);
@@ -266,8 +262,8 @@ static __always_inline bool is_game_port(__be16 sport, __u32 ifindex)
 	 */
 	if (!bpf_map_lookup_elem(&mark_tgids, &pm->tgid))
 		return false;
-	pm->ifindex = ifindex;
-	pm->last_ns = bpf_ktime_get_ns();
+	__sync_fetch_and_add(&mi->game_pkts, 1);
+	stat_inc(STAT_TC_SEEN);
 	return true;
 }
 
@@ -286,12 +282,14 @@ int bpfrag_dscp(struct __sk_buff *skb)
 	void *data = (void *)(long)skb->data;
 	void *data_end = (void *)(long)skb->data_end;
 	__u32 ifindex = skb->ifindex;
-	__u32 *l2p, l2;
+	struct mark_iface *mi;
+	__u32 l2;
 
-	l2p = bpf_map_lookup_elem(&if_l2, &ifindex);
-	if (!l2p)
+	mi = bpf_map_lookup_elem(&mark_ifaces, &ifindex);
+	if (!mi)
 		return TC_ACT_OK;
-	l2 = *l2p ? ETH_HLEN : 0;
+	/* zero or Ethernet, so packet offsets stay constants for the verifier */
+	l2 = mi->l2_len ? ETH_HLEN : 0;
 
 	if (skb->protocol == bpf_htons(ETH_P_IP)) {
 		struct iphdr *ip = data + l2;
@@ -311,9 +309,8 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		udp = (void *)ip + ihl;
 		if ((void *)(udp + 1) > data_end)
 			return TC_ACT_OK;
-		if (!is_game_port(udp->source, ifindex))
+		if (!is_game_port(udp->source, mi))
 			return TC_ACT_OK;
-		stat_inc(STAT_TC_SEEN);
 
 		old_tos = ip->tos;
 		if (!want_rewrite(old_tos))
@@ -338,9 +335,8 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		udp = (void *)(ip6 + 1);
 		if ((void *)(udp + 1) > data_end)
 			return TC_ACT_OK;
-		if (!is_game_port(udp->source, ifindex))
+		if (!is_game_port(udp->source, mi))
 			return TC_ACT_OK;
-		stat_inc(STAT_TC_SEEN);
 
 		b0 = ip6->vtc_flow[0];
 		b1 = ip6->vtc_flow[1];

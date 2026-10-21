@@ -138,10 +138,13 @@ seconds apart. A match never drops back to CASUAL while traffic is still
 flowing.
 
 bpfrag puts the DSCP marker on the interfaces carrying the default routes,
-or the ones you pass with `--iface`. The marker records which interface the
-game's packets actually leave on. Per-interface settings (coalescing, Wi-Fi
-power save) then go only there, so a desktop with both Ethernet and Wi-Fi up
-doesn't touch the one the game isn't using. If the packets only show up inside
+or the ones you pass with `--iface`. The marker counts the game's packets per
+interface, and per-interface settings (coalescing, Wi-Fi power save) go only
+on the links carrying at least 10% of them, so a desktop with both Ethernet
+and Wi-Fi up doesn't touch the one the game isn't using. They wait a few
+seconds at the start of a match while the marker finds that out, and a link
+the game stops using keeps its settings for 30 seconds, so stray packets on a
+second link don't toggle anything. If the packets only show up inside
 a tunnel (WireGuard, OpenVPN, PPPoE), they still leave through a real link
 underneath, so those settings stay on every default-route interface.
 
@@ -372,6 +375,7 @@ src/knobs.rs             journalled, reversible knobs
 src/coexist.rs           bpftune / sched_ext / gamemode / tuned awareness
 src/bpf.rs               hook selection, map access, tc attach
 src/net.rs               interfaces + ethtool coalescing
+src/egress.rs            which links the game uses, with hysteresis
 src/wifi.rs              Wi-Fi power save over nl80211 (generic netlink, no deps)
 src/stats.rs             Metrics, --stats, --monitor
 src/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
@@ -414,8 +418,8 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, netlink, packaging (39 tests)
-sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (11 cases)
+cargo test                     # detector, classifier, config, journal, netlink, packaging (42 tests)
+sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (12 checks)
 sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (33 checks)
 ```
 
