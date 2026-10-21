@@ -6,17 +6,77 @@
 // is optional; anything you leave out keeps its default.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
 pub const DEFAULT_CONFIG: &str = "/etc/bpfrag/bpfrag.toml";
 
-pub const TIER_NAMES: [&str; 3] = ["CASUAL", "COMPETITIVE", "INTENSE"];
+/// How hard a match is running, from its smoothed packet rate. Ordered, so
+/// `Intense > Competitive > Casual`.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    ValueEnum,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum Tier {
+    #[default]
+    Casual,
+    Competitive,
+    Intense,
+}
 
-pub fn tier_index(name: &str) -> Option<usize> {
-    TIER_NAMES.iter().position(|t| t.eq_ignore_ascii_case(name))
+impl Tier {
+    pub fn name(self) -> &'static str {
+        match self {
+            Tier::Casual => "CASUAL",
+            Tier::Competitive => "COMPETITIVE",
+            Tier::Intense => "INTENSE",
+        }
+    }
+}
+
+impl fmt::Display for Tier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.pad(self.name())
+    }
+}
+
+/// Which kernel hook counts UDP traffic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HookPref {
+    /// Tracepoints if the kernel has them, else fexit.
+    #[default]
+    Auto,
+    Tracepoint,
+    Fexit,
+}
+
+/// Sharing sysctls with bpftune.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum BpftuneMode {
+    /// Yield bpftune's sysctls while bpftune is running.
+    #[default]
+    Auto,
+    /// Never touch bpftune's sysctls.
+    Yield,
+    /// Write them anyway (bpftune then disables its own tuners).
+    Ignore,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -25,24 +85,19 @@ pub struct General {
     /// Where the stats file and the restore journal live (tmpfs, so a
     /// reboot clears it together with the sysctls it describes).
     pub run_dir: String,
-    /// "auto", "tracepoint" or "fexit"
-    pub hook: String,
+    pub hook: HookPref,
     /// Sampling window in milliseconds.
     pub tick_ms: u64,
-    /// Sharing sysctls with bpftune:
-    ///   "auto"   - yield bpftune's sysctls while bpftune is running (default)
-    ///   "yield"  - never touch bpftune's sysctls
-    ///   "ignore" - write them anyway (bpftune will disable its own tuners)
-    pub bpftune: String,
+    pub bpftune: BpftuneMode,
 }
 
 impl Default for General {
     fn default() -> Self {
         Self {
             run_dir: "/run/bpfrag".into(),
-            hook: "auto".into(),
+            hook: HookPref::Auto,
             tick_ms: 1000,
-            bpftune: "auto".into(),
+            bpftune: BpftuneMode::Auto,
         }
     }
 }
@@ -74,7 +129,7 @@ pub struct Detect {
     /// Minimum seconds between tier changes.
     pub dwell_secs: u64,
     /// Use this tier for every match instead of following the tick rate.
-    pub pin_tier: Option<String>,
+    pub pin_tier: Option<Tier>,
 }
 
 impl Default for Detect {
@@ -389,10 +444,11 @@ pub struct Writeback {
     pub background_mb: u64,
 }
 
-/// One tuning tier. Option fields: None = leave that knob alone.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct Tier {
-    pub name: String,
+/// The settings applied for one tier. Option fields: None = leave that
+/// knob alone.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Profile {
+    pub tier: Tier,
     /// sysctl -> value. A ">=" prefix means "raise only": never lower a value
     /// the user already set higher (applied per field for multi-value keys).
     pub sysctl: BTreeMap<String, String>,
@@ -405,7 +461,6 @@ pub struct Tier {
     pub writeback: Option<Writeback>,
     /// Turn Wi-Fi power save off on wireless interfaces for the match, so
     /// the radio never dozes between packets.
-    #[serde(default)]
     pub wifi_powersave_off: bool,
 }
 
@@ -416,16 +471,16 @@ fn s(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
         .collect()
 }
 
-/// Built-in tiers. The network values are the CASUAL / COMPETITIVE / INTENSE
-/// profiles from the original bpftune gaming tuner patches; capacity knobs
-/// are raise-only so we never shrink something the user sized up.
-pub fn builtin_tiers() -> [Tier; 3] {
+/// Built-in profiles. The network values are the CASUAL / COMPETITIVE /
+/// INTENSE profiles from the original bpftune gaming tuner patches; capacity
+/// knobs are raise-only so we never shrink something the user sized up.
+pub fn builtin_profiles() -> [Profile; 3] {
     let wb = Some(Writeback {
         dirty_mb: 256,
         background_mb: 64,
     });
-    let casual = Tier {
-        name: TIER_NAMES[0].into(),
+    let casual = Profile {
+        tier: Tier::Casual,
         sysctl: s(&[
             ("net.core.rmem_default", ">=262144"),
             ("net.core.rmem_max", ">=8388608"),
@@ -444,8 +499,8 @@ pub fn builtin_tiers() -> [Tier; 3] {
         writeback: None,
         wifi_powersave_off: false,
     };
-    let competitive = Tier {
-        name: TIER_NAMES[1].into(),
+    let competitive = Profile {
+        tier: Tier::Competitive,
         sysctl: s(&[
             ("net.core.rmem_default", ">=262144"),
             ("net.core.rmem_max", ">=16777216"),
@@ -464,8 +519,8 @@ pub fn builtin_tiers() -> [Tier; 3] {
         writeback: wb,
         wifi_powersave_off: true,
     };
-    let intense = Tier {
-        name: TIER_NAMES[2].into(),
+    let intense = Profile {
+        tier: Tier::Intense,
         sysctl: s(&[
             ("net.core.rmem_default", ">=262144"),
             ("net.core.rmem_max", ">=33554432"),
@@ -521,7 +576,7 @@ fn merge_opt<T: Clone>(dst: &mut Option<T>, ov: &Option<Setting<T>>, what: &str)
 }
 
 impl TierOverride {
-    fn apply(&self, tier: &mut Tier) -> Result<()> {
+    fn apply(&self, tier: &mut Profile) -> Result<()> {
         for (k, v) in &self.sysctl {
             let value = match v {
                 Setting::Flag(false) => None,
@@ -576,13 +631,14 @@ struct ConfigFile {
     tier: TiersFile,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Config {
     pub general: General,
     pub detect: Detect,
     pub classify: Classify,
     pub dscp: Dscp,
-    pub tiers: [Tier; 3],
+    /// Indexed by `Tier as usize`; use `profile()`.
+    pub profiles: [Profile; 3],
 }
 
 impl Default for Config {
@@ -592,7 +648,7 @@ impl Default for Config {
             detect: Detect::default(),
             classify: Classify::default(),
             dscp: Dscp::default(),
-            tiers: builtin_tiers(),
+            profiles: builtin_profiles(),
         }
     }
 }
@@ -600,19 +656,21 @@ impl Default for Config {
 impl Config {
     pub fn from_toml(text: &str) -> Result<Self> {
         let file: ConfigFile = toml::from_str(text)?;
-        let mut tiers = builtin_tiers();
-        for t in tiers.iter_mut() {
-            file.tier.all.apply(t)?;
+        let mut profiles = builtin_profiles();
+        for p in profiles.iter_mut() {
+            file.tier.all.apply(p)?;
+            match p.tier {
+                Tier::Casual => file.tier.casual.apply(p)?,
+                Tier::Competitive => file.tier.competitive.apply(p)?,
+                Tier::Intense => file.tier.intense.apply(p)?,
+            }
         }
-        file.tier.casual.apply(&mut tiers[0])?;
-        file.tier.competitive.apply(&mut tiers[1])?;
-        file.tier.intense.apply(&mut tiers[2])?;
         let cfg = Config {
             general: file.general,
             detect: file.detect,
             classify: file.classify,
             dscp: file.dscp,
-            tiers,
+            profiles,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -631,6 +689,21 @@ impl Config {
         }
     }
 
+    pub fn profile(&self, tier: Tier) -> &Profile {
+        &self.profiles[tier as usize]
+    }
+
+    /// Tier names whose profile passes `f`, e.g. "COMPETITIVE/INTENSE".
+    pub fn tiers_where(&self, f: impl Fn(&Profile) -> bool) -> Option<String> {
+        let names: Vec<&str> = self
+            .profiles
+            .iter()
+            .filter(|p| f(p))
+            .map(|p| p.tier.name())
+            .collect();
+        (!names.is_empty()).then(|| names.join("/"))
+    }
+
     pub fn validate(&self) -> Result<()> {
         let d = &self.detect;
         if d.history < 2 {
@@ -642,33 +715,22 @@ impl Config {
         if d.intense_pps <= d.competitive_pps {
             bail!("detect.intense_pps must be above detect.competitive_pps");
         }
-        if let Some(t) = &d.pin_tier
-            && tier_index(t).is_none()
-        {
-            bail!("detect.pin_tier must be casual, competitive or intense");
-        }
         if self.general.tick_ms < 100 {
             bail!("general.tick_ms must be >= 100");
         }
-        if !matches!(self.general.hook.as_str(), "auto" | "tracepoint" | "fexit") {
-            bail!("general.hook must be auto, tracepoint or fexit");
-        }
-        if !matches!(self.general.bpftune.as_str(), "auto" | "yield" | "ignore") {
-            bail!("general.bpftune must be auto, yield or ignore");
-        }
         parse_dscp(&self.dscp.class)?;
-        for t in &self.tiers {
-            for k in t.sysctl.keys() {
+        for p in &self.profiles {
+            for k in p.sysctl.keys() {
                 if crate::util::sysctl_path(k).is_none() {
-                    bail!("tier {}: invalid sysctl name {k:?}", t.name);
+                    bail!("tier {}: invalid sysctl name {k:?}", p.tier);
                 }
             }
-            if let Some(w) = t.writeback
-                && (w.dirty_mb == 0 || w.background_mb == 0 || w.background_mb >= w.dirty_mb)
-            {
+            if p.writeback.is_some_and(|w| {
+                w.dirty_mb == 0 || w.background_mb == 0 || w.background_mb >= w.dirty_mb
+            }) {
                 bail!(
                     "tier {}: writeback needs 0 < background_mb < dirty_mb",
-                    t.name
+                    p.tier
                 );
             }
         }
@@ -697,23 +759,23 @@ impl Config {
             tier: BTreeMap<String, TierOut>,
         }
         let tier = self
-            .tiers
+            .profiles
             .iter()
-            .map(|t| {
+            .map(|p| {
                 let out = TierOut {
-                    dscp: t.dscp,
-                    coalesce_usecs: t
+                    dscp: p.dscp,
+                    coalesce_usecs: p
                         .coalesce_usecs
                         .map(|u| toml::Value::Integer(u.into()))
                         .unwrap_or(toml::Value::Boolean(false)),
-                    wifi_powersave_off: t.wifi_powersave_off,
-                    writeback: match t.writeback {
+                    wifi_powersave_off: p.wifi_powersave_off,
+                    writeback: match p.writeback {
                         Some(w) => toml::Value::try_from(w).unwrap_or(toml::Value::Boolean(false)),
                         None => toml::Value::Boolean(false),
                     },
-                    sysctl: t.sysctl.clone(),
+                    sysctl: p.sysctl.clone(),
                 };
-                (t.name.to_lowercase(), out)
+                (p.tier.name().to_lowercase(), out)
             })
             .collect();
         Ok(toml::to_string_pretty(&Out {
@@ -768,28 +830,37 @@ mod tests {
         .unwrap();
         assert_eq!(cfg.detect.min_pps, 30);
         assert_eq!(cfg.detect.intense_pps, 140);
-        let i = &cfg.tiers[2];
+        assert_eq!(cfg.detect.pin_tier, Some(Tier::Competitive));
+        let i = cfg.profile(Tier::Intense);
         assert_eq!(i.coalesce_usecs, Some(5));
         assert_eq!(i.writeback, None);
         assert_eq!(i.sysctl["net.core.busy_poll"], "0");
         assert_eq!(i.sysctl["net.ipv4.tcp_fastopen"], "3");
         assert!(!i.sysctl.contains_key("net.core.busy_read"));
-        assert!(!cfg.tiers[0].sysctl.contains_key("net.core.busy_read"));
-        let mut c = builtin_tiers()[1].clone();
+        assert!(
+            !cfg.profile(Tier::Casual)
+                .sysctl
+                .contains_key("net.core.busy_read")
+        );
+        let mut c = builtin_profiles()[1].clone();
         c.sysctl.remove("net.core.busy_read");
-        assert_eq!(cfg.tiers[1], c);
+        assert_eq!(cfg.profile(Tier::Competitive), &c);
         assert!(cfg.classify.deny_list().iter().any(|d| d == "discord"));
     }
 
     #[test]
     fn dump_round_trips() {
         let mut cfg = Config::default();
-        cfg.tiers[1].coalesce_usecs = None;
-        cfg.tiers[2].writeback = None;
+        cfg.profiles[1].coalesce_usecs = None;
+        cfg.profiles[2].writeback = None;
         cfg.detect.min_pps = 33;
+        cfg.detect.pin_tier = Some(Tier::Intense);
+        cfg.general.bpftune = BpftuneMode::Yield;
         let back = Config::from_toml(&cfg.to_toml().unwrap()).unwrap();
-        assert_eq!(back.tiers, cfg.tiers);
+        assert_eq!(back.profiles, cfg.profiles);
         assert_eq!(back.detect.min_pps, 33);
+        assert_eq!(back.detect.pin_tier, Some(Tier::Intense));
+        assert_eq!(back.general.bpftune, BpftuneMode::Yield);
     }
 
     #[test]
@@ -801,12 +872,50 @@ mod tests {
                 .is_err()
         );
         assert!(Config::from_toml("[general]\nbpftune = \"maybe\"\n").is_err());
+        assert!(Config::from_toml("[general]\nhook = \"kprobe\"\n").is_err());
     }
 
     #[test]
-    fn builtin_tiers_are_network_and_writeback_only() {
-        for t in builtin_tiers() {
-            assert!(t.sysctl.keys().all(|k| k.starts_with("net.")), "{}", t.name);
+    fn builtin_profiles_are_network_and_writeback_only() {
+        for (i, p) in builtin_profiles().iter().enumerate() {
+            assert_eq!(p.tier as usize, i);
+            assert!(p.sysctl.keys().all(|k| k.starts_with("net.")), "{}", p.tier);
         }
+    }
+
+    /// dist/bpfrag.toml ships with its examples commented out; uncomment
+    /// every `# key = value` and `# [section]` line and it must still load.
+    #[test]
+    fn shipped_example_config_parses() {
+        let text = include_str!("../dist/bpfrag.toml");
+        Config::from_toml(text).unwrap();
+        let uncommented: Vec<&str> = text
+            .lines()
+            .map(|line| {
+                let Some(l) = line.strip_prefix("# ") else {
+                    return line;
+                };
+                let section = l.starts_with('[') && l.ends_with(']') && !l.contains(' ');
+                let key = l.split_once(" = ").is_some_and(|(k, _)| {
+                    !k.is_empty() && k.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+                });
+                if section || key { l } else { line }
+            })
+            .collect();
+        let cfg = Config::from_toml(&uncommented.join("\n")).unwrap();
+        assert_eq!(cfg.detect.pin_tier, Some(Tier::Competitive));
+        assert_eq!(cfg.profile(Tier::Intense).coalesce_usecs, Some(5));
+    }
+
+    #[test]
+    fn tiers_order_and_names() {
+        assert!(Tier::Intense > Tier::Competitive && Tier::Competitive > Tier::Casual);
+        assert_eq!(format!("{:<8}|", Tier::Casual), "CASUAL  |");
+        assert_eq!(
+            Config::default()
+                .tiers_where(|p| p.wifi_powersave_off)
+                .as_deref(),
+            Some("COMPETITIVE/INTENSE")
+        );
     }
 }

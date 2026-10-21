@@ -45,6 +45,9 @@ jobs:
       - name: End-to-end (netns, fake game, noise, crash recovery)
         run: sudo tests/rig/e2e.sh target/release/bpfrag
 
+      - name: End-to-end with only the systemd unit's capabilities
+        run: sudo tests/rig/e2e.sh tests/rig/unit-caps.sh
+
   msrv:
     # rust-version in Cargo.toml: 1.85, Debian 13's rustc.
     runs-on: ubuntu-24.04

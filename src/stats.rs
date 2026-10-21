@@ -160,8 +160,7 @@ impl Metrics {
 
     pub fn format<W: Write>(&self, w: &mut W) -> Result<()> {
         let age = now_unix().saturating_sub(self.updated);
-        let alive = unsafe { libc::kill(self.pid as i32, 0) } == 0
-            || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+        let alive = pid_alive(self.pid);
         writeln!(
             w,
             "bpfrag {} | pid {}{} | {} | updated {age}s ago{}",
@@ -272,6 +271,7 @@ impl Metrics {
     }
 }
 
+/// Does `pid` exist? (EPERM means it does, but isn't ours to signal.)
 fn pid_alive(pid: u32) -> bool {
     let ok = unsafe { libc::kill(pid as i32, 0) } == 0;
     ok || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)

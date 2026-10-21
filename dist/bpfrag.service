@@ -12,9 +12,11 @@ ExecStopPost=/usr/bin/bpfrag --restore
 Restart=on-failure
 RestartSec=2
 
-# bpfrag only needs BPF, perf (tracepoints) and net admin (tc, ethtool,
-# net.* sysctls). /proc/sys and /run/bpfrag must stay writable.
-CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+# BPF and perf (loading and attaching the programs), net admin (tc, ethtool,
+# nl80211), resource (memlock on old kernels), and reading other users'
+# /proc/<pid>/environ and Steam libraries for the classifier. No
+# CAP_SYS_ADMIN. /proc/sys and /run/bpfrag must stay writable.
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
 NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=read-only

@@ -19,7 +19,13 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::classify::Verdict;
-use crate::config::Detect;
+use crate::config::{Detect, Tier};
+
+/// Consecutive windows that must agree on a new tier before it is applied:
+/// moving up is quick, moving down slower, and back to CASUAL slowest.
+const CONFIDENCE_UP: u32 = 3;
+const CONFIDENCE_DOWN: u32 = 4;
+const CONFIDENCE_TO_CASUAL: u32 = 6;
 
 /// Cumulative per-process counters as read from the BPF map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -106,39 +112,48 @@ impl Track {
 pub struct SessionInfo {
     pub tgid: u32,
     pub name: String,
+    /// Why the classifier called it a game.
     pub reason: String,
-    pub tier: usize,
+    pub tier: Tier,
+    /// Smoothed packets/s, and per direction (pps = tx + rx).
     pub pps: f64,
-    /// smoothed packets/s per direction (pps = tx + rx)
     pub tx_pps: f64,
     pub rx_pps: f64,
+    /// Egress device of a connected socket, if the BPF side saw one.
     pub ifindex: u32,
+    /// Highest tier and rate so far in this match.
+    pub peak_tier: Tier,
+    pub peak_pps: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Start(SessionInfo),
     Retier {
-        from: usize,
-        to: usize,
-        pps: f64,
+        from: Tier,
+        to: Tier,
     },
+    /// The match is over; `session` is its final state.
     End {
+        session: SessionInfo,
         reason: String,
     },
-    /// Candidate rejected by the classifier (logged once per process).
+    /// Candidate rejected by the classifier (reported once per process).
     Ignored {
         tgid: u32,
         name: String,
         reason: String,
         pps: f64,
+        /// Deliberately excluded (deny list, BPFRAG_GAME=0) rather than
+        /// just lacking game signals.
+        excluded: bool,
     },
 }
 
 #[derive(Debug)]
 struct Session {
     info: SessionInfo,
-    candidate: usize,
+    candidate: Tier,
     confidence: u32,
     last_change: f64,
     quiet_secs: f64,
@@ -152,49 +167,39 @@ pub trait Oracle {
     fn alive(&mut self, tgid: u32) -> bool;
 }
 
-/// (competitive high, competitive low, intense high, intense low)
-fn thresholds(cfg: &Detect) -> (f64, f64, f64, f64) {
+/// Edges of the hysteresis bands, in smoothed pkt/s: a tier is entered at
+/// its `_up` rate and left at its `_down` rate.
+#[derive(Debug, PartialEq)]
+struct Thresholds {
+    competitive_up: f64,
+    competitive_down: f64,
+    intense_up: f64,
+    intense_down: f64,
+}
+
+fn thresholds(cfg: &Detect) -> Thresholds {
     let c = cfg.competitive_pps as f64;
     let i = cfg.intense_pps as f64;
     let m = cfg.margin as f64;
-    let comp_low = if c > m { c - m } else { cfg.min_pps as f64 };
-    let int_low = if i > m { i - m } else { c + m };
-    (c + m, comp_low, i + m, int_low)
-}
-
-fn pinned(cfg: &Detect) -> Option<usize> {
-    cfg.pin_tier.as_deref().and_then(crate::config::tier_index)
+    Thresholds {
+        competitive_up: c + m,
+        competitive_down: if c > m { c - m } else { cfg.min_pps as f64 },
+        intense_up: i + m,
+        intense_down: if i > m { i - m } else { c + m },
+    }
 }
 
 /// Port of gaming_determine_intensity(): hysteresis around each threshold.
-fn tier_for(cfg: &Detect, current: usize, pps: f64) -> usize {
-    let (comp_high, comp_low, int_high, int_low) = thresholds(cfg);
+fn tier_for(cfg: &Detect, current: Tier, pps: f64) -> Tier {
+    let t = thresholds(cfg);
     match current {
-        2.. => {
-            if pps <= int_low {
-                1
-            } else {
-                2
-            }
-        }
-        1 => {
-            if pps >= int_high {
-                2
-            } else if pps <= comp_low {
-                0
-            } else {
-                1
-            }
-        }
-        _ => {
-            if pps >= int_high {
-                2
-            } else if pps >= comp_high {
-                1
-            } else {
-                0
-            }
-        }
+        Tier::Intense if pps <= t.intense_down => Tier::Competitive,
+        Tier::Intense => Tier::Intense,
+        _ if pps >= t.intense_up => Tier::Intense,
+        Tier::Competitive if pps <= t.competitive_down => Tier::Casual,
+        Tier::Competitive => Tier::Competitive,
+        Tier::Casual if pps >= t.competitive_up => Tier::Competitive,
+        Tier::Casual => Tier::Casual,
     }
 }
 
@@ -228,16 +233,6 @@ impl Detector {
 
     pub fn session(&self) -> Option<&SessionInfo> {
         self.session.as_ref().map(|s| &s.info)
-    }
-
-    #[cfg(test)]
-    pub fn tier_thresholds(&self) -> (f64, f64, f64, f64) {
-        thresholds(&self.cfg)
-    }
-
-    #[cfg(test)]
-    pub fn determine_tier(&self, current: usize, pps: f64) -> usize {
-        tier_for(&self.cfg, current, pps)
     }
 
     /// (processes with UDP traffic in the last window, their total pps)
@@ -390,9 +385,13 @@ impl Detector {
                 continue;
             }
             let (verdict, name) = oracle.verdict(tgid);
+            let excluded = matches!(verdict, Verdict::Excluded(_));
             match verdict {
                 Verdict::Game(reason) => {
-                    let tier = pinned(&self.cfg).unwrap_or_else(|| tier_for(&self.cfg, 0, pps));
+                    let tier = self
+                        .cfg
+                        .pin_tier
+                        .unwrap_or_else(|| tier_for(&self.cfg, Tier::Casual, pps));
                     let info = SessionInfo {
                         tgid,
                         name,
@@ -402,6 +401,8 @@ impl Detector {
                         tx_pps,
                         rx_pps,
                         ifindex,
+                        peak_tier: tier,
+                        peak_pps: pps,
                     };
                     self.session = Some(Session {
                         info: info.clone(),
@@ -413,7 +414,7 @@ impl Detector {
                     actions.push(Action::Start(info));
                     break;
                 }
-                Verdict::NotGame(reason) => {
+                Verdict::NotGame(reason) | Verdict::Excluded(reason) => {
                     // Don't re-ask the classifier every second.
                     self.ignored.insert(tgid, now + 30.0);
                     actions.push(Action::Ignored {
@@ -421,6 +422,7 @@ impl Detector {
                         name,
                         reason,
                         pps,
+                        excluded,
                     });
                 }
             }
@@ -428,18 +430,26 @@ impl Detector {
         actions
     }
 
+    /// Close the session, handing its final state to the caller.
+    fn end(&mut self, reason: String) -> Option<Action> {
+        let s = self.session.take()?;
+        Some(Action::End {
+            session: s.info,
+            reason,
+        })
+    }
+
     fn advance_session(&mut self, now: f64, dt: f64, oracle: &mut dyn Oracle) -> Option<Action> {
         let sess = self.session.as_mut()?;
         let tgid = sess.info.tgid;
         let Some(t) = self.tracks.get(&tgid) else {
-            self.session = None;
-            return Some(Action::End {
-                reason: "process gone".into(),
-            });
+            return self.end("process gone".into());
         };
         let last = t.last();
         let pps = t.smooth();
+        let idle = t.idle_ticks > 0;
         sess.info.pps = pps;
+        sess.info.peak_pps = sess.info.peak_pps.max(pps);
         (sess.info.tx_pps, sess.info.rx_pps) = t.smooth_dirs();
         if t.ifindex != 0 {
             sess.info.ifindex = t.ifindex;
@@ -447,75 +457,66 @@ impl Detector {
 
         if last.total() <= self.cfg.idle_pps as f64 {
             sess.quiet_secs += dt;
-            if t.idle_ticks > 0 && !oracle.alive(tgid) {
-                self.session = None;
-                return Some(Action::End {
-                    reason: "game exited".into(),
-                });
+            let quiet = sess.quiet_secs;
+            if idle && !oracle.alive(tgid) {
+                return self.end("game exited".into());
             }
-            if sess.quiet_secs >= self.cfg.linger_secs as f64 {
-                let secs = sess.quiet_secs.round();
-                self.session = None;
-                return Some(Action::End {
-                    reason: format!("netcode quiet for {secs}s"),
-                });
+            if quiet >= self.cfg.linger_secs as f64 {
+                return self.end(format!("netcode quiet for {}s", quiet.round()));
             }
             return None;
         }
         sess.quiet_secs = 0.0;
-        if pinned(&self.cfg).is_some() {
+        if self.cfg.pin_tier.is_some() {
             return None;
         }
 
         let reported = sess.info.tier;
         let mut cand = tier_for(&self.cfg, reported, pps);
         // Still playing: don't drop back to CASUAL mid-match.
-        if cand == 0 && reported > 0 && pps > self.cfg.idle_pps as f64 {
+        if cand == Tier::Casual && reported > Tier::Casual && pps > self.cfg.idle_pps as f64 {
             cand = reported;
         }
         if cand != sess.candidate {
             sess.candidate = cand;
             sess.confidence = 1;
-        } else if sess.confidence < 6 {
+        } else if sess.confidence < CONFIDENCE_TO_CASUAL {
             sess.confidence += 1;
         }
         if cand == reported || now - sess.last_change < self.cfg.dwell_secs as f64 {
             return None;
         }
         let required = if cand > reported {
-            3
-        } else if cand == 0 {
-            6
+            CONFIDENCE_UP
+        } else if cand == Tier::Casual {
+            CONFIDENCE_TO_CASUAL
         } else {
-            4
+            CONFIDENCE_DOWN
         };
-        if sess.confidence >= required {
-            sess.info.tier = cand;
-            sess.last_change = now;
-            return Some(Action::Retier {
-                from: reported,
-                to: cand,
-                pps,
-            });
+        if sess.confidence < required {
+            return None;
         }
-        None
+        sess.info.tier = cand;
+        sess.info.peak_tier = sess.info.peak_tier.max(cand);
+        sess.last_change = now;
+        Some(Action::Retier {
+            from: reported,
+            to: cand,
+        })
     }
 
     /// The BPF exit hook fired for a watched process.
     pub fn on_exit(&mut self, tgid: u32) -> Option<Action> {
         self.tracks.remove(&tgid);
-        if self.session.as_ref().map(|s| s.info.tgid) == Some(tgid) {
-            self.session = None;
-            return Some(Action::End {
-                reason: "game exited".into(),
-            });
+        if self.session()?.tgid != tgid {
+            return None;
         }
-        None
+        self.end("game exited".into())
     }
 
     /// Drop the session without an End action (used on shutdown).
-    pub fn reset(&mut self) {
-        self.session = None;
+    pub fn take_session(&mut self) -> Option<SessionInfo> {
+        self.session.take().map(|s| s.info)
     }
 }
 
@@ -525,6 +526,7 @@ mod tests {
 
     struct Fake {
         games: Vec<u32>,
+        excluded: Vec<u32>,
         dead: Vec<u32>,
     }
 
@@ -532,6 +534,8 @@ mod tests {
         fn verdict(&mut self, tgid: u32) -> (Verdict, String) {
             if self.games.contains(&tgid) {
                 (Verdict::Game("test".into()), format!("game{tgid}"))
+            } else if self.excluded.contains(&tgid) {
+                (Verdict::Excluded("test".into()), format!("proc{tgid}"))
             } else {
                 (Verdict::NotGame("test".into()), format!("proc{tgid}"))
             }
@@ -557,6 +561,7 @@ mod tests {
                 counters: HashMap::new(),
                 oracle: Fake {
                     games: games.to_vec(),
+                    excluded: vec![],
                     dead: vec![],
                 },
             }
@@ -608,7 +613,7 @@ mod tests {
         let s = starts(&a);
         assert_eq!(s.len(), 1, "{a:?}");
         assert_eq!(s[0].tgid, 42);
-        assert_eq!(s[0].tier, 1); // 128 pps total -> COMPETITIVE
+        assert_eq!(s[0].tier, Tier::Competitive); // 128 pps total
     }
 
     #[test]
@@ -616,7 +621,7 @@ mod tests {
         let mut sim = Sim::new(&[7]);
         let a = sim.run(4, &[(7, 128, 128, 120)]);
         assert_eq!(starts(&a).len(), 1, "{a:?}");
-        assert_eq!(starts(&a)[0].tier, 2);
+        assert_eq!(starts(&a)[0].tier, Tier::Intense);
         // match over: back in menus with a trickle
         let a = sim.run(20, &[(7, 1, 1, 80)]);
         assert!(a.iter().any(|x| matches!(x, Action::End { .. })), "{a:?}");
@@ -654,28 +659,44 @@ mod tests {
     fn tier_moves_up_with_confidence_and_dwell_and_never_to_casual() {
         let mut sim = Sim::new(&[5]);
         let a = sim.run(4, &[(5, 50, 50, 150)]);
-        assert_eq!(starts(&a)[0].tier, 1);
+        assert_eq!(starts(&a)[0].tier, Tier::Competitive);
         // jump to 300 pps: should need dwell (5s) + 3 confident windows
         let a = sim.run(2, &[(5, 150, 150, 150)]);
         assert!(!a.iter().any(|x| matches!(x, Action::Retier { .. })));
         let a = sim.run(6, &[(5, 150, 150, 150)]);
         assert!(
-            a.iter()
-                .any(|x| matches!(x, Action::Retier { from: 1, to: 2, .. })),
+            a.iter().any(|x| matches!(
+                x,
+                Action::Retier {
+                    from: Tier::Competitive,
+                    to: Tier::Intense
+                }
+            )),
             "{a:?}"
         );
         // drop to 30 pps (would be CASUAL): only falls to COMPETITIVE
         let a = sim.run(20, &[(5, 15, 15, 150)]);
         assert!(
-            a.iter()
-                .any(|x| matches!(x, Action::Retier { from: 2, to: 1, .. })),
+            a.iter().any(|x| matches!(
+                x,
+                Action::Retier {
+                    from: Tier::Intense,
+                    to: Tier::Competitive
+                }
+            )),
             "{a:?}"
         );
         assert!(
-            !a.iter().any(|x| matches!(x, Action::Retier { to: 0, .. })),
+            !a.iter().any(|x| matches!(
+                x,
+                Action::Retier {
+                    to: Tier::Casual,
+                    ..
+                }
+            )),
             "{a:?}"
         );
-        assert_eq!(sim.det.session().unwrap().tier, 1);
+        assert_eq!(sim.det.session().unwrap().tier, Tier::Competitive);
     }
 
     #[test]
@@ -714,7 +735,11 @@ mod tests {
         let a = sim.run(1, &[(77, 30, 30, 150)]);
         let s = starts(&a);
         assert_eq!(s.len(), 1, "{a:?}");
-        assert_eq!(s[0].tier, 0, "must not inherit the old process's 200 pkt/s");
+        assert_eq!(
+            s[0].tier,
+            Tier::Casual,
+            "must not inherit the old process's 200 pkt/s"
+        );
         assert!((s[0].pps - 60.0).abs() < 1.0, "{}", s[0].pps);
     }
 
@@ -745,31 +770,85 @@ mod tests {
         assert!(starts(&sim.run(2, &[(88, 30, 30, 150)])).is_empty());
         let s = sim.run(1, &[(88, 30, 30, 150)]);
         assert_eq!(starts(&s).len(), 1, "{s:?}");
-        assert_eq!(starts(&s)[0].tier, 0);
+        assert_eq!(starts(&s)[0].tier, Tier::Casual);
     }
 
     #[test]
     fn pinned_tier_sticks() {
         let mut sim = Sim::new(&[3]);
         sim.det = Detector::new(Detect {
-            pin_tier: Some("intense".into()),
+            pin_tier: Some(Tier::Intense),
             ..Detect::default()
         });
         let a = sim.run(4, &[(3, 30, 30, 100)]);
-        assert_eq!(starts(&a)[0].tier, 2);
+        assert_eq!(starts(&a)[0].tier, Tier::Intense);
         let a = sim.run(10, &[(3, 15, 15, 100)]);
         assert!(!a.iter().any(|x| matches!(x, Action::Retier { .. })));
     }
 
     #[test]
     fn hysteresis_matches_original_thresholds() {
-        let d = Detector::new(Detect::default());
-        assert_eq!(d.tier_thresholds(), (85.0, 55.0, 155.0, 125.0));
-        assert_eq!(d.determine_tier(0, 84.0), 0);
-        assert_eq!(d.determine_tier(0, 85.0), 1);
-        assert_eq!(d.determine_tier(1, 60.0), 1);
-        assert_eq!(d.determine_tier(1, 55.0), 0);
-        assert_eq!(d.determine_tier(2, 130.0), 2);
-        assert_eq!(d.determine_tier(2, 125.0), 1);
+        let cfg = Detect::default();
+        assert_eq!(
+            thresholds(&cfg),
+            Thresholds {
+                competitive_up: 85.0,
+                competitive_down: 55.0,
+                intense_up: 155.0,
+                intense_down: 125.0,
+            }
+        );
+        use Tier::*;
+        for (current, pps, want) in [
+            (Casual, 84.0, Casual),
+            (Casual, 85.0, Competitive),
+            (Casual, 155.0, Intense),
+            (Competitive, 60.0, Competitive),
+            (Competitive, 55.0, Casual),
+            (Competitive, 155.0, Intense),
+            (Intense, 130.0, Intense),
+            (Intense, 125.0, Competitive),
+        ] {
+            assert_eq!(tier_for(&cfg, current, pps), want, "{current} @ {pps}");
+        }
+    }
+
+    #[test]
+    fn end_carries_the_final_session_and_its_peak() {
+        let mut sim = Sim::new(&[9]);
+        sim.run(4, &[(9, 50, 50, 150)]);
+        sim.run(12, &[(9, 150, 150, 150)]);
+        let a = sim.run(1, &[(9, 50, 50, 150)]);
+        assert!(a.is_empty(), "{a:?}");
+        sim.oracle.dead.push(9);
+        sim.exit(9);
+        let a = sim.run(1, &[]);
+        match &a[..] {
+            [Action::End { session, reason }] => {
+                assert_eq!(session.tgid, 9);
+                assert_eq!(session.peak_tier, Tier::Intense);
+                assert!(session.peak_pps >= 290.0, "{}", session.peak_pps);
+                assert_eq!(reason, "game exited");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn excluded_processes_are_flagged() {
+        let mut sim = Sim::new(&[]);
+        sim.oracle.excluded.push(99);
+        let a = sim.run(5, &[(99, 50, 50, 120), (98, 50, 50, 120)]);
+        let flags: Vec<(u32, bool)> = a
+            .iter()
+            .filter_map(|x| match x {
+                Action::Ignored { tgid, excluded, .. } => Some((*tgid, *excluded)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            flags.contains(&(99, true)) && flags.contains(&(98, false)),
+            "{flags:?}"
+        );
     }
 }

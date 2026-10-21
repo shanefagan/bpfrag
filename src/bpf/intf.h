@@ -1,8 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-only OR MIT */
 /*
  * bpfrag - interface shared between the BPF programs and the Rust side.
- * The Rust side uses the types libbpf-cargo generates from BTF, so there is
- * no hand-maintained mirror to drift out of sync.
+ * build.rs runs bindgen over this file (-> bpf_intf.rs), so both sides use
+ * one definition and there is no hand-written mirror to drift.
  *
  * Copyright (C) 2025-2026 Shane Fagan
  */

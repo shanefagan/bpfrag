@@ -63,8 +63,25 @@ fn clock() -> String {
     )
 }
 
+/// Is stderr connected to the journal? JOURNAL_STREAM ("dev:ino") is
+/// inherited by everything a service starts, so it only counts if it still
+/// describes our own stderr (systemd.exec(5)).
+fn stderr_is_journal() -> bool {
+    let Some(v) = std::env::var_os("JOURNAL_STREAM") else {
+        return false;
+    };
+    let Some((dev, ino)) = v.to_str().and_then(|s| s.split_once(':')) else {
+        return false;
+    };
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(libc::STDERR_FILENO, &mut st) } != 0 {
+        return false;
+    }
+    dev.parse() == Ok(st.st_dev) && ino.parse() == Ok(st.st_ino)
+}
+
 pub fn init(verbosity: u8) {
-    let journald = std::env::var_os("JOURNAL_STREAM").is_some();
+    let journald = stderr_is_journal();
     let level = match verbosity {
         0 => LevelFilter::Info,
         1 => LevelFilter::Debug,

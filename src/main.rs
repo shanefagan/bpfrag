@@ -20,7 +20,7 @@ mod util;
 mod wifi;
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
@@ -39,11 +39,11 @@ use log::{debug, info, warn};
 use bpf::HookKind;
 use bpf_skel::{BpfSkel, BpfSkelBuilder};
 use classify::{Classifier, Verdict};
-use config::{Config, TIER_NAMES, parse_dscp};
+use config::{BpftuneMode, Config, Tier, parse_dscp};
 use detect::{Action, Detector, Oracle, SessionInfo};
 use knobs::Knobs;
 use net::Iface;
-use stats::{AppliedMetric, Counters, DscpMetrics, Metrics, SessionMetrics, TopProc};
+use stats::{AppliedMetric, Counters, DscpMetrics, Metrics, RecentMatch, SessionMetrics, TopProc};
 
 /// bpfrag: eBPF-driven, self-reverting network tuning for competitive gaming.
 ///
@@ -71,8 +71,8 @@ struct Opts {
     dry_run: bool,
 
     /// Use this tier for every match instead of following the tick rate.
-    #[clap(short = 't', long, value_parser = ["casual", "competitive", "intense"])]
-    tier: Option<String>,
+    #[clap(short = 't', long, value_enum)]
+    tier: Option<Tier>,
 
     /// DSCP class for game packets (CS4, EF, AF41, 0-63), or "off".
     #[clap(short = 'd', long, value_name = "CLASS")]
@@ -99,9 +99,9 @@ struct Opts {
     #[clap(long, value_name = "SECS")]
     linger: Option<u64>,
 
-    /// Sharing sysctls with bpftune: auto (yield while it runs), yield, ignore.
-    #[clap(long, value_parser = ["auto", "yield", "ignore"])]
-    bpftune: Option<String>,
+    /// How to share sysctls with bpftune.
+    #[clap(long, value_enum)]
+    bpftune: Option<BpftuneMode>,
 
     /// Print a stats line to the log every SECS while running.
     #[clap(long, value_name = "SECS")]
@@ -144,13 +144,13 @@ struct Opts {
 impl Opts {
     /// Command line beats the config file.
     fn apply(&self, cfg: &mut Config) -> Result<()> {
-        if let Some(t) = &self.tier {
-            cfg.detect.pin_tier = Some(t.clone());
+        if self.tier.is_some() {
+            cfg.detect.pin_tier = self.tier;
         }
         if let Some(d) = &self.dscp {
             if d.eq_ignore_ascii_case("off") {
-                for t in cfg.tiers.iter_mut() {
-                    t.dscp = false;
+                for p in cfg.profiles.iter_mut() {
+                    p.dscp = false;
                 }
             } else {
                 cfg.dscp.class = d.clone();
@@ -167,8 +167,8 @@ impl Opts {
         if let Some(l) = self.linger {
             cfg.detect.linger_secs = l;
         }
-        if let Some(b) = &self.bpftune {
-            cfg.general.bpftune = b.clone();
+        if let Some(b) = self.bpftune {
+            cfg.general.bpftune = b;
         }
         cfg.validate()
     }
@@ -212,11 +212,11 @@ struct ProcOracle {
 impl ProcOracle {
     fn lookup(&mut self, tgid: u32) -> (Verdict, String) {
         let start = classify::start_time(Path::new("/proc"), tgid).unwrap_or(0);
-        if let Some((st, v, n, at)) = self.cache.get(&tgid)
-            && *st == start
-            && at.elapsed() < Duration::from_secs(30)
-        {
-            return (v.clone(), n.clone());
+        match self.cache.get(&tgid) {
+            Some((st, v, n, at)) if *st == start && at.elapsed() < Duration::from_secs(30) => {
+                return (v.clone(), n.clone());
+            }
+            _ => {}
         }
         let (v, info) = self.classifier.classify(tgid);
         let name = info
@@ -241,6 +241,24 @@ impl Oracle for ProcOracle {
     }
 }
 
+/// Interface names the current tier was applied to.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Paths {
+    /// Where the DSCP marker is attached.
+    marker: Vec<String>,
+    /// Where per-interface knobs (coalescing, Wi-Fi power save) went.
+    knobs: Vec<String>,
+}
+
+impl Paths {
+    fn new(marker: &[Iface], knobs: &[Iface]) -> Self {
+        Self {
+            marker: iface_names(marker),
+            knobs: iface_names(knobs),
+        }
+    }
+}
+
 /// The daemon. Same shape as a sched_ext Rust scheduler: init() opens,
 /// configures and loads the skeleton; run() is the userspace loop.
 struct Tuner<'a> {
@@ -256,20 +274,16 @@ struct Tuner<'a> {
     oracle: ProcOracle,
     knobs: Knobs,
     session_start: Option<Instant>,
-    /// The detector forgets the session before handing us End.
-    last_tgid: Option<u32>,
+    /// (pid, start time) of processes already reported as ignored.
     logged_ignores: HashSet<(u32, u64)>,
     bpftune_note: Option<String>,
-    /// Other tuners on the box; rescanned every 30s, not every tick.
-    neighbours: (Vec<String>, Option<Instant>),
-    /// Interfaces the current tier was applied to, and when we last looked.
-    /// (marker, knob) interface names the current tier was applied to.
-    applied_paths: (Vec<String>, Vec<String>),
-    last_iface_check: Instant,
-    /// Peak tier / pps of the running match, and finished matches.
-    peak: (usize, f64),
-    last_session_name: Option<String>,
-    recent: std::collections::VecDeque<stats::RecentMatch>,
+    /// Other tuners on the box, rescanned every 30s rather than every tick.
+    neighbours: Vec<String>,
+    neighbours_at: Option<Instant>,
+    applied_paths: Paths,
+    last_path_check: Instant,
+    /// Finished matches, newest first.
+    recent: VecDeque<RecentMatch>,
 }
 
 impl<'a> Tuner<'a> {
@@ -278,7 +292,7 @@ impl<'a> Tuner<'a> {
         cfg: Config,
         open_object: &'a mut MaybeUninit<OpenObject>,
     ) -> Result<Self> {
-        let hook = bpf::pick_hook(&cfg.general.hook)?;
+        let hook = bpf::pick_hook(cfg.general.hook)?;
         bpf::bump_memlock();
 
         let mut skel_builder = BpfSkelBuilder::default();
@@ -350,15 +364,13 @@ impl<'a> Tuner<'a> {
             hook,
             tc: bpf::TcMarker::default(),
             session_start: None,
-            last_tgid: None,
             logged_ignores: HashSet::new(),
             bpftune_note: None,
-            neighbours: (Vec::new(), None),
-            applied_paths: (Vec::new(), Vec::new()),
-            last_iface_check: Instant::now(),
-            peak: (0, 0.0),
-            last_session_name: None,
-            recent: std::collections::VecDeque::new(),
+            neighbours: Vec::new(),
+            neighbours_at: None,
+            applied_paths: Paths::default(),
+            last_path_check: Instant::now(),
+            recent: VecDeque::new(),
         })
     }
 
@@ -384,26 +396,28 @@ impl<'a> Tuner<'a> {
     /// (marker interfaces, knob interfaces). The DSCP marker sits on every
     /// candidate so it can see where the game's packets go; per-interface
     /// knobs (coalescing, Wi-Fi power save) only go where they actually
-    /// leave, once the marker has seen that.
+    /// leave, once the marker has seen that. Packets seen only in an L3
+    /// tunnel (WireGuard, OpenVPN tun, PPPoE) still leave through a real
+    /// link underneath, so the knobs then stay on every candidate.
     fn targets(&self, s: &SessionInfo) -> (Vec<Iface>, Vec<Iface>) {
         let marker = self.candidates(s);
         let seen: Vec<Iface> = bpf::game_egress(&self.skel, s.tgid, Duration::from_secs(10))
             .into_iter()
             .filter_map(net::iface_by_index)
             .collect();
-        let knobs = if seen.is_empty() {
-            marker.clone()
-        } else {
+        let knobs = if seen.iter().any(|i| !i.is_tunnel()) {
             seen
+        } else {
+            marker.clone()
         };
         (marker, knobs)
     }
 
     fn apply_tier(&mut self, s: &SessionInfo) {
-        let tier = self.cfg.tiers[s.tier.min(2)].clone();
+        let profile = self.cfg.profile(s.tier).clone();
         let (marker, ifaces) = self.targets(s);
-        self.applied_paths = (iface_names(&marker), iface_names(&ifaces));
-        self.last_iface_check = Instant::now();
+        self.applied_paths = Paths::new(&marker, &ifaces);
+        self.last_path_check = Instant::now();
 
         let (skip, note) = coexist::skip_set(&self.cfg);
         if note.is_some() && note != self.bpftune_note {
@@ -411,9 +425,9 @@ impl<'a> Tuner<'a> {
         }
         self.bpftune_note = note;
 
-        let mut changes = self.knobs.apply(&tier, &ifaces, &skip);
+        let mut changes = self.knobs.apply(&profile, &ifaces, &skip);
         bpf::watch(&self.skel, s.tgid, true);
-        if tier.dscp {
+        if profile.dscp {
             let names: Vec<&str> = marker.iter().map(|i| i.name.as_str()).collect();
             if self.dry_run {
                 changes.push(format!(
@@ -441,9 +455,9 @@ impl<'a> Tuner<'a> {
             }
         }
         if changes.is_empty() {
-            info!("{} profile: nothing to change (already tuned)", tier.name);
+            info!("{} profile: nothing to change (already tuned)", s.tier);
         } else {
-            info!("{} profile: {}", tier.name, changes.join(", "));
+            info!("{} profile: {}", s.tier, changes.join(", "));
         }
     }
 
@@ -470,56 +484,35 @@ impl<'a> Tuner<'a> {
             Action::Start(s) => {
                 info!(
                     "Match detected: {} (pid {}) at ~{:.0} pkt/s (tx {:.0}, rx {:.0}) -> {} [{}]",
-                    s.name,
-                    s.tgid,
-                    s.pps,
-                    s.tx_pps,
-                    s.rx_pps,
-                    TIER_NAMES[s.tier.min(2)],
-                    s.reason
+                    s.name, s.tgid, s.pps, s.tx_pps, s.rx_pps, s.tier, s.reason
                 );
                 self.session_start = Some(Instant::now());
-                self.peak = (s.tier, s.pps);
-                self.last_session_name = Some(s.name.clone());
                 self.apply_tier(&s);
             }
-            Action::Retier { from, to, pps } => {
+            Action::Retier { from, to } => {
                 if let Some(s) = self.detector.session().cloned() {
                     info!(
-                        "{}: traffic now ~{pps:.0} pkt/s (tx {:.0}, rx {:.0}); {} -> {}",
-                        s.name,
-                        s.tx_pps,
-                        s.rx_pps,
-                        TIER_NAMES[from.min(2)],
-                        TIER_NAMES[to.min(2)]
+                        "{}: traffic now ~{:.0} pkt/s (tx {:.0}, rx {:.0}); {from} -> {to}",
+                        s.name, s.pps, s.tx_pps, s.rx_pps
                     );
                     self.apply_tier(&s);
                 }
             }
-            Action::End { reason } => {
-                if let Some(name) = self.last_session_name.take() {
-                    self.recent.push_front(stats::RecentMatch {
-                        name,
-                        peak_tier: TIER_NAMES[self.peak.0.min(2)].into(),
-                        peak_pps: self.peak.1,
-                        duration_secs: self
-                            .session_start
-                            .map(|t| t.elapsed().as_secs())
-                            .unwrap_or(0),
-                        ended: stats::now_unix(),
-                        reason: reason.clone(),
-                    });
-                    self.recent.truncate(5);
-                }
-                let tgid = self.last_tgid.take();
-                let took = self
-                    .session_start
-                    .map(|t| t.elapsed().as_secs())
-                    .unwrap_or(0);
-                self.end_session(tgid);
+            Action::End { session, reason } => {
+                let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
+                self.recent.push_front(RecentMatch {
+                    name: session.name,
+                    peak_tier: session.peak_tier.to_string(),
+                    peak_pps: session.peak_pps,
+                    duration_secs: secs,
+                    ended: stats::now_unix(),
+                    reason: reason.clone(),
+                });
+                self.recent.truncate(5);
+                self.end_session(Some(session.tgid));
                 info!(
                     "Match ended after {} ({reason}); settings restored",
-                    stats::fmt_dur(took)
+                    stats::fmt_dur(secs)
                 );
             }
             Action::Ignored {
@@ -527,62 +520,56 @@ impl<'a> Tuner<'a> {
                 name,
                 reason,
                 pps,
+                excluded,
             } => {
-                // Deliberate exclusions (deny list, BPFRAG_GAME=0) are expected
-                // and only logged at debug. A process with no game signals at
-                // all is logged once at info: it may be a native game that
-                // needs --allow.
-                let excluded = reason.starts_with("deny list") || reason.contains("BPFRAG_GAME=0");
+                // Deliberate exclusions (deny list, BPFRAG_GAME=0) are
+                // expected and only logged at debug. A process with no game
+                // signals at all is logged once at info: it may be a native
+                // game that needs --allow.
                 let start = classify::start_time(Path::new("/proc"), tgid).unwrap_or(0);
                 let first = self.logged_ignores.insert((tgid, start));
-                if first && !excluded {
-                    info!(
-                        "Ignoring game-like UDP from {name} (pid {tgid}, ~{pps:.0} pkt/s): {reason}"
-                    );
+                let level = if first && !excluded {
+                    log::Level::Info
                 } else {
-                    debug!(
-                        "Ignoring game-like UDP from {name} (pid {tgid}, ~{pps:.0} pkt/s): {reason}"
-                    );
-                }
+                    log::Level::Debug
+                };
+                log::log!(
+                    level,
+                    "Ignoring game-like UDP from {name} (pid {tgid}, ~{pps:.0} pkt/s): {reason}"
+                );
             }
         }
     }
 
-    /// Per-tick upkeep while a match runs: remember its peak, and follow
-    /// the game if its traffic moves to another interface (docking, Wi-Fi
-    /// to Ethernet, a VPN coming up).
+    /// Per-tick upkeep while a match runs: follow the game if its traffic
+    /// moves to another interface (docking, Wi-Fi to Ethernet, a VPN coming
+    /// up).
     fn track_session(&mut self) {
         let Some(s) = self.detector.session().cloned() else {
             return;
         };
-        if s.tier > self.peak.0 {
-            self.peak.0 = s.tier;
-        }
-        if s.pps > self.peak.1 {
-            self.peak.1 = s.pps;
-        }
-        if self.last_iface_check.elapsed() < Duration::from_secs(2) {
+        if self.last_path_check.elapsed() < Duration::from_secs(2) {
             return;
         }
-        self.last_iface_check = Instant::now();
+        self.last_path_check = Instant::now();
         let (marker, knobs) = self.targets(&s);
-        let now = (iface_names(&marker), iface_names(&knobs));
+        let now = Paths::new(&marker, &knobs);
         if now == self.applied_paths {
             return;
         }
-        if now.0 != self.applied_paths.0 {
+        if now.marker != self.applied_paths.marker {
             info!(
                 "{}: network path changed ({} -> {}); re-applying {}",
                 s.name,
-                self.applied_paths.0.join(","),
-                now.0.join(","),
-                TIER_NAMES[s.tier.min(2)]
+                self.applied_paths.marker.join(","),
+                now.marker.join(","),
+                s.tier
             );
         } else {
             info!(
                 "{}: game traffic leaves via {}; per-interface settings follow it",
                 s.name,
-                now.1.join(",")
+                now.knobs.join(",")
             );
         }
         self.apply_tier(&s);
@@ -593,7 +580,7 @@ impl<'a> Tuner<'a> {
             tgid: s.tgid,
             name: s.name.clone(),
             reason: s.reason.clone(),
-            tier: TIER_NAMES[s.tier.min(2)].into(),
+            tier: s.tier.to_string(),
             pps: s.pps,
             since_secs: self
                 .session_start
@@ -633,14 +620,14 @@ impl<'a> Tuner<'a> {
             events_dropped: g[bpf_intf::STAT_EVENTS_DROPPED as usize],
         };
         if self
-            .neighbours
-            .1
+            .neighbours_at
             .is_none_or(|t| t.elapsed() > Duration::from_secs(30))
         {
-            self.neighbours = (coexist::neighbours(), Some(Instant::now()));
+            self.neighbours = coexist::neighbours();
+            self.neighbours_at = Some(Instant::now());
         }
         let mut neighbours: Vec<String> = self.bpftune_note.iter().cloned().collect();
-        neighbours.extend(self.neighbours.0.iter().cloned());
+        neighbours.extend(self.neighbours.iter().cloned());
         let views = self.detector.view(6);
         let top = views
             .into_iter()
@@ -654,10 +641,7 @@ impl<'a> Tuner<'a> {
                     rx_pps: p.rx_pps,
                     avg_size: p.avg_size,
                     jitter: if p.jitter.is_finite() { p.jitter } else { -1.0 },
-                    verdict: match v {
-                        Verdict::Game(r) => format!("game: {r}"),
-                        Verdict::NotGame(r) => format!("not a game: {r}"),
-                    },
+                    verdict: v.describe(),
                 }
             })
             .collect();
@@ -684,8 +668,7 @@ impl<'a> Tuner<'a> {
         {
             let exits = exits.clone();
             rbb.add(&events, move |data: &[u8]| {
-                if let Some(e) = bpf::decode_event(data)
-                    && e.kind == bpf_intf::EVENT_EXIT
+                if let Some(e) = bpf::decode_event(data).filter(|e| e.kind == bpf_intf::EVENT_EXIT)
                 {
                     exits.borrow_mut().push(e.tgid);
                 }
@@ -720,7 +703,6 @@ impl<'a> Tuner<'a> {
             let exited: Vec<u32> = exits.borrow_mut().drain(..).collect();
             for tgid in exited {
                 if let Some(a) = self.detector.on_exit(tgid) {
-                    self.last_tgid = Some(tgid);
                     self.handle(a);
                 }
             }
@@ -734,7 +716,6 @@ impl<'a> Tuner<'a> {
             next = now + tick;
 
             let samples = bpf::read_proc_stats(&self.skel);
-            let before = self.detector.session().map(|s| s.tgid);
             let actions = self.detector.tick(
                 now.duration_since(t0).as_secs_f64(),
                 dt,
@@ -742,9 +723,6 @@ impl<'a> Tuner<'a> {
                 &mut self.oracle,
             );
             for a in actions {
-                if matches!(a, Action::End { .. }) {
-                    self.last_tgid = before;
-                }
                 self.handle(a);
             }
 
@@ -754,9 +732,7 @@ impl<'a> Tuner<'a> {
             }
             self.track_session();
 
-            if let Some(ns) = next_stats
-                && now >= ns
-            {
+            if next_stats.is_some_and(|ns| now >= ns) {
                 info!("{}", m.line());
                 next_stats = self.stats_every.map(|d| now + d);
             }
@@ -768,8 +744,7 @@ impl<'a> Tuner<'a> {
 
 impl Drop for Tuner<'_> {
     fn drop(&mut self) {
-        let tgid = self.detector.session().map(|s| s.tgid);
-        self.detector.reset();
+        let tgid = self.detector.take_session().map(|s| s.tgid);
         self.end_session(tgid);
         stats::remove(&self.run_dir);
     }
@@ -812,7 +787,7 @@ fn main() -> Result<()> {
         let name = info.as_ref().map(|i| i.display_name()).unwrap_or_default();
         match v {
             Verdict::Game(r) => println!("{pid} {name}: GAME ({r})"),
-            Verdict::NotGame(r) => println!("{pid} {name}: not a game ({r})"),
+            v => println!("{pid} {name}: not a game ({})", v.reason()),
         }
         return Ok(());
     }

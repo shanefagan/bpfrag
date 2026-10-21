@@ -13,6 +13,7 @@ use log::{debug, warn};
 
 use crate::bpf_intf;
 use crate::bpf_skel::BpfSkel;
+use crate::config::HookPref;
 use crate::net::Iface;
 
 /// Our legacy tc filter's handle/priority (unlikely to collide).
@@ -41,22 +42,24 @@ fn btf_has(btf: &libbpf_rs::btf::Btf, name: &str) -> bool {
 }
 
 /// Which counting hook can this kernel run?
-pub fn pick_hook(pref: &str) -> Result<HookKind> {
+pub fn pick_hook(pref: HookPref) -> Result<HookKind> {
     let btf = libbpf_rs::btf::Btf::from_vmlinux()
         .context("kernel BTF (/sys/kernel/btf/vmlinux) is required")?;
     let tp =
         btf_has(&btf, "btf_trace_sock_send_length") && btf_has(&btf, "btf_trace_sock_recv_length");
     let fx = btf_has(&btf, "udp_sendmsg") && btf_has(&btf, "udp_recvmsg");
     match pref {
-        "tracepoint" if tp => Ok(HookKind::Tracepoint),
-        "tracepoint" => {
+        HookPref::Tracepoint if tp => Ok(HookKind::Tracepoint),
+        HookPref::Tracepoint => {
             bail!("kernel lacks sock_send_length/sock_recv_length tracepoints (need >= 6.4)")
         }
-        "fexit" if fx => Ok(HookKind::Fexit),
-        "fexit" => bail!("udp_sendmsg/udp_recvmsg not found in kernel BTF"),
-        _ if tp => Ok(HookKind::Tracepoint),
-        _ if fx => Ok(HookKind::Fexit),
-        _ => bail!("no usable hook: need kernel >= 6.4, or >= 5.17 with fexit support"),
+        HookPref::Fexit if fx => Ok(HookKind::Fexit),
+        HookPref::Fexit => bail!("udp_sendmsg/udp_recvmsg not found in kernel BTF"),
+        HookPref::Auto if tp => Ok(HookKind::Tracepoint),
+        HookPref::Auto if fx => Ok(HookKind::Fexit),
+        HookPref::Auto => {
+            bail!("no usable hook: need kernel >= 6.4, or >= 5.17 with fexit support")
+        }
     }
 }
 
