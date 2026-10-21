@@ -60,13 +60,14 @@ fighting the verifier.
 | `net.core.netdev_max_backlog` (raise-only) | 5000 | 5000 | 5000 |
 | `net.core.netdev_budget` (raise-only) | 400 | 600 | 800 |
 | `net.core.netdev_budget_usecs` (raise-only) | 8000 | 8000 | 8000 |
-| `net.ipv4.udp_mem` (raise-only, per field) | 64K/427K/8M pages | 100K/853K/16M | 200K/1.7M/32M |
 | `net.ipv4.udp_early_demux` | 1 | 1 | 1 |
 | `vm.dirty_bytes` / `dirty_background_bytes` (lower-only) | untouched | 256 / 64 MiB | 256 / 64 MiB |
 | Wi-Fi power save (wireless interfaces) | untouched | off | off |
 
 The network values are the three profiles from the original bpftune
-gaming-tuner patches. "Raise-only" means bpfrag never shrinks something you
+gaming-tuner patches, minus `net.ipv4.udp_mem`. That one is counted in pages,
+the kernel already sizes it from RAM (several GiB, against the kilobytes a
+game buffers), and the original values raised its hard limit to 32–128 GiB. "Raise-only" means bpfrag never shrinks something you
 already sized larger, and "lower-only" means writeback is only ever
 tightened. Everything is overridable per tier (see `dist/bpfrag.toml`).
 
@@ -183,7 +184,7 @@ yields those sysctls by default (`--bpftune auto`):
 
 | Sysctl | Owner while bpftune runs |
 |---|---|
-| `rmem_max`, `rmem_default`, `udp_mem`, `netdev_max_backlog`, `netdev_budget`, `netdev_budget_usecs` | bpftune: it sizes these from observed drops rather than a fixed profile |
+| `rmem_max`, `rmem_default`, `netdev_max_backlog`, `netdev_budget`, `netdev_budget_usecs` | bpftune: it sizes these from observed drops rather than a fixed profile |
 | `busy_read`, `busy_poll`, `wmem_*`, `udp_early_demux`, NIC coalescing, DSCP, writeback | bpfrag: bpftune doesn't touch them |
 
 In that pairing bpftune looks after capacity and bpfrag looks after latency
@@ -418,7 +419,7 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, netlink, packaging (42 tests)
+cargo test                     # detector, classifier, config, journal, netlink, packaging (43 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (12 checks)
 sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (33 checks)
 ```

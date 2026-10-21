@@ -84,6 +84,19 @@ impl Track {
         self.hist.iter().map(Window::total).sum::<f64>() / self.hist.len() as f64
     }
 
+    /// Mean payload size over the history, weighted by packets.
+    fn smooth_size(&self) -> f64 {
+        let pkts: f64 = self.hist.iter().map(Window::total).sum();
+        if pkts <= 0.0 {
+            return 0.0;
+        }
+        self.hist
+            .iter()
+            .map(|w| w.avg_size * w.total())
+            .sum::<f64>()
+            / pkts
+    }
+
     /// Mean tx / rx pps over the history.
     fn smooth_dirs(&self) -> (f64, f64) {
         if self.hist.is_empty() {
@@ -235,29 +248,30 @@ impl Detector {
         self.session.as_ref().map(|s| &s.info)
     }
 
-    /// (processes with UDP traffic in the last window, their total pps)
+    /// (processes with recent UDP traffic, their total smoothed pps)
     pub fn totals(&self) -> (usize, f64) {
         self.tracks
             .values()
-            .map(|t| t.last().total())
+            .map(Track::smooth)
             .filter(|p| *p > 0.0)
             .fold((0, 0.0), |(n, s), p| (n + 1, s + p))
     }
 
-    /// Top talkers, for status output.
+    /// Top talkers, for status output. Every column is averaged over the
+    /// same history window.
     pub fn view(&self, n: usize) -> Vec<ProcView> {
         let mut v: Vec<ProcView> = self
             .tracks
             .iter()
             .filter(|(_, t)| !t.hist.is_empty())
             .map(|(&tgid, t)| {
-                let l = t.last();
+                let (tx_pps, rx_pps) = t.smooth_dirs();
                 ProcView {
                     tgid,
                     pps: t.smooth(),
-                    tx_pps: l.tx_pps,
-                    rx_pps: l.rx_pps,
-                    avg_size: l.avg_size,
+                    tx_pps,
+                    rx_pps,
+                    avg_size: t.smooth_size(),
                     jitter: t.jitter(),
                     steady: t.steady,
                 }

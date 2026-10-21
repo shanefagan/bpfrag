@@ -206,7 +206,7 @@ impl Metrics {
         if let Some(d) = &self.dscp {
             writeln!(
                 w,
-                "\nDSCP {} on {}: {} game port(s)",
+                "\nDSCP {} on {}: {} port(s) used this match",
                 d.class,
                 if d.interfaces.is_empty() {
                     "-".into()
