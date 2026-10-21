@@ -474,6 +474,9 @@ fn s(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 /// Built-in profiles. The network values are the CASUAL / COMPETITIVE /
 /// INTENSE profiles from the original bpftune gaming tuner patches; capacity
 /// knobs are raise-only so we never shrink something the user sized up.
+/// net.ipv4.udp_mem is left out: it is in pages, the kernel already sizes
+/// it from RAM (gigabytes, versus the kilobytes a game buffers), and the
+/// original values raised its hard limit past physical memory.
 pub fn builtin_profiles() -> [Profile; 3] {
     let wb = Some(Writeback {
         dirty_mb: 256,
@@ -489,7 +492,6 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.netdev_max_backlog", ">=5000"),
             ("net.core.netdev_budget", ">=400"),
             ("net.core.netdev_budget_usecs", ">=8000"),
-            ("net.ipv4.udp_mem", ">=65536 436900 8388608"),
             ("net.core.busy_read", "25"),
             ("net.core.busy_poll", "25"),
             ("net.ipv4.udp_early_demux", "1"),
@@ -509,7 +511,6 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.netdev_max_backlog", ">=5000"),
             ("net.core.netdev_budget", ">=600"),
             ("net.core.netdev_budget_usecs", ">=8000"),
-            ("net.ipv4.udp_mem", ">=102400 873800 16777216"),
             ("net.core.busy_read", "50"),
             ("net.core.busy_poll", "50"),
             ("net.ipv4.udp_early_demux", "1"),
@@ -529,7 +530,6 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.netdev_max_backlog", ">=5000"),
             ("net.core.netdev_budget", ">=800"),
             ("net.core.netdev_budget_usecs", ">=8000"),
-            ("net.ipv4.udp_mem", ">=204800 1747600 33554432"),
             ("net.core.busy_read", "75"),
             ("net.core.busy_poll", "75"),
             ("net.ipv4.udp_early_demux", "1"),
@@ -885,6 +885,13 @@ mod tests {
 
     /// dist/bpfrag.toml ships with its examples commented out; uncomment
     /// every `# key = value` and `# [section]` line and it must still load.
+    #[test]
+    fn builtin_profiles_leave_udp_mem_alone() {
+        for p in builtin_profiles() {
+            assert!(!p.sysctl.contains_key("net.ipv4.udp_mem"), "{}", p.tier);
+        }
+    }
+
     #[test]
     fn shipped_example_config_parses() {
         let text = include_str!("../dist/bpfrag.toml");
