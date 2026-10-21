@@ -109,7 +109,7 @@ pub fn run(cfg: &Config) -> bool {
         line(
             Some(true),
             "egress interface",
-            format!("{} ({kind}, {co})", i.name),
+            format!("{} ({kind}, {}, {co})", i.name, net::driver(&i.name)),
         );
     }
 

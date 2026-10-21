@@ -5,7 +5,7 @@
 // value, write it (and what we are about to set) to the on-disk journal,
 // *then* change it. Restoring walks the journal backwards.
 //
-// Two rules keep us a polite neighbour (bpftune, tuned, your own sysctl.d):
+// Two rules avoid conflicts with other tuning (bpftune, tuned, sysctl.d):
 //   * capacity knobs are raise-only and writeback is lower-only, so we never
 //     undo something someone sized more generously (or more strictly);
 //   * on restore, if a value no longer holds what we wrote, someone else
@@ -503,31 +503,32 @@ impl Knobs {
         wanted: &mut HashSet<String>,
         changes: &mut Vec<String>,
     ) {
-        for ifc in ifaces.iter().filter(|i| i.physical) {
+        // Wi-Fi drivers don't do coalescing; power save is their knob.
+        for ifc in ifaces
+            .iter()
+            .filter(|i| i.physical && !wifi::is_wireless(&i.name))
+        {
             let key = format!("coalesce:{}", ifc.name);
-            wanted.insert(key.clone());
             let cur = match net::get_coalesce(&ifc.name) {
                 Ok(c) => c,
+                Err(e) if e.raw_os_error() == Some(libc::EOPNOTSUPP) => {
+                    debug!(
+                        "{}: driver {} has no interrupt coalescing",
+                        ifc.name,
+                        net::driver(&ifc.name)
+                    );
+                    continue;
+                }
                 Err(e) => {
                     self.warn_once(&key, || {
-                        format!("{}: interrupt coalescing not available ({e})", ifc.name)
+                        format!("{}: cannot read interrupt coalescing ({e})", ifc.name)
                     });
                     continue;
                 }
             };
-            let base = match self.saved_get(&key) {
-                Some(Saved::Coalesce { words, .. }) => {
-                    let mut w = [0u32; net::COALESCE_WORDS];
-                    for (d, s) in w.iter_mut().zip(words) {
-                        *d = *s;
-                    }
-                    Coalesce(w)
-                }
-                _ => cur,
-            };
-            if cur.same_as(&base.with_usecs(usecs, true))
-                || self.current.get(&key) == Some(&format!("{usecs}us"))
-            {
+            wanted.insert(key.clone());
+            // rx is what matters for receive latency; tx is best effort.
+            if cur.rx_usecs() == usecs && !cur.adaptive_rx() {
                 continue;
             }
             if self.dry_run {
@@ -540,16 +541,21 @@ impl Knobs {
                 continue;
             }
             let fresh = self.saved_get(&key).is_none();
-            self.save(
-                &key,
-                Saved::Coalesce {
-                    ifname: ifc.name.clone(),
-                    words: base.0.to_vec(),
-                },
-            );
-            self.persist();
-            let res = net::set_coalesce(&ifc.name, &base.with_usecs(usecs, true))
-                .or_else(|_| net::set_coalesce(&ifc.name, &base.with_usecs(usecs, false)));
+            if fresh {
+                self.save(
+                    &key,
+                    Saved::Coalesce {
+                        ifname: ifc.name.clone(),
+                        words: cur.0.to_vec(),
+                    },
+                );
+                self.persist();
+            }
+            // Build from the device's current state, not the baseline:
+            // drivers validate the whole struct, and e.g. a tx value that
+            // was fine before the last tier change may not be now.
+            let res = net::set_coalesce(&ifc.name, &cur.with_usecs(usecs, true))
+                .or_else(|_| net::set_coalesce(&ifc.name, &cur.with_usecs(usecs, false)));
             match res {
                 Ok(()) => {
                     changes.push(format!("{} coalescing={usecs}us", ifc.name));
@@ -559,8 +565,10 @@ impl Knobs {
                     if fresh {
                         self.unsave(&key);
                     }
-                    self.warn_once(&format!("w:{key}"), || {
-                        format!("{}: cannot set coalescing: {e}", ifc.name)
+                    let (name, drv, now) =
+                        (ifc.name.clone(), net::driver(&ifc.name), cur.rx_usecs());
+                    self.warn_once(&format!("w:{key}:{usecs}"), || {
+                        format!("{name} ({drv}): driver rejected rx-usecs {usecs} ({e}); leaving it at {now}")
                     });
                 }
             }

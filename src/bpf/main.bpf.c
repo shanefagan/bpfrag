@@ -244,7 +244,11 @@ int BPF_PROG(bpfrag_exit, struct task_struct *p)
 
 /* ---- tc egress: DSCP marking --------------------------------------------- */
 
-static __always_inline bool is_game_port(__be16 sport)
+/*
+ * Is this a game's port? Also records which device the game's packets
+ * actually leave on, so userspace can aim per-interface knobs at it.
+ */
+static __always_inline bool is_game_port(__be16 sport, __u32 ifindex)
 {
 	__u32 port = bpf_ntohs(sport);
 	struct port_mark *pm = bpf_map_lookup_elem(&mark_ports, &port);
@@ -256,7 +260,11 @@ static __always_inline bool is_game_port(__be16 sport)
 	 * the game from mark_tgids (or a stale legacy filter outlives a crash)
 	 * marking stops, even before mark_ports is cleaned up.
 	 */
-	return bpf_map_lookup_elem(&mark_tgids, &pm->tgid) != NULL;
+	if (!bpf_map_lookup_elem(&mark_tgids, &pm->tgid))
+		return false;
+	pm->ifindex = ifindex;
+	pm->last_ns = bpf_ktime_get_ns();
+	return true;
 }
 
 /* returns false if the app already chose a DSCP and we respect that */
@@ -299,7 +307,7 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		udp = (void *)ip + ihl;
 		if ((void *)(udp + 1) > data_end)
 			return TC_ACT_OK;
-		if (!is_game_port(udp->source))
+		if (!is_game_port(udp->source, ifindex))
 			return TC_ACT_OK;
 		stat_inc(STAT_TC_SEEN);
 
@@ -326,7 +334,7 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		udp = (void *)(ip6 + 1);
 		if ((void *)(udp + 1) > data_end)
 			return TC_ACT_OK;
-		if (!is_game_port(udp->source))
+		if (!is_game_port(udp->source, ifindex))
 			return TC_ACT_OK;
 		stat_inc(STAT_TC_SEEN);
 
