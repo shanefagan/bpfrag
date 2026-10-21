@@ -89,7 +89,7 @@ echo 150 > $W/rate; sleep 10
 grep -q "COMPETITIVE -> INTENSE" $W/d.log && ok "rate increase -> INTENSE" || bad "no INTENSE"
 "$B" -c $W/cfg.toml --waybar | grep -q '"text":"INTENSE"' && ok "waybar shows the match" || bad "waybar: $("$B" -c $W/cfg.toml --waybar)"
 kill $G; sleep 2
-grep -q "GG" $W/d.log && ok "game exit ends the match immediately" || bad "no GG"
+grep -q "Match ended" $W/d.log && ok "game exit ends the match immediately" || bad "match did not end"
 "$B" -c $W/cfg.toml --waybar | grep -q '"alt":"idle".*Last match: fakeshooter INTENSE' && ok "waybar idle with last match" || bad "waybar idle: $("$B" -c $W/cfg.toml --waybar)"
 same "after game exit"
 kill $N1 $N2 $N3
@@ -134,6 +134,7 @@ grep -q "Match detected" $W/d7.log && ok "match detected (auto interfaces)" || b
 ip route add default via 10.99.0.2 dev bpfrag0 metric 4242
 sleep 7
 grep -q "network path changed" $W/d7.log && ok "path change noticed" || bad "path change not noticed"
+grep -q "game traffic leaves via bpfrag0" $W/d7.log && ok "per-interface settings follow the game's egress" || bad "egress not followed"
 ip netns exec bpfrag-srv timeout 4 tcpdump -n -i bpfrag1 -c 60 -w $W/v4b.pcap 'udp and dst port 27015 and src 10.99.0.1' 2>/dev/null
 python3 "$HERE/pcap_check.py" $W/v4b.pcap | grep -q "ipv4 dscp=32 csum=ok" && ok "marking follows the game onto the new path" || bad "not marked after path change"
 ip route del default via 10.99.0.2 dev bpfrag0 metric 4242

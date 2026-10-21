@@ -39,8 +39,8 @@ struct proc_stats {
 /* Local UDP port owned by a game process, learned in the send hook. */
 struct port_mark {
 	__u32 tgid;
-	__u32 _pad;
-	__u64 last_ns;
+	__u32 ifindex;		/* egress device last seen by the tc marker */
+	__u64 last_ns;		/* when it was last seen there */
 };
 
 enum event_kind {

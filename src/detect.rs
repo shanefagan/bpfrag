@@ -78,6 +78,18 @@ impl Track {
         self.hist.iter().map(Window::total).sum::<f64>() / self.hist.len() as f64
     }
 
+    /// Mean tx / rx pps over the history.
+    fn smooth_dirs(&self) -> (f64, f64) {
+        if self.hist.is_empty() {
+            return (0.0, 0.0);
+        }
+        let n = self.hist.len() as f64;
+        (
+            self.hist.iter().map(|w| w.tx_pps).sum::<f64>() / n,
+            self.hist.iter().map(|w| w.rx_pps).sum::<f64>() / n,
+        )
+    }
+
     /// Mean absolute deviation relative to the mean (0 = metronome).
     fn jitter(&self) -> f64 {
         let m = self.smooth();
@@ -97,6 +109,9 @@ pub struct SessionInfo {
     pub reason: String,
     pub tier: usize,
     pub pps: f64,
+    /// smoothed packets/s per direction (pps = tx + rx)
+    pub tx_pps: f64,
+    pub rx_pps: f64,
     pub ifindex: u32,
 }
 
@@ -362,7 +377,7 @@ impl Detector {
                 && t.jitter() <= cfg.max_jitter;
             t.steady = if steady_now { t.steady + 1 } else { 0 };
             if t.steady >= cfg.steady_windows && Some(tgid) != session_tgid {
-                candidates.push((tgid, t.smooth(), t.ifindex));
+                candidates.push((tgid, t.smooth(), t.smooth_dirs(), t.ifindex));
             }
         }
         if self.session.is_some() {
@@ -370,7 +385,7 @@ impl Detector {
         }
         // Busiest candidate first.
         candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (tgid, pps, ifindex) in candidates {
+        for (tgid, pps, (tx_pps, rx_pps), ifindex) in candidates {
             if self.ignored.contains_key(&tgid) {
                 continue;
             }
@@ -384,6 +399,8 @@ impl Detector {
                         reason,
                         tier,
                         pps,
+                        tx_pps,
+                        rx_pps,
                         ifindex,
                     };
                     self.session = Some(Session {
@@ -423,6 +440,7 @@ impl Detector {
         let last = t.last();
         let pps = t.smooth();
         sess.info.pps = pps;
+        (sess.info.tx_pps, sess.info.rx_pps) = t.smooth_dirs();
         if t.ifindex != 0 {
             sess.info.ifindex = t.ifindex;
         }

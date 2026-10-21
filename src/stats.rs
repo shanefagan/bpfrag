@@ -22,6 +22,9 @@ pub struct SessionMetrics {
     pub tier: String,
     pub pps: f64,
     pub since_secs: u64,
+    /// Interfaces the game's packets were seen leaving on.
+    #[serde(default)]
+    pub egress: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -175,12 +178,17 @@ impl Metrics {
         match &self.session {
             Some(s) => writeln!(
                 w,
-                "\nIn a match: {} (pid {}) - {} @ {:.0} pkt/s for {}\n  why it's a game: {}",
+                "\nIn a match: {} (pid {}) - {} @ {:.0} pkt/s for {}{}\n  classified as a game by: {}",
                 s.name,
                 s.tgid,
                 s.tier,
                 s.pps,
                 fmt_dur(s.since_secs),
+                if s.egress.is_empty() {
+                    String::new()
+                } else {
+                    format!(", via {}", s.egress.join(", "))
+                },
                 s.reason
             )?,
             None => writeln!(w, "\nNo match in progress; baseline settings active.")?,
@@ -307,6 +315,9 @@ pub fn waybar(run_dir: &Path) -> String {
         fmt_dur(s.since_secs),
         s.reason
     );
+    if !s.egress.is_empty() {
+        tip += &format!("\nvia {}", s.egress.join(", "));
+    }
     if let Some(d) = &m.dscp {
         tip += &format!("\nDSCP {} on {}", d.class, d.interfaces.join(", "));
     }

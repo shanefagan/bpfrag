@@ -45,7 +45,9 @@ pub struct ProcInfo {
     pub ppid: u32,
     pub comm: String,
     pub exe: String,
+    pub cwd: String,
     pub cmdline: String,
+    pub args: Vec<String>,
     pub environ: Vec<(String, String)>,
     pub start_time: u64,
 }
@@ -60,15 +62,82 @@ impl ProcInfo {
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
     }
-    /// The best human-readable name: comm, or the exe name for Wine
-    /// preloaders whose comm has not been renamed yet.
+    /// The best human-readable name. A game's main thread is often called
+    /// something like "MainThrd", so prefer, in order: the Steam title from
+    /// the library's appmanifest, the Windows .exe a Wine process runs, the
+    /// process name.
     pub fn display_name(&self) -> String {
+        if let Some(t) = self.steam_title() {
+            return t;
+        }
+        if let Some(e) = self.wine_exe() {
+            return e;
+        }
         if !self.comm.is_empty() {
             self.comm.clone()
         } else {
             self.exe_name().to_string()
         }
     }
+
+    /// Paths that may sit inside a Steam library: cwd, exe, and every
+    /// argument (Windows paths under Proton are Z:\home\...).
+    fn path_candidates(&self) -> impl Iterator<Item = String> + '_ {
+        [self.cwd.clone(), self.exe.clone()]
+            .into_iter()
+            .chain(self.args.iter().map(|a| {
+                let a = a.replace('\\', "/");
+                match a.get(..2) {
+                    Some(d) if d.eq_ignore_ascii_case("z:") => a[2..].to_string(),
+                    _ => a,
+                }
+            }))
+            .filter(|p| p.starts_with('/'))
+    }
+
+    fn steam_title(&self) -> Option<String> {
+        let id = ["SteamAppId", "SteamGameId"]
+            .iter()
+            .filter_map(|k| self.env(k))
+            .find(|v| !v.is_empty() && *v != "0" && v.bytes().all(|b| b.is_ascii_digit()))?;
+        for p in self.path_candidates() {
+            // ASCII-only lowercasing keeps byte offsets valid for slicing `p`
+            let lower = p.to_ascii_lowercase();
+            let Some(i) = lower
+                .find("/steamapps/")
+                .or_else(|| lower.ends_with("/steamapps").then(|| lower.len() - 10))
+            else {
+                continue;
+            };
+            let manifest =
+                Path::new(&p[..i + "/steamapps".len()]).join(format!("appmanifest_{id}.acf"));
+            if let Some(name) = manifest_name(&manifest) {
+                return Some(name);
+            }
+        }
+        None
+    }
+
+    fn wine_exe(&self) -> Option<String> {
+        let a = self
+            .args
+            .iter()
+            .find(|a| a.to_lowercase().ends_with(".exe"))?;
+        let base = a.rsplit(['/', '\\']).next()?;
+        let stem = &base[..base.len() - 4];
+        (!stem.is_empty()).then(|| stem.to_string())
+    }
+}
+
+/// `"name"  "Deadlock"` from a Steam appmanifest_<id>.acf.
+fn manifest_name(path: &Path) -> Option<String> {
+    let text = fs::read_to_string(path).ok()?;
+    text.lines().find_map(|l| {
+        let parts: Vec<&str> = l.trim().split('"').collect();
+        // ["", "name", "\t\t", "Deadlock", ""]
+        (parts.len() >= 4 && parts[1] == "name" && !parts[3].is_empty())
+            .then(|| parts[3].to_string())
+    })
 }
 
 /// /proc/<pid>/stat field 22 (starttime), used to spot PID reuse.
@@ -97,15 +166,19 @@ pub fn read_proc(root: &Path, pid: u32) -> Option<ProcInfo> {
                 .to_string()
         })
         .unwrap_or_default();
-    info.cmdline = fs::read(dir.join("cmdline"))
+    info.cwd = fs::read_link(dir.join("cwd"))
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    info.args = fs::read(dir.join("cmdline"))
         .map(|b| {
             String::from_utf8_lossy(&b)
                 .split('\0')
                 .filter(|s| !s.is_empty())
-                .collect::<Vec<_>>()
-                .join(" ")
+                .map(str::to_string)
+                .collect()
         })
         .unwrap_or_default();
+    info.cmdline = info.args.join(" ");
     info.environ = fs::read(dir.join("environ"))
         .map(|b| {
             b.split(|c| *c == 0)
@@ -287,6 +360,10 @@ mod tests {
                 std::os::unix::fs::symlink(exe, d.join("exe")).unwrap();
             }
         }
+
+        fn cwd(&self, pid: u32, cwd: &Path) {
+            std::os::unix::fs::symlink(cwd, self.dir.join(pid.to_string()).join("cwd")).unwrap();
+        }
     }
 
     impl Drop for FakeProc {
@@ -341,6 +418,118 @@ mod tests {
         let v = c.classify(11).0;
         assert!(!v.is_game(), "{v:?}");
         assert!(v.reason().contains("deny"));
+    }
+
+    #[test]
+    fn names_come_from_steam_manifest_or_wine_exe() {
+        let fp = FakeProc::new("names");
+        // a Steam library with Deadlock's manifest
+        let lib = fp.dir.join("lib/steamapps");
+        let game = lib.join("common/Deadlock/game/bin/win64");
+        fs::create_dir_all(&game).unwrap();
+        fs::write(
+            lib.join("appmanifest_1422450.acf"),
+            "\"AppState\"\n{\n\t\"appid\"\t\t\"1422450\"\n\t\"name\"\t\t\"Deadlock\"\n}\n",
+        )
+        .unwrap();
+        let winpath = format!("Z:{}\\project8.exe", game.display()).replace('/', "\\");
+        // found via cwd
+        fp.add(
+            10,
+            1,
+            "MainThrd",
+            "/usr/bin/wine64-preloader",
+            &[&winpath],
+            &["SteamAppId=1422450"],
+        );
+        fp.cwd(10, &game);
+        // found via the Z:\ argument only
+        fp.add(
+            11,
+            1,
+            "MainThrd",
+            "/usr/bin/wine64-preloader",
+            &[&winpath],
+            &["SteamAppId=1422450"],
+        );
+        // no manifest: fall back to the .exe stem, then comm
+        fp.add(
+            12,
+            1,
+            "MainThrd",
+            "/usr/bin/wine64-preloader",
+            &["C:\\Games\\Overwatch.exe"],
+            &[],
+        );
+        fp.add(
+            13,
+            1,
+            "cs2",
+            "/opt/cs2/cs2",
+            &["/opt/cs2/cs2", "-steam"],
+            &["SteamAppId=730"],
+        );
+        let c = classifier(&fp);
+        assert_eq!(c.read(10).unwrap().display_name(), "Deadlock");
+        assert_eq!(c.read(11).unwrap().display_name(), "Deadlock");
+        assert_eq!(c.read(12).unwrap().display_name(), "Overwatch");
+        assert_eq!(c.read(13).unwrap().display_name(), "cs2");
+    }
+
+    #[test]
+    fn deny_list_is_precise() {
+        let fp = FakeProc::new("deny");
+        fp.add(
+            20,
+            1,
+            "SignalRgb",
+            "/usr/bin/wine64-preloader",
+            &["C:\\SignalRgb.exe"],
+            &[],
+        );
+        fp.add(
+            21,
+            1,
+            "signal-desktop",
+            "/opt/Signal/signal-desktop",
+            &["signal-desktop"],
+            &[],
+        );
+        fp.add(22, 1, "Discord", "/opt/discord/Discord", &["Discord"], &[]);
+        fp.add(23, 1, "brave", "/opt/brave/brave", &["brave"], &[]);
+        // real games whose names start like denied apps
+        fp.add(
+            30,
+            1,
+            "SIGNALIS",
+            "/usr/bin/wine64-preloader",
+            &["Z:\\g\\SIGNALIS.exe"],
+            &["SteamAppId=1262350"],
+        );
+        fp.add(
+            31,
+            1,
+            "BravelyDefault",
+            "/usr/bin/wine64-preloader",
+            &["Z:\\g\\BravelyDefault2.exe"],
+            &["SteamAppId=1219450"],
+        );
+        fp.add(
+            32,
+            1,
+            "Zoombinis",
+            "/opt/z/Zoombinis",
+            &["Zoombinis"],
+            &["SteamAppId=339910"],
+        );
+        let c = classifier(&fp);
+        for pid in [20, 21, 22, 23] {
+            let v = c.classify(pid).0;
+            assert!(!v.is_game() && v.reason().contains("deny"), "{pid}: {v:?}");
+        }
+        for pid in [30, 31, 32] {
+            assert!(c.classify(pid).0.is_game(), "{pid}");
+        }
     }
 
     #[test]

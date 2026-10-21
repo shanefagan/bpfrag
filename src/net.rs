@@ -76,6 +76,14 @@ pub fn default_route_ifaces() -> Vec<Iface> {
     names.iter().filter_map(|n| iface_by_name(n)).collect()
 }
 
+/// Kernel driver behind an interface ("igc", "r8169", ...), for messages.
+pub fn driver(ifname: &str) -> String {
+    fs::read_link(format!("/sys/class/net/{ifname}/device/driver"))
+        .ok()
+        .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "unknown driver".into())
+}
+
 // ---- ethtool coalescing -----------------------------------------------------
 
 const SIOCETHTOOL: libc::c_ulong = 0x8946;
@@ -135,9 +143,12 @@ pub fn set_coalesce(ifname: &str, c: &Coalesce) -> io::Result<()> {
 }
 
 impl Coalesce {
-    /// Equal apart from the ioctl command word.
-    pub fn same_as(&self, other: &Coalesce) -> bool {
-        self.0[1..] == other.0[1..]
+    pub fn rx_usecs(&self) -> u32 {
+        self.0[RX_USECS]
+    }
+
+    pub fn adaptive_rx(&self) -> bool {
+        self.0[ADAPTIVE_RX] != 0
     }
 
     /// Baseline with rx (and tx, if `with_tx`) usecs forced and adaptive off.

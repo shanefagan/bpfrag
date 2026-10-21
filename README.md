@@ -1,26 +1,26 @@
 # bpfrag
 
-**BPF + frag.** eBPF-driven, self-reverting network tuning for competitive gaming on Linux.
+eBPF-driven, self-reverting network tuning for competitive gaming on Linux.
 
 bpfrag watches UDP traffic per process from the kernel. When a game's netcode
 shows up (a steady, two-way, small-packet tick stream from a process that
-really is a game), it applies a networking profile for the length of the
+is a game), it applies a networking profile for the length of the
 match. When the match ends or the game exits, every change is put back
 exactly as it was.
 
 It only touches networking, plus optionally dirty-page writeback. It never
 touches CPU scheduling, so it runs alongside sched_ext schedulers, and it
-steps around bpftune instead of fighting it (see [Running alongside
-other tuners](#running-alongside-other-tuners)).
+leaves bpftune's sysctls alone while bpftune is running (see [Running
+alongside other tuners](#running-alongside-other-tuners)).
 
 ```
 $ sudo bpfrag
 20:14:02 INFO  counting UDP per process via socket tracepoints
-20:14:02 INFO  bpfrag 0.1.0 ready - waiting for netcode. glhf
-20:14:31 INFO  Ignoring game-like UDP from Discord (pid 4121, ~100 pkt/s): deny list 'discord*'
-20:15:10 INFO  Match detected: cs2 (pid 6230) at ~128 pkt/s -> COMPETITIVE [Steam app 730]
-20:15:10 INFO  COMPETITIVE profile: net.core.busy_poll=50, net.core.busy_read=50, enp6s0 coalescing=10us, vm.dirty_bytes=268435456, ..., dscp=CS4 on enp6s0
-20:52:47 INFO  GG - match over after 37m37s (game exited); baseline restored
+20:14:02 INFO  bpfrag 0.1.0 started; waiting for game traffic
+20:14:31 INFO  Ignoring game-like UDP from Discord (pid 4121, ~100 pkt/s): deny list 'discord'
+20:15:10 INFO  Match detected: Counter-Strike 2 (pid 6230) at ~128 pkt/s (tx 64, rx 64) -> COMPETITIVE [Steam app 730]
+20:15:10 INFO  COMPETITIVE profile: net.core.busy_poll=50, net.core.busy_read=50, enp6s0 coalescing=10us, ..., dscp=CS4 on enp6s0
+20:52:47 INFO  Match ended after 37m37s (game exited); settings restored
 ```
 
 ## How it works
@@ -138,10 +138,15 @@ confident windows, moving down takes 4, and tier changes are at least 5
 seconds apart. A match never drops back to CASUAL while traffic is still
 flowing.
 
-bpfrag tunes the interfaces carrying the default routes, or the ones you
-pass with `--iface`. During a match it re-checks them every 5 seconds, so
-docking, switching from Wi-Fi to Ethernet, or a VPN coming up is followed
-without waiting for the next match.
+bpfrag puts the DSCP marker on the interfaces carrying the default routes,
+or the ones you pass with `--iface`. The marker records which interface the
+game's packets actually leave on. Per-interface settings (coalescing, Wi-Fi
+power save) then go only there, so a desktop with both Ethernet and Wi-Fi up
+doesn't touch the one the game isn't using.
+
+During a match bpfrag re-checks every 2 seconds, so docking, switching from
+Wi-Fi to Ethernet, or a VPN coming up is followed without waiting for the
+next match.
 
 A match ends **immediately when the game exits** (via the
 `sched_process_exit` hook), or after **15 quiet seconds**, for example back in
@@ -156,7 +161,7 @@ monitor lists the busiest UDP processes, their rates and the verdict for each.
 **sched_ext (scx_lavd, scx_rusty, scx_bpfland...).** There's no overlap.
 bpfrag never touches CPU scheduling, priorities, affinity or frequency.
 sched_ext schedulers use struct_ops, while bpfrag uses tracepoints and tc,
-and both happily share the kernel.
+and the two run side by side.
 
 The one indirect interaction is busy polling. A socket read may spin for up
 to 25–75 µs, and the scheduler counts that as the game thread's runtime. If
@@ -170,7 +175,7 @@ yields those sysctls by default (`--bpftune auto`):
 
 | Sysctl | Owner while bpftune runs |
 |---|---|
-| `rmem_max`, `rmem_default`, `udp_mem`, `netdev_max_backlog`, `netdev_budget`, `netdev_budget_usecs` | bpftune: it sizes these from observed drops, which beats a fixed profile |
+| `rmem_max`, `rmem_default`, `udp_mem`, `netdev_max_backlog`, `netdev_budget`, `netdev_budget_usecs` | bpftune: it sizes these from observed drops rather than a fixed profile |
 | `busy_read`, `busy_poll`, `wmem_*`, `udp_early_demux`, NIC coalescing, DSCP, writeback | bpfrag: bpftune doesn't touch them |
 
 In that pairing bpftune looks after capacity and bpfrag looks after latency
@@ -241,8 +246,8 @@ relocates them against your running kernel when the object loads.
 
 After your first real match:
 
-- `journalctl -u bpfrag` should show `Match detected` and then `GG ... baseline
-  restored`.
+- `journalctl -u bpfrag` should show `Match detected` and then `Match ended
+  ... settings restored`.
 - `ethtool -c <nic>` should show the original coalescing values again.
 - `sysctl net.core.busy_poll` should be back at its old value.
 
@@ -372,9 +377,9 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, netlink (31 tests)
+cargo test                     # detector, classifier, config, journal, netlink (33 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (11 cases)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (27 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (28 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes
@@ -400,6 +405,7 @@ daemon-shaped noise, and checks:
   receiving kernel logs no checksum errors, and it echoes the packets back;
 - an outside change made mid-match is respected;
 - a new default route mid-match is followed;
+- per-interface settings move to the interface the game's packets actually use;
 - the Waybar output is correct during and after a match;
 - bpftune's sysctls are yielded while bpftune runs;
 - `kill -9` followed by `--restore` puts everything back;

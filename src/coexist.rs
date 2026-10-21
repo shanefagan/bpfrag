@@ -6,7 +6,7 @@
 //   bpftune     owns buffer/backlog sysctls and switches its own tuners off
 //               when anyone else writes them -> we yield those while it runs.
 //   sched_ext   owns CPU scheduling; bpfrag never touches scheduling, so
-//               there is nothing to share. Reported for peace of mind.
+//               there is nothing to share. Reported in --check for information.
 //   gamemode    CPU governor, GPU, process niceness: complementary.
 //   tuned       its network-latency profile sets busy_read/busy_poll; our
 //               "don't clobber" restore rule keeps us out of its way.

@@ -159,6 +159,39 @@ pub fn set_marking(skel: &BpfSkel, tgid: u32, on: bool) {
     }
 }
 
+fn monotonic_ns() -> u64 {
+    let mut ts = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64
+}
+
+/// Devices the tc marker saw this game's packets leave on within `max_age`
+/// (bpf_ktime_get_ns() is CLOCK_MONOTONIC).
+pub fn game_egress(skel: &BpfSkel, tgid: u32, max_age: std::time::Duration) -> Vec<u32> {
+    let now = monotonic_ns();
+    let max = max_age.as_nanos() as u64;
+    let ports = &skel.maps.mark_ports;
+    let mut out: Vec<u32> = Vec::new();
+    for key in ports.keys() {
+        let Ok(Some(v)) = ports.lookup(&key, MapFlags::ANY) else {
+            continue;
+        };
+        let pm: bpf_intf::port_mark = from_bytes(&v);
+        if pm.tgid == tgid
+            && pm.ifindex != 0
+            && now.saturating_sub(pm.last_ns) <= max
+            && !out.contains(&pm.ifindex)
+        {
+            out.push(pm.ifindex);
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
 pub fn marked_ports(skel: &BpfSkel) -> usize {
     skel.maps.mark_ports.keys().count()
 }

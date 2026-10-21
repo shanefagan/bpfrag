@@ -49,7 +49,7 @@ use stats::{AppliedMetric, Counters, DscpMetrics, Metrics, SessionMetrics, TopPr
 ///
 /// BPF programs count UDP traffic per process. When a game's netcode shows
 /// up (a steady, two-way, small-packet tick stream from a process that is
-/// really a game) bpfrag applies a networking profile picked from the tick
+/// a game) bpfrag applies a networking profile picked from the tick
 /// rate: CASUAL, COMPETITIVE or INTENSE. That covers socket busy-polling,
 /// NIC interrupt coalescing, buffer headroom, DSCP marking of the game's
 /// packets (helps Wi-Fi WMM and QoS routers) and, optionally, tighter dirty
@@ -263,7 +263,8 @@ struct Tuner<'a> {
     /// Other tuners on the box; rescanned every 30s, not every tick.
     neighbours: (Vec<String>, Option<Instant>),
     /// Interfaces the current tier was applied to, and when we last looked.
-    applied_ifaces: Vec<String>,
+    /// (marker, knob) interface names the current tier was applied to.
+    applied_paths: (Vec<String>, Vec<String>),
     last_iface_check: Instant,
     /// Peak tier / pps of the running match, and finished matches.
     peak: (usize, f64),
@@ -353,7 +354,7 @@ impl<'a> Tuner<'a> {
             logged_ignores: HashSet::new(),
             bpftune_note: None,
             neighbours: (Vec::new(), None),
-            applied_ifaces: Vec::new(),
+            applied_paths: (Vec::new(), Vec::new()),
             last_iface_check: Instant::now(),
             peak: (0, 0.0),
             last_session_name: None,
@@ -361,7 +362,9 @@ impl<'a> Tuner<'a> {
         })
     }
 
-    fn ifaces_for(&self, s: &SessionInfo) -> Vec<Iface> {
+    /// Where the game's packets can leave: the configured interfaces, or
+    /// those with a default route (plus a connected socket's device).
+    fn candidates(&self, s: &SessionInfo) -> Vec<Iface> {
         if !self.cfg.dscp.interfaces.is_empty() {
             return self
                 .cfg
@@ -381,10 +384,28 @@ impl<'a> Tuner<'a> {
         v
     }
 
+    /// (marker interfaces, knob interfaces). The DSCP marker sits on every
+    /// candidate so it can see where the game's packets go; per-interface
+    /// knobs (coalescing, Wi-Fi power save) only go where they actually
+    /// leave, once the marker has seen that.
+    fn targets(&self, s: &SessionInfo) -> (Vec<Iface>, Vec<Iface>) {
+        let marker = self.candidates(s);
+        let seen: Vec<Iface> = bpf::game_egress(&self.skel, s.tgid, Duration::from_secs(10))
+            .into_iter()
+            .filter_map(net::iface_by_index)
+            .collect();
+        let knobs = if seen.is_empty() {
+            marker.clone()
+        } else {
+            seen
+        };
+        (marker, knobs)
+    }
+
     fn apply_tier(&mut self, s: &SessionInfo) {
         let tier = self.cfg.tiers[s.tier.min(2)].clone();
-        let ifaces = self.ifaces_for(s);
-        self.applied_ifaces = iface_names(&ifaces);
+        let (marker, ifaces) = self.targets(s);
+        self.applied_paths = (iface_names(&marker), iface_names(&ifaces));
         self.last_iface_check = Instant::now();
 
         let (skip, note) = coexist::skip_set(&self.cfg);
@@ -396,7 +417,7 @@ impl<'a> Tuner<'a> {
         let mut changes = self.knobs.apply(&tier, &ifaces, &skip);
         bpf::watch(&self.skel, s.tgid, true);
         if tier.dscp {
-            let names: Vec<&str> = ifaces.iter().map(|i| i.name.as_str()).collect();
+            let names: Vec<&str> = marker.iter().map(|i| i.name.as_str()).collect();
             if self.dry_run {
                 changes.push(format!(
                     "would DSCP-mark {} on {}",
@@ -405,7 +426,7 @@ impl<'a> Tuner<'a> {
                 ));
             } else {
                 bpf::set_marking(&self.skel, s.tgid, true);
-                for l in self.tc.attach(&self.skel, &ifaces) {
+                for l in self.tc.attach(&self.skel, &marker) {
                     self.knobs.track_tc_legacy(l);
                 }
                 if !self.tc.ifaces().is_empty() {
@@ -451,10 +472,12 @@ impl<'a> Tuner<'a> {
         match a {
             Action::Start(s) => {
                 info!(
-                    "Match detected: {} (pid {}) at ~{:.0} pkt/s -> {} [{}]",
+                    "Match detected: {} (pid {}) at ~{:.0} pkt/s (tx {:.0}, rx {:.0}) -> {} [{}]",
                     s.name,
                     s.tgid,
                     s.pps,
+                    s.tx_pps,
+                    s.rx_pps,
                     TIER_NAMES[s.tier.min(2)],
                     s.reason
                 );
@@ -466,8 +489,10 @@ impl<'a> Tuner<'a> {
             Action::Retier { from, to, pps } => {
                 if let Some(s) = self.detector.session().cloned() {
                     info!(
-                        "{} netcode now ~{pps:.0} pkt/s: {} -> {}",
+                        "{}: traffic now ~{pps:.0} pkt/s (tx {:.0}, rx {:.0}); {} -> {}",
                         s.name,
+                        s.tx_pps,
+                        s.rx_pps,
                         TIER_NAMES[from.min(2)],
                         TIER_NAMES[to.min(2)]
                     );
@@ -496,7 +521,7 @@ impl<'a> Tuner<'a> {
                     .unwrap_or(0);
                 self.end_session(tgid);
                 info!(
-                    "GG - match over after {} ({reason}); baseline restored",
+                    "Match ended after {} ({reason}); settings restored",
                     stats::fmt_dur(took)
                 );
             }
@@ -531,21 +556,31 @@ impl<'a> Tuner<'a> {
         if s.pps > self.peak.1 {
             self.peak.1 = s.pps;
         }
-        if self.last_iface_check.elapsed() < Duration::from_secs(5) {
+        if self.last_iface_check.elapsed() < Duration::from_secs(2) {
             return;
         }
         self.last_iface_check = Instant::now();
-        let now = iface_names(&self.ifaces_for(&s));
-        if now != self.applied_ifaces {
+        let (marker, knobs) = self.targets(&s);
+        let now = (iface_names(&marker), iface_names(&knobs));
+        if now == self.applied_paths {
+            return;
+        }
+        if now.0 != self.applied_paths.0 {
             info!(
                 "{}: network path changed ({} -> {}); re-applying {}",
                 s.name,
-                self.applied_ifaces.join(","),
-                now.join(","),
+                self.applied_paths.0.join(","),
+                now.0.join(","),
                 TIER_NAMES[s.tier.min(2)]
             );
-            self.apply_tier(&s);
+        } else {
+            info!(
+                "{}: game traffic leaves via {}; per-interface settings follow it",
+                s.name,
+                now.1.join(",")
+            );
         }
+        self.apply_tier(&s);
     }
 
     fn get_metrics(&mut self) -> Metrics {
@@ -559,6 +594,11 @@ impl<'a> Tuner<'a> {
                 .session_start
                 .map(|t| t.elapsed().as_secs())
                 .unwrap_or(0),
+            egress: bpf::game_egress(&self.skel, s.tgid, Duration::from_secs(10))
+                .into_iter()
+                .filter_map(net::iface_by_index)
+                .map(|i| i.name)
+                .collect(),
         });
         let applied = self
             .knobs
@@ -656,10 +696,10 @@ impl<'a> Tuner<'a> {
         let mut next_stats = self.stats_every.map(|d| t0 + d);
 
         info!(
-            "bpfrag {} ready{} - waiting for netcode. glhf",
+            "bpfrag {} started{}; waiting for game traffic",
             env!("CARGO_PKG_VERSION"),
             if self.dry_run {
-                " (dry run: only logging what it would do)"
+                " in dry-run mode (logging only, nothing is changed)"
             } else {
                 ""
             }
