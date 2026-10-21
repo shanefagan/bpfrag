@@ -44,3 +44,81 @@ jobs:
 
       - name: End-to-end (netns, fake game, noise, crash recovery)
         run: sudo tests/rig/e2e.sh target/release/bpfrag
+
+  msrv:
+    # rust-version in Cargo.toml: 1.85, Debian 13's rustc.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang libclang-dev libelf-dev zlib1g-dev pkg-config
+      - name: Rust 1.85
+        run: |
+          rustup toolchain install 1.85 --profile minimal
+          rustup default 1.85
+      - name: Check
+        run: cargo check --locked --all-targets
+
+  deb:
+    # Built on Ubuntu 22.04 (glibc 2.35) so the package installs on
+    # Ubuntu 22.04+ and Debian 12+.
+    runs-on: ubuntu-24.04
+    container: ubuntu:22.04
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
+            clang libclang-dev libelf-dev zlib1g-dev pkg-config dpkg-dev lintian
+      - uses: actions/checkout@v4
+      - name: Rust toolchain and cargo-deb
+        run: |
+          curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/cargo" install cargo-deb --locked
+      - name: Build .deb
+        run: cargo deb --locked
+      - name: Lint
+        run: lintian --suppress-tags initial-upload-closes-no-bugs target/debian/*.deb
+      - name: Install, selftest the installed binary, remove, purge
+        run: |
+          apt-get install -y ./target/debian/*.deb
+          bpfrag --version
+          bpfrag --dump-config >/dev/null
+          apt-get remove -y bpfrag
+          apt-get purge -y bpfrag
+          test ! -e /etc/bpfrag
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bpfrag-deb
+          path: target/debian/*.deb
+
+  rpm:
+    runs-on: ubuntu-24.04
+    container: fedora:latest
+    steps:
+      - name: Install rpm tooling
+        run: dnf -y install git rpm-build rpmlint
+      - uses: actions/checkout@v4
+      - name: Install the spec's BuildRequires
+        run: dnf -y builddep packaging/rpm/bpfrag.spec
+      - name: Build .src.rpm and .rpm
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          packaging/rpm/build.sh
+      - name: Lint
+        run: rpmlint -r packaging/rpm/bpfrag.rpmlintrc target/rpm/RPMS/*/*.rpm target/rpm/SRPMS/*.rpm
+      - name: Install and remove
+        run: |
+          dnf -y install target/rpm/RPMS/*/bpfrag-[0-9]*.rpm
+          bpfrag --version
+          bpfrag --dump-config >/dev/null
+          dnf -y remove bpfrag
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bpfrag-rpm
+          path: |
+            target/rpm/RPMS/*/*.rpm
+            target/rpm/SRPMS/*.rpm

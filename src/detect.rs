@@ -345,9 +345,9 @@ impl Detector {
             self.tracks.remove(&tgid);
             self.ignored.remove(&tgid);
         }
-        if let Some(tgid) = session_tgid
-            && !seen.contains(&tgid)
-            && let Some(t) = self.tracks.get_mut(&tgid)
+        if let Some(t) = session_tgid
+            .filter(|tgid| !seen.contains(tgid))
+            .and_then(|tgid| self.tracks.get_mut(&tgid))
         {
             t.hist.push_back(Window::default());
             while t.hist.len() > hist_len {

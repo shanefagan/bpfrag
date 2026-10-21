@@ -214,31 +214,59 @@ that.
 
 ## Install
 
-You need Rust 1.88 or newer, clang, libclang (for bindgen), libelf and zlib.
+Building needs Rust 1.85 or newer, clang, libclang (for bindgen), libelf
+and zlib. Every route below installs the service without enabling it, so
+check the machine first:
 
-On **Arch, CachyOS or EndeavourOS**, build a package from the checkout. It
-builds whatever is committed:
+```sh
+sudo bpfrag --check && sudo bpfrag --selftest
+sudo systemctl enable --now bpfrag
+journalctl -u bpfrag -f
+```
+
+**Arch, CachyOS, EndeavourOS.** Build a package from the checkout. It builds
+whatever is committed:
 
 ```sh
 cd packaging/arch && makepkg -si
-sudo bpfrag --check && sudo bpfrag --selftest
-sudo systemctl enable --now bpfrag
 ```
 
-On anything else, install the dependencies and use the Makefile:
+**Debian 12+, Ubuntu 22.04+.** Build a `.deb` with
+[cargo-deb](https://github.com/kornelski/cargo-deb). Debian 13's own cargo
+is new enough; on older releases and Ubuntu, use [rustup](https://rustup.rs).
+The package needs the glibc it was built against or newer, so build on the
+oldest release you'll install it on.
 
 ```sh
-# Fedora / Nobara / Bazzite
-sudo dnf install clang clang-devel elfutils-libelf-devel zlib-devel make pkgconf-pkg-config
-# Debian / Ubuntu
 sudo apt install clang libclang-dev libelf-dev zlib1g-dev pkg-config make
+cargo install cargo-deb --locked
+make deb
+sudo apt install ./target/debian/bpfrag_*.deb
+```
 
+**Fedora, Nobara.** `make rpm` packs the committed tree and its
+vendored crates into source tarballs, then runs `rpmbuild` on
+`packaging/rpm/bpfrag.spec`, which builds offline. `make srpm` stops at the
+`.src.rpm`, which COPR or mock can build. On Bazzite and other image-based
+Fedoras, build in a toolbox and layer the RPM with `rpm-ostree install`.
+
+```sh
+sudo dnf install rpm-build git && sudo dnf builddep packaging/rpm/bpfrag.spec
+make rpm
+sudo dnf install ./target/rpm/RPMS/*/bpfrag-[0-9]*.rpm
+```
+
+On removal, every package stops the service while `/usr/bin/bpfrag` is
+still installed, so any settings changed mid-match are restored first.
+Edits to `/etc/default/bpfrag` and `/etc/bpfrag/bpfrag.toml` survive
+upgrades.
+
+**Anything else.** Install the build dependencies and use the Makefile:
+
+```sh
 make
-sudo ./target/release/bpfrag --check   # what works here, who else is tuning it
 sudo make install
 sudo systemctl daemon-reload
-sudo systemctl enable --now bpfrag
-journalctl -u bpfrag -f
 ```
 
 The BPF object needs no vmlinux.h or bpftool at build time.
@@ -344,10 +372,13 @@ src/net.rs               interfaces + ethtool coalescing
 src/wifi.rs              Wi-Fi power save over nl80211 (generic netlink, no deps)
 src/stats.rs             Metrics, --stats, --monitor
 src/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
-dist/                    systemd unit, /etc/default file, example config
+dist/                    systemd unit, man page, /etc/default file, example config
 packaging/arch/          PKGBUILD (bpfrag-git) + install hook
+packaging/debian/        changelog + postinst for cargo-deb ([package.metadata.deb])
+packaging/rpm/           spec, build.sh (vendored, offline), rpmlintrc
 tests/rig/e2e.sh         end-to-end test in a throwaway netns (root)
-.github/workflows/ci.yml fmt, clippy, tests, then --selftest and the e2e rig as root
+.github/workflows/ci.yml fmt, clippy, tests, --selftest and the e2e rig as root,
+                         MSRV check, .deb and .rpm builds
 ```
 
 ## Lineage
@@ -380,7 +411,7 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, netlink (33 tests)
+cargo test                     # detector, classifier, config, journal, netlink, packaging (35 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (11 cases)
 sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (30 checks)
 ```

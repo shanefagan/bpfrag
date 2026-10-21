@@ -375,11 +375,8 @@ impl<'a> Tuner<'a> {
                 .collect();
         }
         let mut v = net::default_route_ifaces();
-        if s.ifindex != 0
-            && !v.iter().any(|i| i.ifindex == s.ifindex)
-            && let Some(i) = net::iface_by_index(s.ifindex)
-        {
-            v.push(i);
+        if s.ifindex != 0 && !v.iter().any(|i| i.ifindex == s.ifindex) {
+            v.extend(net::iface_by_index(s.ifindex));
         }
         v
     }
@@ -856,4 +853,44 @@ fn main() -> Result<()> {
     let mut open_object = MaybeUninit::uninit();
     let mut tuner = Tuner::init(&opts, cfg, &mut open_object)?;
     tuner.run(shutdown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn man_page_lists_every_flag() {
+        let man = include_str!("../dist/bpfrag.8").replace("\\-", "-");
+        for arg in Opts::command().get_arguments() {
+            if let Some(long) = arg.get_long() {
+                assert!(
+                    man.contains(&format!("--{long}")),
+                    "dist/bpfrag.8 lacks --{long}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn packaging_versions_match_cargo() {
+        let ver = env!("CARGO_PKG_VERSION");
+        let spec = include_str!("../packaging/rpm/bpfrag.spec");
+        assert!(
+            spec.lines()
+                .any(|l| l.starts_with("Version:") && l.split_whitespace().nth(1) == Some(ver)),
+            "packaging/rpm/bpfrag.spec Version is not {ver}"
+        );
+        let changelog = include_str!("../packaging/debian/changelog");
+        assert!(
+            changelog.starts_with(&format!("bpfrag ({ver}-")),
+            "packaging/debian/changelog's newest entry is not {ver}"
+        );
+        let man = include_str!("../dist/bpfrag.8");
+        assert!(
+            man.contains(&format!("\"bpfrag {ver}\"")),
+            "dist/bpfrag.8 is not {ver}"
+        );
+    }
 }
