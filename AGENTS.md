@@ -128,3 +128,15 @@ container) and the .rpm (Fedora container).
 
 Small, focused commits with a message that says what changed and why.
 Behaviour changes, refactors and dependency bumps go in separate commits.
+
+Commits on `main` are GPG-signed by Shane. An agent that can't sign as him
+delivers its work as commits on a `claude/<topic>` branch in his checkout,
+for him to bring in with `git cherry-pick -S main..claude/<topic>`. Don't
+push unsigned commits to `main`, and don't force-push it.
+
+## Bug reports
+
+`--report` (`cli/report.rs`) is what users attach to issues. When you add
+state that would help debug a problem (a new file under the run dir, a
+new kind of setting), include it there. Anything that can identify the
+machine or its network goes through `report::redact`.

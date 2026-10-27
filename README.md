@@ -511,7 +511,7 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, health, packaging (50 tests)
+cargo test                     # detector, classifier, config, journal, health, report, packaging (54 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (13 checks)
 sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (36 checks)
 ```
