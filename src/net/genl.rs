@@ -213,6 +213,15 @@ pub fn find_attr(replies: &[Reply], ty: u16) -> Option<Vec<u8>> {
     })
 }
 
+/// A u32 attribute's value from one reply's attributes.
+pub fn attr_u32(attrs: &[(u16, Vec<u8>)], ty: u16) -> Option<u32> {
+    attrs
+        .iter()
+        .find(|(t, _)| *t == ty)
+        .and_then(|(_, v)| v.get(..4))
+        .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -245,6 +254,10 @@ mod tests {
         let r = decode(&reply);
         assert_eq!(r.len(), 2);
         assert_eq!(find_attr(&r, 93), Some(1u32.to_ne_bytes().to_vec()));
+        if let Reply::Attrs(a) = &r[0] {
+            assert_eq!(attr_u32(a, 93), Some(1));
+            assert_eq!(attr_u32(a, 94), None);
+        }
         assert_eq!(r[1], Reply::Ack(0));
         // error ack (-EOPNOTSUPP)
         let mut e = vec![0u8; 36];

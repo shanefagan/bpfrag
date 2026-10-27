@@ -7,12 +7,14 @@
 //!   what kind each one is;
 //! - [`ethtool`]: NIC interrupt coalescing through the ethtool ioctl;
 //! - [`nl80211`]: Wi-Fi power save over generic netlink;
-//! - [`genl`]: the generic netlink it uses.
+//! - [`netdev`]: which receive queue (NAPI instance) a packet came in on;
+//! - [`genl`]: the generic netlink both of those use.
 //!
 //! What to change and when lives in `tune`.
 
 pub mod ethtool;
 pub mod genl;
+pub mod netdev;
 pub mod nl80211;
 
 use std::ffi::CStr;
@@ -57,15 +59,21 @@ pub fn iface_by_name(name: &str) -> Option<Iface> {
 }
 
 pub fn iface_by_index(ifindex: u32) -> Option<Iface> {
+    iface_by_name(&ifname(ifindex)?)
+}
+
+/// The interface's name, whatever its kind.
+pub fn ifname(ifindex: u32) -> Option<String> {
     let mut buf = [0 as libc::c_char; libc::IF_NAMESIZE];
     let p = unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr()) };
     if p.is_null() {
         return None;
     }
-    let name = unsafe { CStr::from_ptr(buf.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
-    iface_by_name(&name)
+    Some(
+        unsafe { CStr::from_ptr(buf.as_ptr()) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// Interfaces carrying an IPv4 or IPv6 default route in the main routing

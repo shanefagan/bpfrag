@@ -352,7 +352,7 @@ int bpfrag_dscp(struct __sk_buff *skb)
 
 /* ---- tc ingress: arrival gaps on the game's ports ------------------------ */
 
-static __always_inline void record_arrival(__u32 port)
+static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 {
 	struct port_rx *pr = bpf_map_lookup_elem(&port_rx, &port);
 	__u64 now = bpf_ktime_get_ns(), last, gap, ms;
@@ -366,6 +366,10 @@ static __always_inline void record_arrival(__u32 port)
 			return;
 	}
 	__sync_fetch_and_add(&pr->pkts, 1);
+	/* The receive queue's NAPI instance (0 if none, e.g. veth). It only
+	 * changes if RSS moves the flow, so the latest one is the answer. */
+	if (napi_id && pr->napi_id != napi_id)
+		pr->napi_id = napi_id;
 	last = pr->last_ns;
 	pr->last_ns = now;
 	if (!last || now <= last)
@@ -424,6 +428,6 @@ int bpfrag_rx(struct __sk_buff *skb)
 	port = bpf_ntohs(udp->dest);
 	if (!game_owns(port))
 		return TC_ACT_OK;
-	record_arrival(port);
+	record_arrival(port, skb->napi_id);
 	return TC_ACT_OK;
 }

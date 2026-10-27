@@ -53,7 +53,7 @@ struct port_rx {
 	__u64 last_ns;
 	__u64 max_gap_ns;	/* longest gap under GAP_IDLE_MS */
 	__u32 stalls;		/* gaps of GAP_STALL_MS .. GAP_IDLE_MS */
-	__u32 _pad;
+	__u32 napi_id;		/* NAPI instance (receive queue) of the latest packet */
 	__u32 hist[GAP_BUCKETS];
 };
 

@@ -43,8 +43,9 @@ is running, bpfrag leaves the sysctls bpftune tunes alone.
 Each match gets a health report, shown by
 .B \-\-monitor
 and logged when it ends: the gaps between the game's incoming packets
-(timed at tc ingress) and how much the kernel's receive drop
-counters grew.
+(timed at tc ingress), how much the kernel's receive drop
+counters grew, and which receive queue and IRQ the game's packets
+arrive on.
 .B \-\-dry\-run
 measures the same way, which gives an untuned baseline.
 .SH OPTIONS

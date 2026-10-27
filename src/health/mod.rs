@@ -13,6 +13,9 @@
 //!   what a player feels as rubber-banding. Gaps of 100 ms or more count as
 //!   stalls; 2 s or more means the flow paused (a lobby) and isn't counted.
 //! - Drops come from kernel counters, see [`counters`].
+//! - The receive queue: the meter also records which NAPI instance (one
+//!   per receive queue) handled the game's packets, shown as "eno1 rx
+//!   queue 2, IRQ 140" (see [`crate::net::netdev`]).
 //!
 //! Most of the gap spread is the internet and the server, not this
 //! machine, so expect tuning to move the drop counters more than the gaps.
@@ -25,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::bpf_intf;
 use crate::net::Iface;
+use crate::net::netdev::{self, RxQueue};
 use counters::{SysCounters, nic_overruns};
 
 /// Histogram buckets: 1 ms each, the last one "that long or longer".
@@ -41,6 +45,8 @@ pub struct Gaps {
     pub max_gap_ns: u64,
     /// Gaps of 100 ms up to the idle cut-off.
     pub stalls: u64,
+    /// NAPI instance of the latest packet; 0 if unknown.
+    pub napi_id: u32,
 }
 
 impl Gaps {
@@ -55,6 +61,7 @@ impl Gaps {
             hist,
             max_gap_ns: r.max_gap_ns,
             stalls: u64::from(r.stalls),
+            napi_id: r.napi_id,
         }
     }
 
@@ -150,6 +157,9 @@ pub struct Health {
     pub nic_drops: u64,
     /// Receive processing ran out of budget and was deferred.
     pub squeezed: u64,
+    /// The receive queue the main flow arrives on, if known.
+    #[serde(default)]
+    pub rx_queue: Option<RxQueue>,
 }
 
 impl Health {
@@ -178,6 +188,9 @@ impl Health {
         if self.squeezed > 0 {
             s += &format!("; receive processing ran out of budget {}x", self.squeezed);
         }
+        if let Some(q) = &self.rx_queue {
+            s += &format!("; arrives on {}", q.describe());
+        }
         s
     }
 
@@ -199,6 +212,8 @@ pub struct Tracker {
     /// interface -> NIC overrun count when it first carried the match
     nic_base: HashMap<String, u64>,
     latest: Option<Health>,
+    /// The main flow's receive queue, looked up once per NAPI id.
+    rx_queue: Option<RxQueue>,
 }
 
 impl Tracker {
@@ -207,6 +222,7 @@ impl Tracker {
         self.base = Some(SysCounters::read());
         self.nic_base.clear();
         self.latest = None;
+        self.rx_queue = None;
         self.watch(ifaces);
     }
 
@@ -232,12 +248,19 @@ impl Tracker {
             .iter()
             .map(|(name, b)| nic_overruns(name).map_or(0, |n| n.saturating_sub(*b)))
             .sum();
+        let main = Gaps::main_flow(ports);
+        let napi_id = main.as_ref().map_or(0, |g| g.napi_id);
+        if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
+            // a netlink round trip, so only when the flow's queue changes
+            self.rx_queue = Some(netdev::rx_queue(napi_id));
+        }
         self.latest = Some(Health {
-            gaps: Gaps::main_flow(ports).and_then(|g| g.summary()),
+            gaps: main.and_then(|g| g.summary()),
             socket_drops: sys.udp_rcvbuf,
             backlog_drops: sys.backlog_drops,
             nic_drops,
             squeezed: sys.squeezed,
+            rx_queue: self.rx_queue.clone(),
         });
     }
 
@@ -249,6 +272,7 @@ impl Tracker {
     pub fn finish(&mut self) -> Option<Health> {
         self.base = None;
         self.nic_base.clear();
+        self.rx_queue = None;
         self.latest.take()
     }
 }
@@ -321,5 +345,20 @@ mod tests {
              receive processing ran out of budget 3x"
         );
         assert_eq!(h.short(), "gaps 99% over 63 ms, longest 48 ms, no drops");
+        let q = Health {
+            rx_queue: Some(RxQueue {
+                napi_id: 8194,
+                ifname: Some("eno1".into()),
+                queue: Some(1),
+                irq: Some(140),
+            }),
+            ..h
+        };
+        assert!(
+            q.summary()
+                .ends_with("no drops; arrives on eno1 rx queue 1, IRQ 140"),
+            "{}",
+            q.summary()
+        );
     }
 }

@@ -179,6 +179,14 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
         .find(|(p, _)| *p == GAME_PORT)
         .map(|(_, r)| *r)
         .ok_or("no arrivals counted on the game port")?;
+    // Test-run packets come from no receive queue: the kernel reports
+    // NAPI id 0 for them, and the meter must keep it that way.
+    if r.napi_id != 0 {
+        return Err(format!(
+            "recorded NAPI id {} for a packet with none",
+            r.napi_id
+        ));
+    }
     let gaps: u32 = r.hist.iter().sum();
     let want = to_game.len() as u64;
     if r.pkts != want || u64::from(gaps) != want - 1 {

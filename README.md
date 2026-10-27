@@ -173,7 +173,7 @@ Every match gets a health report, live in `--monitor` and the Waybar
 tooltip, and logged when the match ends:
 
 ```
-Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 ms+); no drops
+Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 ms+); no drops; arrives on eno1 rx queue 2, IRQ 140
 ```
 
 - **Packet gaps** are timed on arrival, at tc ingress, on the game's main
@@ -188,6 +188,11 @@ Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 
   the NIC's receive ring overflowing (coalescing). "Ran out of budget" counts
   when packet processing was deferred (`netdev_budget`, busy polling). These
   are system-wide, so a big download during the match counts too.
+- **The receive queue** is the NIC queue (its NAPI instance) the game's
+  packets come in on, with the interrupt that serves it. A big download
+  hashed onto the same queue competes with the game for it. The kernel
+  can tell which queue on 6.8+; some Wi-Fi drivers only report a NAPI
+  number.
 
 `--dry-run` measures the same way but changes nothing, so a few matches with
 it give a baseline to compare against. Expect most of the spread in packet
@@ -460,7 +465,9 @@ src/tune/coexist.rs          bpftune / sched_ext / gamemode / tuned awareness
 
 src/net/mod.rs               interfaces and default routes
 src/net/ethtool.rs           NIC interrupt coalescing (ethtool ioctl)
-src/net/nl80211.rs           Wi-Fi power save (generic netlink, no deps)
+src/net/nl80211.rs           Wi-Fi power save
+src/net/netdev.rs            which receive queue and IRQ a NAPI instance is
+src/net/genl.rs              generic netlink for both, no deps
 
 src/config/mod.rs            config file, command-line overrides, validation
 src/config/builtin.rs        built-in lists and tier profiles
@@ -511,7 +518,7 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, health, report, packaging (54 tests)
+cargo test                     # detector, classifier, config, journal, health, report, packaging (57 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (13 checks)
 sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (36 checks)
 ```
