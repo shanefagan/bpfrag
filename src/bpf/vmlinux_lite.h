@@ -45,7 +45,10 @@ typedef _Bool bool;
 #define ETH_P_IP 0x0800
 #define ETH_P_IPV6 0x86DD
 #define ETH_HLEN 14
-#define TC_ACT_OK 0
+/* tcx verdict: carry on to the next tcx program and then any classic tc
+ * filters (a CAKE setup's IFB redirect, say). TC_ACT_OK would be TCX_PASS,
+ * which accepts the packet and skips all of those. */
+#define TCX_NEXT -1
 #define TC_PRIO_INTERACTIVE 6
 #define MSG_PEEK 0x2
 #define MSG_ERRQUEUE 0x2000

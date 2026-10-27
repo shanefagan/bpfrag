@@ -249,8 +249,9 @@ that.
   journal. `/run` is tmpfs, so a reboot clears the journal along with the
   settings it describes.
 - The DSCP marker and the arrival meter are **tcx links**, so they detach
-  by themselves if the process dies, and they sit next to any qdisc or tc
-  filter already on the interface (CAKE, for example) without touching it.
+  by themselves if the process dies. They hand every packet on to whatever
+  else is on the interface: other tcx programs, classic tc filters (such as
+  a desktop CAKE setup's redirect to its IFB) and the qdisc.
 - `--dry-run` logs every intended change without making any of them. A lock
   file stops two instances from fighting over the same knobs.
 
@@ -520,7 +521,7 @@ What's new:
 ```sh
 cargo test                     # detector, classifier, config, journal, health, report, packaging (57 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (13 checks)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (36 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (38 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes

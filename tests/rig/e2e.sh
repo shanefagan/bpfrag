@@ -24,6 +24,7 @@ cleanup() {
   [ -n "${D:-}" ] && kill -INT $D 2>/dev/null && wait $D 2>/dev/null
   umount "$W/run8" 2>/dev/null
   ip netns del bpfrag-srv 2>/dev/null; ip link del bpfrag0 2>/dev/null
+  ip link del bpfrag-ingress 2>/dev/null; ip link del bpfrag-egress 2>/dev/null
   "$B" -c $W/cfg.toml --restore >/dev/null 2>&1
   # W always comes from mktemp; refuse anything else
   case "$W" in
@@ -60,6 +61,16 @@ fi
 ip netns exec bpfrag-srv python3 $W/server.py & SRV=$!
 snap > $W/base
 game() { SteamAppId=4242 $W/steamapps/common/FakeShooter/fakeshooter $W/client.py "$@" & G=$!; }
+# Classic tc filters redirecting through IFB devices, the way desktop CAKE
+# setups shape downloads. bpfrag's tcx programs run first and must pass
+# packets on to them, not end the chain.
+tc qdisc add dev bpfrag0 clsact
+for dir in ingress egress; do
+  ip link add bpfrag-$dir type ifb && ip link set bpfrag-$dir up
+  tc filter add dev bpfrag0 $dir protocol ip prio 1 u32 match u32 0 0 \
+    action mirred egress redirect dev bpfrag-$dir
+done
+tcpkts() { cat /sys/class/net/bpfrag-$1/statistics/rx_packets 2>/dev/null || echo 0; }
 
 echo "== 0. BPF selftest: packet vectors through the DSCP marker"
 "$B" -c $W/cfg.toml --selftest > $W/selftest.log 2>&1 && ok "selftest ($(tail -1 $W/selftest.log))" || { bad "selftest"; cat $W/selftest.log; }
@@ -78,6 +89,9 @@ echo 64 > $W/rate; game 64 180 $W/rate; sleep 6
 grep -q "Match detected: fakeshooter.*COMPETITIVE" $W/d.log && ok "fake Steam game -> COMPETITIVE" || bad "game not detected"
 [ "$(sysctl -n net.core.busy_poll)" = 50 ] && ok "busy_poll=50" || bad "busy_poll not set"
 [ "$(sysctl -n vm.dirty_bytes)" -gt 0 ] && ok "writeback tightened" || echo "  skip writeback already tight"
+I0=$(tcpkts ingress); O0=$(tcpkts egress); sleep 1; I1=$(tcpkts ingress); O1=$(tcpkts egress)
+[ $((I1 - I0)) -gt 20 ] && ok "classic ingress redirect to IFB still runs under the meter" || bad "ingress IFB starved: $I0 -> $I1"
+[ $((O1 - O0)) -gt 20 ] && ok "classic egress redirect to IFB still runs under the marker" || bad "egress IFB starved: $O0 -> $O1"
 errs() { ip netns exec bpfrag-srv nstat -az IpExtInCsumErrors IpInHdrErrors 2>/dev/null | awk '/^Ip/{n+=$2} END{print n+0}'; }
 E0=$(errs)
 ip netns exec bpfrag-srv timeout 4 tcpdump -n -i bpfrag1 -c 150 -w $W/v4.pcap 'udp and dst port 27015 and src 10.99.0.1' 2>/dev/null
@@ -117,7 +131,10 @@ kill -INT $D; wait $D; D=
 echo "== 4. kill -9 mid-match, then --restore"
 "$B" -c $W/cfg.toml > $W/d4.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
 kill -9 $D; wait $D 2>/dev/null; D=
-tc filter show dev bpfrag0 egress | grep -q bpfrag && bad "tc left attached" || ok "tcx link died with the daemon"
+# The game keeps running: its packets must now leave unmarked.
+ip netns exec bpfrag-srv timeout 4 tcpdump -n -i bpfrag1 -c 30 -w $W/v4k.pcap 'udp and dst port 27015 and src 10.99.0.1' 2>/dev/null
+SUMK=$(python3 "$HERE/pcap_check.py" $W/v4k.pcap)
+echo "$SUMK" | grep -q "ipv4 dscp=0 " && ! echo "$SUMK" | grep -q "dscp=32" && ok "tcx link died with the daemon (packets unmarked)" || bad "still marking after kill -9: $SUMK"
 "$B" -c $W/cfg.toml --restore >/dev/null 2>&1; same "after --restore"; kill $G
 
 echo "== 5. IPv6: traffic class rewritten"

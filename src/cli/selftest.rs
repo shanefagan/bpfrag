@@ -136,6 +136,20 @@ fn to_port(mut p: Vec<u8>, dport: u16) -> Vec<u8> {
 /// Arrivals through the meter: packets to the game's port must be counted
 /// and timed, packets to other ports, to an untracked owner's port, and
 /// non-first fragments ignored.
+/// The tc programs must return TCX_NEXT (-1), so other tcx programs and
+/// classic tc filters on the interface still run. TC_ACT_OK would end the
+/// chain there and, for example, skip a CAKE setup's redirect to its IFB.
+fn check_verdict(ret: u32) -> Result<(), String> {
+    if ret as i32 == -1 {
+        Ok(())
+    } else {
+        Err(format!(
+            "returned {} instead of TCX_NEXT (-1): later tc filters would be skipped",
+            ret as i32
+        ))
+    }
+}
+
 fn check_meter(skel: &BpfSkel) -> Result<String, String> {
     let to_game = [
         to_port(ipv4(0, OTHER_PORT, 0x4000, 0), GAME_PORT),
@@ -158,12 +172,7 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
             .bpfrag_rx
             .test_run(input)
             .map_err(|e| format!("test_run failed: {e}"))?;
-        if res.return_value != 0 {
-            return Err(format!(
-                "returned {} instead of TC_ACT_OK",
-                res.return_value
-            ));
-        }
+        check_verdict(res.return_value)?;
     }
     let ports = crate::bpf::maps::read_port_rx(skel);
     let others: Vec<u16> = ports
@@ -211,12 +220,7 @@ fn run_case(skel: &BpfSkel, c: &Case) -> Result<(), String> {
         .bpfrag_dscp
         .test_run(input)
         .map_err(|e| format!("test_run failed: {e}"))?;
-    if res.return_value != 0 {
-        return Err(format!(
-            "returned {} instead of TC_ACT_OK",
-            res.return_value
-        ));
-    }
+    check_verdict(res.return_value)?;
     let got = res.data.ok_or("no output packet")?.to_vec();
     if got.len() != c.pkt.len() {
         return Err(format!("length changed {} -> {}", c.pkt.len(), got.len()));

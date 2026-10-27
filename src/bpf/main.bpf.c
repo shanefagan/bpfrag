@@ -14,6 +14,10 @@
  *   raw_tp/sched_process_exit                         game exit -> revert now
  *   tc egress (tcx link)                              DSCP marking
  *   tc ingress (tcx link)                             arrival gaps per game port
+ *
+ * The tc programs only observe or rewrite, and always return TCX_NEXT so
+ * whatever else is on the interface (other tcx programs, classic filters
+ * such as a CAKE setup's redirect to its IFB) still sees every packet.
  */
 #include "vmlinux_lite.h"
 #include <bpf/bpf_helpers.h>
@@ -275,7 +279,7 @@ int bpfrag_dscp(struct __sk_buff *skb)
 
 	mi = bpf_map_lookup_elem(&mark_ifaces, &ifindex);
 	if (!mi)
-		return TC_ACT_OK;
+		return TCX_NEXT;
 	/* zero or Ethernet, so packet offsets stay constants for the verifier */
 	l2 = mi->l2_len ? ETH_HLEN : 0;
 
@@ -286,23 +290,23 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		__u32 ihl;
 
 		if ((void *)(ip + 1) > data_end)
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		if (ip->protocol != IPPROTO_UDP)
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		if (ip->frag_off & bpf_htons(0x1fff))
-			return TC_ACT_OK; /* non-first fragment, no UDP header */
+			return TCX_NEXT; /* non-first fragment, no UDP header */
 		ihl = (ip->ver_ihl & 0x0f) * 4;
 		if (ihl < sizeof(struct iphdr))
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		udp = (void *)ip + ihl;
 		if ((void *)(udp + 1) > data_end)
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		if (!is_game_port(udp->source, mi))
-			return TC_ACT_OK;
+			return TCX_NEXT;
 
 		old_tos = ip->tos;
 		if (!want_rewrite(old_tos))
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		new_tos = (dscp << 2) | (old_tos & 0x3); /* keep ECN bits */
 		if (new_tos != old_tos) {
 			bpf_l3_csum_replace(skb, l2 + __builtin_offsetof(struct iphdr, check),
@@ -317,20 +321,20 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		__u8 nb[2];
 
 		if ((void *)(ip6 + 1) > data_end)
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		if (ip6->nexthdr != IPPROTO_UDP)
-			return TC_ACT_OK; /* extension headers: not worth it */
+			return TCX_NEXT; /* extension headers: not worth it */
 		udp = (void *)(ip6 + 1);
 		if ((void *)(udp + 1) > data_end)
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		if (!is_game_port(udp->source, mi))
-			return TC_ACT_OK;
+			return TCX_NEXT;
 
 		b0 = ip6->vtc_flow[0];
 		b1 = ip6->vtc_flow[1];
 		old_tc = ((b0 & 0x0f) << 4) | (b1 >> 4);
 		if (!want_rewrite(old_tc))
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		new_tc = (dscp << 2) | (old_tc & 0x3);
 		if (new_tc != old_tc) {
 			/* traffic class is not covered by any checksum */
@@ -339,7 +343,7 @@ int bpfrag_dscp(struct __sk_buff *skb)
 			bpf_skb_store_bytes(skb, l2, nb, 2, 0);
 		}
 	} else {
-		return TC_ACT_OK;
+		return TCX_NEXT;
 	}
 
 	/* pfifo_fast & friends: send it through the interactive band */
@@ -347,7 +351,7 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		skb->priority = TC_PRIO_INTERACTIVE;
 
 	stat_inc(STAT_DSCP_MARKED);
-	return TC_ACT_OK;
+	return TCX_NEXT;
 }
 
 /* ---- tc ingress: arrival gaps on the game's ports ------------------------ */
@@ -399,7 +403,7 @@ int bpfrag_rx(struct __sk_buff *skb)
 
 	mi = bpf_map_lookup_elem(&rx_ifaces, &ifindex);
 	if (!mi)
-		return TC_ACT_OK;
+		return TCX_NEXT;
 	l2 = mi->l2_len ? ETH_HLEN : 0;
 
 	if (skb->protocol == bpf_htons(ETH_P_IP)) {
@@ -407,27 +411,27 @@ int bpfrag_rx(struct __sk_buff *skb)
 		__u32 ihl;
 
 		if ((void *)(ip + 1) > data_end || ip->protocol != IPPROTO_UDP)
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		if (ip->frag_off & bpf_htons(0x1fff))
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		ihl = (ip->ver_ihl & 0x0f) * 4;
 		if (ihl < sizeof(struct iphdr))
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		udp = (void *)ip + ihl;
 	} else if (skb->protocol == bpf_htons(ETH_P_IPV6)) {
 		struct ipv6hdr *ip6 = data + l2;
 
 		if ((void *)(ip6 + 1) > data_end || ip6->nexthdr != IPPROTO_UDP)
-			return TC_ACT_OK;
+			return TCX_NEXT;
 		udp = (void *)(ip6 + 1);
 	} else {
-		return TC_ACT_OK;
+		return TCX_NEXT;
 	}
 	if ((void *)(udp + 1) > data_end)
-		return TC_ACT_OK;
+		return TCX_NEXT;
 	port = bpf_ntohs(udp->dest);
 	if (!game_owns(port))
-		return TC_ACT_OK;
+		return TCX_NEXT;
 	record_arrival(port, skb->napi_id);
-	return TC_ACT_OK;
+	return TCX_NEXT;
 }

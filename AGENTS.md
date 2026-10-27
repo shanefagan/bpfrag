@@ -83,6 +83,10 @@ container) and the .rpm (Fedora container).
   one definition.
 - Packet offsets in tc programs must stay constants the verifier can
   follow (that's why the L2 length is only ever 0 or 14).
+- tc programs return `TCX_NEXT`, never `TC_ACT_OK`. For a tcx link,
+  `TC_ACT_OK` means "accept and stop", which skips later tcx programs and
+  every classic tc filter on the interface (a CAKE setup's IFB redirect,
+  for one). `--selftest` and the e2e rig check this.
 - Any change to a tc program gets a `--selftest` vector
   (`cli/selftest.rs`), which runs on the real kernel via
   BPF_PROG_TEST_RUN.
