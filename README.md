@@ -472,6 +472,8 @@ tests/rig/                   end-to-end test in a throwaway netns (root)
 AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
 .github/workflows/ci.yml     fmt, clippy, tests, --selftest and the e2e rig as root,
                              MSRV check, .deb/.rpm builds, releases on tags
+.github/ISSUE_TEMPLATE/      bug report (asks for --report) and feature request forms
+.github/pull_request_template.md  testing and scope checklist
 ```
 
 ## Lineage

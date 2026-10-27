@@ -1,0 +1,33 @@
+name: Feature request
+description: Something bpfrag could tune, detect or report.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        bpfrag tunes networking (and dirty-page writeback) while a match is
+        on, and puts everything back afterwards. It never touches CPU
+        scheduling, frequency or IRQ affinity: sched_ext schedulers and
+        gamemode own those, and bpfrag is meant to run next to them.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would it solve
+      description: What you're seeing in a match, or what you can't find out today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you have in mind
+      description: >-
+        The setting, counter or behaviour, and how it would be put back after
+        the match. Links to kernel documentation or measurements are welcome.
+
+  - type: textarea
+    id: report
+    attributes:
+      label: bpfrag --report (optional)
+      description: If it's about your machine, `sudo bpfrag --report` helps.

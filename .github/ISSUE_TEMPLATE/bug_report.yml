@@ -1,0 +1,61 @@
+name: Bug report
+description: Something bpfrag did, or didn't do, that it shouldn't have.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. The report below answers most of the questions
+        we'd otherwise have to ask, so please include it.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: >-
+        What you saw, and what you expected instead. Log lines and error
+        messages help.
+    validations:
+      required: true
+
+  - type: input
+    id: game
+    attributes:
+      label: Game
+      description: >-
+        If it's about a match: the game, and how it runs (native, Proton,
+        Wine, another launcher).
+      placeholder: Deadlock, Proton
+
+  - type: dropdown
+    id: link
+    attributes:
+      label: Connection
+      multiple: true
+      options:
+        - Ethernet
+        - Wi-Fi
+        - VPN or tunnel
+        - Both Ethernet and Wi-Fi connected
+
+  - type: textarea
+    id: report
+    attributes:
+      label: bpfrag --report
+      description: |
+        Run `sudo bpfrag --report > bpfrag-report.md` and paste the file here
+        as it is (it's Markdown), or drag the file into this box. If bpfrag
+        won't start at all, paste what it printed instead.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before posting
+      options:
+        - label: >-
+            I read the report through. It replaces the hostname, user names
+            and IP and MAC addresses, but it can't know everything that's
+            private to you.
+          required: true
