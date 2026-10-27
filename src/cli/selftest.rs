@@ -203,7 +203,8 @@ fn as_bytes<T>(v: &T) -> &[u8] {
     unsafe { std::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of::<T>()) }
 }
 
-/// Bulk flows through the marker. Returns (cases run, failures).
+/// Bulk flows through the marker and the meter. Returns (cases run,
+/// failures).
 fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
     let m = &skel.maps;
     let owner = bpf_intf::bulk_flow { tgid: 777 };
@@ -255,8 +256,36 @@ fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
             expect: game << 2,
         },
     ];
+    // The same flows arriving, through the meter: local is the destination.
+    let incoming = [
+        Case {
+            name: "incoming IPv4 TCP of a bulk flow demoted".into(),
+            pkt: pkt4(0, TCP, PEER_V4, HOST_V4, l4(TCP, 27016, 40000)),
+            expect: b,
+        },
+        Case {
+            name: "incoming IPv6 TCP of a bulk flow demoted".into(),
+            pkt: pkt6(0, TCP, PEER_V6, HOST_V6, l4(TCP, 443, 40002)),
+            expect: b,
+        },
+        Case {
+            name: "incoming UDP to an unconnected bulk socket demoted".into(),
+            pkt: pkt4(0, UDP, PEER_V4, HOST_V4, l4(UDP, 9999, 40001)),
+            expect: b,
+        },
+        Case {
+            name: "incoming bulk packet the sender marked AF11 left alone".into(),
+            pkt: pkt4(af11, TCP, PEER_V4, HOST_V4, l4(TCP, 27016, 40000)),
+            expect: af11,
+        },
+        Case {
+            name: "incoming game packet not demoted".into(),
+            pkt: pkt4(0, UDP, PEER_V4, HOST_V4, l4(UDP, 9999, GAME_PORT)),
+            expect: 0,
+        },
+    ];
     let mut failed = 0;
-    let mut run = |c: &Case| match run_case(skel, c) {
+    let mut run = |c: &Case, ingress: bool| match run_case_on(skel, c, ingress) {
         Ok(()) => println!("  PASS {}", c.name),
         Err(e) => {
             failed += 1;
@@ -264,17 +293,29 @@ fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
         }
     };
     for c in &cases {
-        run(c);
+        run(c, false);
+    }
+    for c in &incoming {
+        run(c, true);
     }
     // with the switch off, nothing is looked up or demoted
     crate::bpf::maps::bulk_active(skel, false);
-    run(&Case {
+    let off = Case {
         name: "bulk switched off: nothing demoted".into(),
         pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 27016)),
         expect: 0,
-    });
+    };
+    run(&off, false);
+    run(
+        &Case {
+            name: "bulk switched off: nothing demoted on ingress".into(),
+            pkt: pkt4(0, TCP, PEER_V4, HOST_V4, l4(TCP, 27016, 40000)),
+            expect: 0,
+        },
+        true,
+    );
     crate::bpf::maps::clear_bulk(skel);
-    Ok((cases.len() + 1, failed))
+    Ok((cases.len() + incoming.len() + 2, failed))
 }
 
 /// The packet with its UDP destination port set to `dport`.
@@ -364,15 +405,23 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
 }
 
 fn run_case(skel: &BpfSkel, c: &Case) -> Result<(), String> {
+    run_case_on(skel, c, false)
+}
+
+/// Run a case through the marker (egress) or the meter (ingress).
+fn run_case_on(skel: &BpfSkel, c: &Case, ingress: bool) -> Result<(), String> {
     let mut out = vec![0u8; c.pkt.len() + 64];
     let input = ProgramInput {
         data_in: Some(&c.pkt),
         data_out: Some(&mut out),
         ..Default::default()
     };
-    let res = skel
-        .progs
-        .bpfrag_dscp
+    let prog = if ingress {
+        &skel.progs.bpfrag_rx
+    } else {
+        &skel.progs.bpfrag_dscp
+    };
+    let res = prog
         .test_run(input)
         .map_err(|e| format!("test_run failed: {e}"))?;
     check_verdict(res.return_value)?;

@@ -203,6 +203,12 @@ SB=$(cap bulk-acks 'tcp and src 10.99.0.1 and src port 40100')
 echo "$SB" | grep -q "ipv4 dscp=1 csum=ok" && ! echo "$SB" | grep -q "dscp=0" && ok "the download's outgoing packets are marked LE" || bad "steam egress: $SB"
 SO=$(cap obs-up 'tcp and src 10.99.0.1 and src port 40200')
 echo "$SO" | grep -q "ipv4 dscp=0 csum=ok" && ! echo "$SO" | grep -q "dscp=1 " && ok "OBS's upload is not marked" || bad "obs egress: $SO"
+# What a desktop CAKE would see: the download after the redirect to its IFB.
+capi() { timeout 4 tcpdump -n -i bpfrag-ingress -c 40 -w $W/$1.pcap "$2" 2>/dev/null; python3 "$HERE/pcap_check.py" $W/$1.pcap; }
+SI=$(capi bulk-down 'tcp and src 10.99.0.2 and dst port 40100')
+echo "$SI" | grep -q "ipv4 dscp=1 csum=ok" && ! echo "$SI" | grep -q "dscp=0" && ok "the download reaches the IFB marked LE (before CAKE)" || bad "steam ingress: $SI"
+SJ=$(capi obs-acks 'tcp and src 10.99.0.2 and dst port 40200')
+echo "$SJ" | grep -q "ipv4 dscp=0 csum=ok" && ok "OBS's incoming packets are not marked" || bad "obs ingress: $SJ"
 SG=$(cap game-bulk 'udp and dst port 27015 and src 10.99.0.1')
 echo "$SG" | grep -q "ipv4 dscp=32" && ok "the game keeps CS4 alongside bulk traffic" || bad "game: $SG"
 # (the rig's own server is a local process too, so it can show up as well)
@@ -215,6 +221,16 @@ echo "$SR" | grep -q "dscp=1 " && bad "still demoting after release: $SR" || ok 
 kill $BS
 kill $BO $G; kill -INT $D; wait $D; D=
 same "after bulk match"
+
+echo "== 10. bulk with --dry-run: reported, never marked"
+"$B" -c $W/cfg9.toml --dry-run > $W/d10.log 2>&1 & D=$!; sleep 1
+game 64 180; sleep 5
+$W/apps/steam $W/bulk.py down 10 40102 & BS=$!; sleep 5
+grep -q "Bulk transfer during the match: steam.*dry run: would mark LE" $W/d10.log && ok "dry run reports what it would demote" || bad "dry run bulk: $(grep -i bulk $W/d10.log)"
+SD=$(cap dry-acks 'tcp and src 10.99.0.1 and src port 40102')
+SE=$(capi dry-down 'tcp and src 10.99.0.2 and dst port 40102')
+echo "$SD $SE" | grep -q "dscp=1 " && bad "dry run marked packets: $SD / $SE" || ok "dry run marks nothing in either direction"
+kill $BS $G; kill -INT $D; wait $D; D=
 
 echo; echo "passed $PASS, failed $FAIL"
 [ $FAIL = 0 ]
