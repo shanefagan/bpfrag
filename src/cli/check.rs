@@ -21,18 +21,9 @@ fn line(ok: Option<bool>, what: &str, detail: impl AsRef<str>) {
     println!("[{mark}] {what:<20} {}", detail.as_ref());
 }
 
-fn kernel_version() -> (String, (u32, u32)) {
-    let rel = read_trim("/proc/sys/kernel/osrelease").unwrap_or_default();
-    let mut it = rel
-        .split(|c: char| !c.is_ascii_digit())
-        .filter_map(|x| x.parse::<u32>().ok());
-    let v = (it.next().unwrap_or(0), it.next().unwrap_or(0));
-    (rel, v)
-}
-
 pub fn run(cfg: &Config) -> bool {
     let mut fatal = false;
-    let (rel, ver) = kernel_version();
+    let rel = read_trim("/proc/sys/kernel/osrelease").unwrap_or_default();
     line(None, "kernel", &rel);
 
     let root = is_root();
@@ -59,23 +50,14 @@ pub fn run(cfg: &Config) -> bool {
     );
     fatal |= !btf;
     if btf {
-        match crate::bpf::pick_hook(cfg.general.hook) {
-            Ok(h) => line(Some(true), "UDP counting hook", h.describe()),
+        match crate::bpf::check_kernel() {
+            Ok(()) => line(Some(true), "kernel hooks", "socket tracepoints and tcx"),
             Err(e) => {
-                line(Some(false), "UDP counting hook", format!("{e:#}"));
+                line(Some(false), "kernel hooks", format!("{e:#}"));
                 fatal = true;
             }
         }
     }
-    line(
-        Some(true),
-        "DSCP marker",
-        if ver >= (6, 6) {
-            "tcx link (auto-detached if bpfrag dies)"
-        } else {
-            "legacy tc filter (journalled for cleanup)"
-        },
-    );
 
     let ifaces = net::default_route_ifaces();
     if ifaces.is_empty() {

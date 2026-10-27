@@ -66,17 +66,6 @@ impl fmt::Display for Tier {
     }
 }
 
-/// Which kernel hook counts UDP traffic.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HookPref {
-    /// Tracepoints if the kernel has them, else fexit.
-    #[default]
-    Auto,
-    Tracepoint,
-    Fexit,
-}
-
 /// Sharing sysctls with bpftune.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -96,7 +85,10 @@ pub struct General {
     /// Where the stats file and the restore journal live (tmpfs, so a
     /// reboot clears it together with the sysctls it describes).
     pub run_dir: String,
-    pub hook: HookPref,
+    /// No longer used: on kernel 6.6+ there is only one counting hook.
+    /// Accepted so older config files still load.
+    #[serde(skip_serializing)]
+    pub hook: Option<toml::Value>,
     /// Sampling window in milliseconds.
     pub tick_ms: u64,
     pub bpftune: BpftuneMode,
@@ -106,7 +98,7 @@ impl Default for General {
     fn default() -> Self {
         Self {
             run_dir: "/run/bpfrag".into(),
-            hook: HookPref::Auto,
+            hook: None,
             tick_ms: 1000,
             bpftune: BpftuneMode::Auto,
         }
@@ -414,6 +406,9 @@ impl Default for Config {
 impl Config {
     pub fn from_toml(text: &str) -> Result<Self> {
         let file: ConfigFile = toml::from_str(text)?;
+        if file.general.hook.is_some() {
+            log::info!("config: general.hook is no longer used and can be removed");
+        }
         let mut profiles = builtin_profiles();
         for p in profiles.iter_mut() {
             file.tier.all.apply(p)?;
@@ -630,7 +625,13 @@ mod tests {
                 .is_err()
         );
         assert!(Config::from_toml("[general]\nbpftune = \"maybe\"\n").is_err());
-        assert!(Config::from_toml("[general]\nhook = \"kprobe\"\n").is_err());
+    }
+
+    #[test]
+    fn old_hook_setting_still_loads() {
+        let cfg = Config::from_toml("[general]\nhook = \"fexit\"\n").unwrap();
+        let dumped = toml::to_string(&cfg.general).unwrap();
+        assert!(!dumped.contains("hook"), "{dumped}");
     }
 
     #[test]

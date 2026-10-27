@@ -43,7 +43,7 @@ is running, bpfrag leaves the sysctls bpftune tunes alone.
 Each match gets a health report, shown by
 .B \-\-monitor
 and logged when it ends: the gaps between the game's incoming packets
-(timed at tc ingress; kernel 6.6+) and how much the kernel's receive drop
+(timed at tc ingress) and how much the kernel's receive drop
 counters grew.
 .B \-\-dry\-run
 measures the same way, which gives an untuned baseline.
@@ -140,10 +140,6 @@ Set in a game's environment (for example in Steam launch options:
 A true value marks the process as a game; a false value, such as
 .BR 0 ,
 excludes it.
-.TP
-.B BPFRAG_NO_TCX
-If set, attach the DSCP marker with a legacy tc clsact hook instead of a
-tcx link.
 .SH FILES
 .TP
 .I /etc/bpfrag/bpfrag.toml

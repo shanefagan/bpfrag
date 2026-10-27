@@ -89,7 +89,6 @@ pub struct Metrics {
     pub version: String,
     pub pid: u32,
     pub updated: u64,
-    pub hook: String,
     pub dry_run: bool,
     pub session: Option<SessionMetrics>,
     pub applied: Vec<AppliedMetric>,
@@ -174,11 +173,10 @@ impl Metrics {
         let alive = pid_alive(self.pid);
         writeln!(
             w,
-            "bpfrag {} | pid {}{} | {} | updated {age}s ago{}",
+            "bpfrag {} | pid {}{} | updated {age}s ago{}",
             self.version,
             self.pid,
             if alive { "" } else { " (NOT RUNNING)" },
-            self.hook,
             if self.dry_run {
                 " | DRY RUN, nothing is changed"
             } else {

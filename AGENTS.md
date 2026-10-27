@@ -60,11 +60,14 @@ container) and the .rpm (Fedora container).
 - **Raise-only / lower-only.** Capacity sysctls only ever go up (`>=`
   values), writeback only ever tightens.
 - **`--dry-run` changes nothing on the system.** Observing is fine (BPF
-  counters, the tcx-only arrival meter); writing a sysctl, coalescing,
+  counters, the arrival meter); writing a sysctl, coalescing,
   power save or attaching the DSCP marker is not.
 - **Crash safety.** tc programs attach as tcx links (they die with the
-  process); anything that would outlive bpfrag must be journalled
-  (legacy tc filters are) so `--restore` can undo it.
+  process); anything that would outlive bpfrag must be journalled so
+  `--restore` can undo it.
+- **Kernel 6.6+ only.** The socket tracepoints (6.4) and tcx (6.6) are
+  required (`bpf::check_kernel`); there are no fallbacks for older
+  kernels, so don't add classic tc filters or fexit/kprobe hooks.
 - **bpftune coexistence.** Sysctls in `config::BPFTUNE_SYSCTLS` are left
   to bpftune while it runs (`tune/coexist.rs`). Writing them would make
   bpftune switch its own tuners off.

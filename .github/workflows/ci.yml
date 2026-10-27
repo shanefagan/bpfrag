@@ -15,7 +15,7 @@ permissions:
 jobs:
   test:
     # GitHub's Ubuntu runners have kernel BTF, the sock_*_length tracepoints
-    # (>= 6.4), tcx (>= 6.6) and passwordless sudo, so the BPF side runs for
+    # and tcx (bpfrag needs 6.6+) and passwordless sudo, so the BPF side runs for
     # real here, not just compiles.
     runs-on: ubuntu-24.04
     steps:

@@ -49,7 +49,9 @@ pub enum Saved {
         #[serde(default)]
         applied: u64,
     },
-    /// legacy (non-tcx) tc filter that must be removed by hand
+    /// A classic tc filter that bpfrag 0.1 used on kernels before 6.6.
+    /// Never written any more; kept so such a journal still loads and its
+    /// other entries get restored.
     TcLegacy { ifindex: i32 },
     /// Wi-Fi power save state before the match (we only ever turn it off)
     WifiPs { ifname: String, enabled: bool },
@@ -139,10 +141,10 @@ pub fn restore_one(saved: &Saved) -> Result<Outcome> {
             applied,
         } => writeback::restore(which, *bytes, *ratio, *applied),
         Saved::WifiPs { ifname, enabled } => wifi::restore(ifname, *enabled),
-        Saved::TcLegacy { ifindex } => {
-            crate::bpf::tc::detach_legacy_tc(*ifindex);
-            Ok(Outcome::Restored(format!("tc filter on ifindex {ifindex}")))
-        }
+        Saved::TcLegacy { ifindex } => Ok(Outcome::Kept(format!(
+            "tc filter on interface #{ifindex}, left by an older bpfrag \
+             (tc filter del dev <interface> egress, or a reboot, removes it)"
+        ))),
     }
 }
 

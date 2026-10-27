@@ -263,10 +263,6 @@ pub fn run(cfg: &Config) -> Result<bool> {
     let p = &mut open.progs;
     p.bpfrag_send_tp.set_autoload(false);
     p.bpfrag_recv_tp.set_autoload(false);
-    p.bpfrag_udp_sendmsg.set_autoload(false);
-    p.bpfrag_udpv6_sendmsg.set_autoload(false);
-    p.bpfrag_udp_recvmsg.set_autoload(false);
-    p.bpfrag_udpv6_recvmsg.set_autoload(false);
     p.bpfrag_exit.set_autoload(false);
     p.bpfrag_dscp.set_autoload(true);
     p.bpfrag_rx.set_autoload(true);

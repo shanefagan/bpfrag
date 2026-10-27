@@ -130,22 +130,6 @@ impl Knobs {
         }
     }
 
-    /// A legacy tc filter is already attached when we hear of it; if the
-    /// journal can't record it, the filter's game_tgids check still keeps
-    /// it from marking anything once we're gone.
-    pub fn track_tc_legacy(&mut self, ifindex: i32) {
-        self.save(&format!("tc:{ifindex}"), Saved::TcLegacy { ifindex });
-        self.persist();
-    }
-
-    pub fn untrack_tc_legacy(&mut self, ifindex: i32) {
-        let key = format!("tc:{ifindex}");
-        if self.saved_get(&key).is_some() {
-            self.unsave(&key);
-            self.persist();
-        }
-    }
-
     /// Make the system look like `profile`, reverting anything the previous
     /// tier changed that this one doesn't want. `ifaces` get the
     /// per-interface knobs; `skip` holds sysctls that belong to someone

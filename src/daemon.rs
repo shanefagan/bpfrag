@@ -30,7 +30,7 @@ use libbpf_rs::{Link, OpenObject, RingBufferBuilder};
 use log::{debug, info};
 
 use crate::bpf::tc::{Role, TcSet};
-use crate::bpf::{self, HookKind, maps};
+use crate::bpf::{self, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
 use crate::config::{Config, parse_dscp};
@@ -127,7 +127,6 @@ pub struct Tuner<'a> {
     skel: BpfSkel<'a>,
     /// The counting and exit hooks. Dropping a link detaches it.
     _links: Vec<Link>,
-    hook: HookKind,
     /// DSCP marker and arrival meter attachments (only during a match).
     marker: TcSet,
     meter: TcSet,
@@ -163,7 +162,7 @@ impl<'a> Tuner<'a> {
         cfg: Config,
         open_object: &'a mut MaybeUninit<OpenObject>,
     ) -> Result<Self> {
-        let hook = bpf::pick_hook(cfg.general.hook)?;
+        bpf::check_kernel()?;
         bpf::bump_memlock();
 
         let mut skel_builder = BpfSkelBuilder::default();
@@ -182,43 +181,19 @@ impl<'a> Tuner<'a> {
         rodata.dscp_override = cfg.dscp.override_app;
         rodata.set_priority = cfg.dscp.set_priority;
 
-        // Load only the counting programs this kernel can attach: the
-        // generic socket tracepoints, or fexit on the UDP functions.
-        let tp = hook == HookKind::Tracepoint;
-        let v6 = !tp && bpf::has_udpv6_btf();
-        open.progs.bpfrag_send_tp.set_autoload(tp);
-        open.progs.bpfrag_recv_tp.set_autoload(tp);
-        open.progs.bpfrag_udp_sendmsg.set_autoload(!tp);
-        open.progs.bpfrag_udp_recvmsg.set_autoload(!tp);
-        open.progs.bpfrag_udpv6_sendmsg.set_autoload(v6);
-        open.progs.bpfrag_udpv6_recvmsg.set_autoload(v6);
-
         let skel = open.load().context("loading BPF programs")?;
 
         let mut links = Vec::new();
         {
             let p = &skel.progs;
-            let mut progs: Vec<(&str, &libbpf_rs::ProgramMut)> = if tp {
-                vec![
-                    ("sock_send_length", &p.bpfrag_send_tp),
-                    ("sock_recv_length", &p.bpfrag_recv_tp),
-                ]
-            } else {
-                vec![
-                    ("udp_sendmsg", &p.bpfrag_udp_sendmsg),
-                    ("udp_recvmsg", &p.bpfrag_udp_recvmsg),
-                ]
-            };
-            if v6 {
-                progs.push(("udpv6_sendmsg", &p.bpfrag_udpv6_sendmsg));
-                progs.push(("udpv6_recvmsg", &p.bpfrag_udpv6_recvmsg));
-            }
-            progs.push(("sched_process_exit", &p.bpfrag_exit));
-            for (what, prog) in progs {
+            for (what, prog) in [
+                ("sock_send_length", &p.bpfrag_send_tp),
+                ("sock_recv_length", &p.bpfrag_recv_tp),
+                ("sched_process_exit", &p.bpfrag_exit),
+            ] {
                 links.push(prog.attach().with_context(|| format!("attaching {what}"))?);
             }
         }
-        info!("counting UDP per process via {}", hook.describe());
 
         let run_dir = PathBuf::from(&cfg.general.run_dir);
         Ok(Self {
@@ -231,7 +206,6 @@ impl<'a> Tuner<'a> {
             cfg,
             skel,
             _links: links,
-            hook,
             marker: TcSet::new(Role::Marker),
             meter: TcSet::new(Role::Meter),
             health: health::Tracker::default(),
@@ -329,9 +303,7 @@ impl<'a> Tuner<'a> {
                     names.join(", ")
                 ));
             } else {
-                for l in self.marker.attach(&self.skel, &marker) {
-                    self.knobs.track_tc_legacy(l);
-                }
+                self.marker.attach(&self.skel, &marker);
                 if !self.marker.ifaces().is_empty() {
                     changes.push(format!(
                         "dscp={} on {}",
@@ -341,9 +313,7 @@ impl<'a> Tuner<'a> {
                 }
             }
         } else {
-            for l in self.marker.detach_all(&self.skel) {
-                self.knobs.untrack_tc_legacy(l);
-            }
+            self.marker.detach_all(&self.skel);
         }
         if changes.is_empty() {
             info!("{} profile: nothing to change (already tuned)", s.tier);
@@ -359,9 +329,7 @@ impl<'a> Tuner<'a> {
             maps::track_ports(&self.skel, t, false);
             maps::watch(&self.skel, t, false);
         }
-        for l in self.marker.detach_all(&self.skel) {
-            self.knobs.untrack_tc_legacy(l);
-        }
+        self.marker.detach_all(&self.skel);
         self.meter.detach_all(&self.skel);
         maps::clear_port_rx(&self.skel);
         self.health.finish();
@@ -577,7 +545,6 @@ impl<'a> Tuner<'a> {
             version: env!("CARGO_PKG_VERSION").into(),
             pid: std::process::id(),
             updated: stats::now_unix(),
-            hook: self.hook.describe().into(),
             dry_run: self.dry_run,
             session,
             applied,

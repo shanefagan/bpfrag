@@ -181,7 +181,7 @@ Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 
   gaps of about 16 ms; the 99% figure and the longest gap show the spikes
   you feel as rubber-banding. A gap of 100 ms or more counts as a stall. A
   pause of 2 seconds or more means the flow went quiet, between rounds or
-  in a lobby, and isn't counted. Needs kernel 6.6+ (tcx).
+  in a lobby, and isn't counted.
 - **Drops** are kernel counters that grow when the receive path can't keep
   up, each tied to something the tiers tune: socket buffers overflowing
   (`rmem_*`), the per-CPU input backlog overflowing (`netdev_max_backlog`),
@@ -243,9 +243,9 @@ that.
   systemd unit puts everything back, and the next start replays any leftover
   journal. `/run` is tmpfs, so a reboot clears the journal along with the
   settings it describes.
-- The DSCP marker is a **tcx link** on kernel 6.6+, so it detaches by itself
-  if the process dies. On older kernels it falls back to a cls_bpf filter,
-  which is journalled and removed by `--restore`.
+- The DSCP marker and the arrival meter are **tcx links**, so they detach
+  by themselves if the process dies, and they sit next to any qdisc or tc
+  filter already on the interface (CAKE, for example) without touching it.
 - `--dry-run` logs every intended change without making any of them. A lock
   file stops two instances from fighting over the same knobs.
 
@@ -253,7 +253,8 @@ that.
 
 Every [release](https://github.com/shanefagan/bpfrag/releases) has a `.deb`
 (Debian 12+, Ubuntu 22.04+), an `.rpm` (current Fedora) and a binary tarball
-that runs on any x86-64 distro with glibc 2.35 or newer.
+that runs on any x86-64 distro with glibc 2.35 or newer, all on kernel 6.6
+or newer.
 
 Building it yourself needs Rust 1.85 or newer, clang, libclang (for
 bindgen), libelf and zlib. Every route below installs the service without
@@ -379,14 +380,10 @@ Tiers, classifier lists and detector thresholds go in
 
 ## Requirements
 
-- **Kernel ≥ 6.4 with BTF** (`/sys/kernel/btf/vmlinux`) for the primary
-  hooks, the `sock_send_length` and `sock_recv_length` raw tracepoints.
-  Fedora, Arch/CachyOS, Bazzite, Nobara, current SteamOS and Ubuntu 24.04
-  all qualify.
-- **Kernels 5.17–6.3** use a fallback on fexit of
-  `udp{,v6}_{send,recv}msg`. It compiles, but it hasn't been tested on a real
-  old kernel yet. Run `--check` to see which path you get.
-- **DSCP marking** uses tcx on 6.6+, and legacy tc otherwise.
+- **Kernel 6.6 or newer with BTF** (`/sys/kernel/btf/vmlinux`): UDP is
+  counted with the `sock_send_length` and `sock_recv_length` tracepoints
+  (6.4), and the tc programs attach as tcx links (6.6). `--check` tells
+  you whether this machine qualifies.
 - **Root.** Under the hood it uses `CAP_BPF`, `CAP_PERFMON` and
   `CAP_NET_ADMIN`, plus `CAP_SYS_PTRACE` to read a game's
   `/proc/<pid>/environ` when the game runs as your user. The systemd unit
@@ -426,9 +423,9 @@ src/bpf/main.bpf.c           BPF programs: per-process UDP counters, exit events
                              marker, arrival meter
 src/bpf/intf.h               structs and constants shared by C and Rust
 src/bpf/vmlinux_lite.h       minimal CO-RE kernel types
-src/bpf/mod.rs               hook selection (tracepoints or fexit)
+src/bpf/mod.rs               kernel check, shared helpers
 src/bpf/maps.rs              reading and writing the BPF maps
-src/bpf/tc.rs                attaching the marker and the meter (tcx, or legacy tc)
+src/bpf/tc.rs                attaching the marker and the meter (tcx links)
 
 src/detect/mod.rs            windows, smoothing, tiers, hysteresis (pure, unit tested)
 src/detect/classify.rs       is-it-a-game rules

@@ -9,12 +9,11 @@
  * game's UDP ports. All the "is this a match, which tier" decisions live in
  * the Rust side, where they are easy to test and cannot upset the verifier.
  *
- * Hooks:
- *   raw_tp/sock_send_length, raw_tp/sock_recv_length  primary (kernel >= 6.4)
- *   fexit/udp{,v6}_{send,recv}msg                     fallback (>= 5.17)
+ * Hooks (kernel 6.6+):
+ *   raw_tp/sock_send_length, raw_tp/sock_recv_length  UDP counting per process
  *   raw_tp/sched_process_exit                         game exit -> revert now
- *   tc egress (tcx link, or legacy cls_bpf)           DSCP marking
- *   tc ingress (tcx link only)                        arrival gaps per game port
+ *   tc egress (tcx link)                              DSCP marking
+ *   tc ingress (tcx link)                             arrival gaps per game port
  */
 #include "vmlinux_lite.h"
 #include <bpf/bpf_helpers.h>
@@ -184,7 +183,7 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	}
 }
 
-/* ---- primary: generic socket tracepoints (>= 6.4) ------------------------ */
+/* ---- UDP counting: generic socket tracepoints ---------------------------- */
 
 SEC("raw_tp/sock_send_length")
 int BPF_PROG(bpfrag_send_tp, struct sock *sk, int ret, int flags)
@@ -201,36 +200,6 @@ int BPF_PROG(bpfrag_recv_tp, struct sock *sk, int ret, int flags)
 	account(sk, ret, false);
 	return 0;
 }
-
-/*
- * ---- fallback: fexit on the UDP functions (5.17 .. 6.3) -------------------
- * bpf_get_func_arg()/bpf_get_func_ret() keep us independent of the argument
- * count, which changed for udp_recvmsg in 5.19.
- */
-
-static __always_inline int fexit_common(void *ctx, bool tx)
-{
-	__u64 sk = 0, ret = 0;
-
-	if (bpf_get_func_arg(ctx, 0, &sk))
-		return 0;
-	if (bpf_get_func_ret(ctx, &ret))
-		return 0;
-	account((struct sock *)sk, (long)(int)ret, tx);
-	return 0;
-}
-
-SEC("fexit/udp_sendmsg")
-int bpfrag_udp_sendmsg(void *ctx) { return fexit_common(ctx, true); }
-
-SEC("fexit/udpv6_sendmsg")
-int bpfrag_udpv6_sendmsg(void *ctx) { return fexit_common(ctx, true); }
-
-SEC("fexit/udp_recvmsg")
-int bpfrag_udp_recvmsg(void *ctx) { return fexit_common(ctx, false); }
-
-SEC("fexit/udpv6_recvmsg")
-int bpfrag_udpv6_recvmsg(void *ctx) { return fexit_common(ctx, false); }
 
 /* ---- process exit -------------------------------------------------------- */
 
@@ -266,8 +235,8 @@ int BPF_PROG(bpfrag_exit, struct task_struct *p)
 
 /*
  * Is this local port the current game's? Only while its owner is still in
- * game_tgids: the moment userspace drops the game (or a stale legacy filter
- * outlives a crash) this stops matching, even before game_ports is cleaned.
+ * game_tgids: the moment userspace drops the game this stops matching, even
+ * before game_ports is cleaned.
  */
 static __always_inline bool game_owns(__u32 port)
 {

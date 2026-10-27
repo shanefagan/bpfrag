@@ -7,28 +7,22 @@
 //! - the arrival meter (`bpfrag_rx`) at ingress, which times the gaps
 //!   between the game's incoming packets (see `crate::health`).
 //!
-//! On kernel 6.6+ each is a tcx link: a file descriptor we hold, so the
-//! kernel detaches it by itself if bpfrag dies. On older kernels the marker
-//! falls back to a classic cls_bpf filter on a clsact qdisc, which outlives
-//! the process; those are journalled (see `tune::journal`) so `--restore`
-//! can remove them. The meter has no fallback: it only observes, and is
-//! not worth leaving anything behind for.
+//! Each is a tcx link (kernel 6.6+): a file descriptor we hold, so the
+//! kernel detaches it by itself if bpfrag dies, and nothing is left behind
+//! for `--restore` to clean up. tcx links also sit alongside other tc
+//! users (qdiscs, classic filters, other tcx programs) without touching
+//! them.
 
 use std::collections::BTreeMap;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};
 
-use anyhow::{Context, Result, bail};
-use libbpf_rs::{MapCore, MapFlags, MapMut, ProgramMut, TC_EGRESS, TcHookBuilder};
+use anyhow::{Result, bail};
+use libbpf_rs::{MapCore, MapFlags, MapMut, ProgramMut};
 use log::{debug, warn};
 
 use super::maps::mark_iface_bytes;
 use crate::bpf_skel::BpfSkel;
 use crate::net::Iface;
-
-/// Our legacy tc filter's handle and priority. Fixed, so a later run (or
-/// `--restore`) can find and remove a filter left behind by a crash.
-const TC_HANDLE: u32 = 0xbf7a;
-const TC_PRIORITY: u32 = 0xbf7a;
 
 /// Which of our tc programs a [`TcSet`] manages.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -71,19 +65,13 @@ impl Role {
     }
 }
 
-enum Attach {
-    /// tcx link fd: closing it detaches, including when we crash.
-    Tcx(#[allow(dead_code)] OwnedFd),
-    /// cls_bpf filter: outlives us, so it is journalled for cleanup.
-    Legacy(libbpf_rs::TcHook),
-}
-
-/// One tc program's attachments, one per interface.
+/// One tc program's attachments, one per interface. Each holds the tcx
+/// link's fd: closing it detaches the program, including when we crash.
 pub struct TcSet {
     role: Role,
-    attached: BTreeMap<u32, (Iface, Attach)>,
-    /// The meter couldn't attach (no tcx); said once, not every match.
-    told_no_tcx: bool,
+    attached: BTreeMap<u32, (Iface, OwnedFd)>,
+    /// The meter couldn't attach; said once, not every match.
+    told_meter_failed: bool,
 }
 
 impl TcSet {
@@ -91,7 +79,7 @@ impl TcSet {
         Self {
             role,
             attached: BTreeMap::new(),
-            told_no_tcx: false,
+            told_meter_failed: false,
         }
     }
 
@@ -103,10 +91,8 @@ impl TcSet {
             .collect()
     }
 
-    /// Attach on `ifaces` (and detach from any others). Returns ifindexes
-    /// that needed a legacy tc filter, so the caller can journal them.
-    pub fn attach(&mut self, skel: &BpfSkel, ifaces: &[Iface]) -> Vec<i32> {
-        let mut legacy = Vec::new();
+    /// Attach on `ifaces`, and detach from any others.
+    pub fn attach(&mut self, skel: &BpfSkel, ifaces: &[Iface]) {
         let wanted: Vec<u32> = ifaces.iter().map(|i| i.ifindex).collect();
         let stale: Vec<u32> = self
             .attached
@@ -133,122 +119,60 @@ impl TcSet {
                 continue;
             }
             match attach_one(skel, self.role, ifc.ifindex) {
-                Ok(a) => {
-                    let kind = match &a {
-                        Attach::Tcx(_) => "tcx",
-                        Attach::Legacy(_) => {
-                            legacy.push(ifc.ifindex as i32);
-                            "legacy tc"
-                        }
-                    };
-                    debug!("{what} attached to {} ({kind})", ifc.name);
-                    self.attached.insert(ifc.ifindex, (ifc.clone(), a));
+                Ok(fd) => {
+                    debug!("{what} attached to {}", ifc.name);
+                    self.attached.insert(ifc.ifindex, (ifc.clone(), fd));
                 }
-                Err(e) if self.role == Role::Meter => {
+                Err(e) => {
                     let _ = self
                         .role
                         .ifaces_map(skel)
                         .delete(&ifc.ifindex.to_ne_bytes());
-                    if !self.told_no_tcx {
-                        self.told_no_tcx = true;
-                        log::info!("packet-gap measurement unavailable: {e:#}");
+                    if self.role == Role::Meter {
+                        // It only measures: say so once, not every match.
+                        if !self.told_meter_failed {
+                            self.told_meter_failed = true;
+                            log::info!("packet-gap measurement unavailable: {e:#}");
+                        }
+                    } else {
+                        warn!("{}: cannot attach {what}: {e:#}", ifc.name);
                     }
                 }
-                Err(e) => warn!("{}: cannot attach {what}: {e:#}", ifc.name),
             }
         }
-        legacy
     }
 
     fn detach_one(&mut self, skel: &BpfSkel, ifindex: u32) {
-        let Some((ifc, a)) = self.attached.remove(&ifindex) else {
+        let Some((ifc, fd)) = self.attached.remove(&ifindex) else {
             return;
         };
-        match a {
-            Attach::Tcx(fd) => drop(fd),
-            Attach::Legacy(mut hook) => {
-                if let Err(e) = hook.detach() {
-                    warn!("{}: detaching tc filter: {e}", ifc.name);
-                }
-            }
-        }
+        drop(fd); // closing the link detaches the program
         let _ = self.role.ifaces_map(skel).delete(&ifindex.to_ne_bytes());
         debug!("{} detached from {}", self.role.name(), ifc.name);
     }
 
-    /// Detach everything; returns ifindexes that had legacy filters.
-    pub fn detach_all(&mut self, skel: &BpfSkel) -> Vec<i32> {
+    pub fn detach_all(&mut self, skel: &BpfSkel) {
         let keys: Vec<u32> = self.attached.keys().copied().collect();
-        let mut legacy = Vec::new();
         for k in keys {
-            if matches!(self.attached.get(&k), Some((_, Attach::Legacy(_)))) {
-                legacy.push(k as i32);
-            }
             self.detach_one(skel, k);
         }
-        legacy
     }
 }
 
-fn attach_one(skel: &BpfSkel, role: Role, ifindex: u32) -> Result<Attach> {
+fn attach_one(skel: &BpfSkel, role: Role, ifindex: u32) -> Result<OwnedFd> {
+    // Created with bpf_link_create() directly: libbpf's attach_tcx() wants
+    // an expected_attach_type, which SEC("tc") leaves unset.
     let prog = role.prog(skel);
-    // tcx (6.6+) is created with bpf_link_create() directly: libbpf's
-    // attach_tcx() wants an expected_attach_type that SEC("tc") leaves
-    // unset, and SEC("tc") is what lets the marker also run as a legacy
-    // cls_bpf filter. BPFRAG_NO_TCX=1 forces the legacy path, for
-    // debugging odd kernels.
-    let no_tcx = std::env::var_os("BPFRAG_NO_TCX").is_some();
-    if !no_tcx {
-        let fd = unsafe {
-            libbpf_sys::bpf_link_create(
-                prog.as_fd().as_raw_fd(),
-                ifindex as i32,
-                role.tcx_attach_type(),
-                std::ptr::null(),
-            )
-        };
-        if fd >= 0 {
-            return Ok(Attach::Tcx(unsafe { OwnedFd::from_raw_fd(fd) }));
-        }
-        let err = std::io::Error::from_raw_os_error(-fd);
-        if role == Role::Meter {
-            bail!("needs a tcx link (kernel 6.6+): {err}");
-        }
-        debug!("tcx link failed ({err}), falling back to legacy tc");
-    } else if role == Role::Meter {
-        bail!("BPFRAG_NO_TCX is set, and it needs a tcx link");
-    }
-    let mut hook = TcHookBuilder::new(prog.as_fd())
-        .ifindex(ifindex as i32)
-        .replace(true)
-        .handle(TC_HANDLE)
-        .priority(TC_PRIORITY)
-        .hook(TC_EGRESS);
-    hook.create().context("creating clsact qdisc")?;
-    hook.attach().context("attaching tc filter")?;
-    Ok(Attach::Legacy(hook))
-}
-
-/// Remove our legacy tc filter from an interface. Used by crash recovery,
-/// where the `TcHook` that created it is long gone.
-pub fn detach_legacy_tc(ifindex: i32) {
-    let hook = libbpf_sys::bpf_tc_hook {
-        sz: size_of::<libbpf_sys::bpf_tc_hook>() as _,
-        ifindex,
-        attach_point: libbpf_sys::BPF_TC_EGRESS,
-        ..Default::default()
+    let fd = unsafe {
+        libbpf_sys::bpf_link_create(
+            prog.as_fd().as_raw_fd(),
+            ifindex as i32,
+            role.tcx_attach_type(),
+            std::ptr::null(),
+        )
     };
-    let opts = libbpf_sys::bpf_tc_opts {
-        sz: size_of::<libbpf_sys::bpf_tc_opts>() as _,
-        handle: TC_HANDLE,
-        priority: TC_PRIORITY,
-        ..Default::default()
-    };
-    let r = unsafe { libbpf_sys::bpf_tc_detach(&hook, &opts) };
-    if r != 0 && r != -libc::ENOENT {
-        debug!(
-            "legacy tc detach on ifindex {ifindex}: {}",
-            std::io::Error::from_raw_os_error(-r)
-        );
+    if fd < 0 {
+        bail!("tcx link: {}", std::io::Error::from_raw_os_error(-fd));
     }
+    Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
