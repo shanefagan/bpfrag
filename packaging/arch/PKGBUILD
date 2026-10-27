@@ -6,7 +6,7 @@
 
 pkgname=bpfrag-git
 _pkgname=bpfrag
-pkgver=0.1.0.r1.g0000000
+pkgver=0.1.0.r21.g5b838f4
 pkgrel=1
 pkgdesc="eBPF-driven, self-reverting network tuning for competitive gaming"
 url="https://github.com/shanefagan/bpfrag"

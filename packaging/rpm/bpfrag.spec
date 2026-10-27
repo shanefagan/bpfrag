@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -105,5 +105,8 @@ cargo test --release --frozen
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Tue Oct 27 2026 Shane Fagan <mail@shanefagan.com> - 0.1.1-1
+- Build path no longer embedded in the binary
+
 * Wed Oct 21 2026 Shane Fagan <mail@shanefagan.com> - 0.1.0-1
 - Initial package
