@@ -551,6 +551,11 @@ release notes, and the release carries the `.deb`, `.rpm`, `.src.rpm`, the
 vendored-crates tarball the spec needs, the binary tarball and
 `SHA256SUMS`.
 
+To redo a tag, write the notes to a file and `git tag -s -f -F notes.md
+v0.2.0`. Copying them out of the old tag with `--format='%(contents)'`
+brings its signature along as text, and CI refuses a tag message with a
+signature block in it.
+
 ## License
 
 MIT (see `LICENSE`). Copyright © 2025–2026 Shane Fagan.

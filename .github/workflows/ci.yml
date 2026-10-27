@@ -166,14 +166,21 @@ jobs:
         with:
           path: artifacts
       - name: Publish the release
-        # The release notes are the annotated tag's message. checkout can
-        # leave the tag as a plain ref, so fetch the tag object itself.
+        # The release notes are the annotated tag's message, without its
+        # signature. checkout can leave the tag as a plain ref, so fetch the
+        # tag object itself. Not gh's --notes-from-tag: with --repo it never
+        # reads the local tag and fails with "does not exist locally".
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git fetch --force --depth=1 origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
+          git tag --list "$GITHUB_REF_NAME" --format='%(contents:subject)%0a%0a%(contents:body)' > notes.md
+          if grep -q -- '-----BEGIN .* SIGNATURE-----' notes.md; then
+            echo "::error::the tag message contains an old signature; re-tag with the notes from a file (git tag -s -f -F notes.md $GITHUB_REF_NAME)"
+            exit 1
+          fi
           mkdir release
           find artifacts -type f -exec mv -t release/ {} +
           (cd release && sha256sum -- * > SHA256SUMS)
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "bpfrag ${GITHUB_REF_NAME#v}" --notes-from-tag --verify-tag release/*
+            --title "bpfrag ${GITHUB_REF_NAME#v}" --notes-file notes.md --verify-tag release/*
