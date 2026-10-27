@@ -59,9 +59,9 @@ assets = [
     ["LICENSE-GPL-2.0", "usr/share/doc/bpfrag/LICENSE-GPL-2.0", "644"],
 ]
 conf-files = ["/etc/default/bpfrag", "/etc/bpfrag/bpfrag.toml"]
-# Installed but not enabled: run `bpfrag --check` first, then enable it.
-# On removal the unit is stopped while /usr/bin/bpfrag still exists, so
-# ExecStopPost can restore any settings changed during a match.
+# Enabled and started on first install; it does nothing until a match is
+# detected. On removal the unit is stopped while /usr/bin/bpfrag still
+# exists, so ExecStopPost can restore any settings changed during a match.
 changelog = "packaging/debian/changelog"
 maintainer-scripts = "packaging/debian/"
-systemd-units = { unit-scripts = "dist/", enable = false, start = false }
+systemd-units = { unit-scripts = "dist/", enable = true, start = true }

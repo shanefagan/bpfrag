@@ -256,15 +256,20 @@ Every [release](https://github.com/shanefagan/bpfrag/releases) has a `.deb`
 that runs on any x86-64 distro with glibc 2.35 or newer, all on kernel 6.6
 or newer.
 
-Building it yourself needs Rust 1.85 or newer, clang, libclang (for
-bindgen), libelf and zlib. Every route below installs the service without
-enabling it, so check the machine first:
+The packages enable and start the service when first installed. It does
+nothing until a game's match is detected. To see what this machine supports
+and follow what bpfrag does:
 
 ```sh
 sudo bpfrag --check && sudo bpfrag --selftest
-sudo systemctl enable --now bpfrag
 journalctl -u bpfrag -f
 ```
+
+With the binary tarball, copy the files into place and run
+`sudo systemctl enable --now bpfrag` yourself.
+
+Building it yourself needs Rust 1.85 or newer, clang, libclang (for
+bindgen), libelf and zlib.
 
 **Arch, CachyOS, EndeavourOS.** Build a package from the checkout. It builds
 whatever is committed:

@@ -1,11 +1,7 @@
 #!/bin/sh
 set -e
 
+# debhelper enables and starts bpfrag.service on first install.
 #DEBHELPER#
 
-if [ "$1" = "configure" ] && [ -z "$2" ]; then
-    echo "bpfrag installed. Check this machine, then enable the service:"
-    echo "    sudo bpfrag --check && sudo bpfrag --selftest"
-    echo "    sudo systemctl enable --now bpfrag"
-fi
 exit 0

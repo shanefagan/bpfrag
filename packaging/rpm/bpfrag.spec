@@ -75,6 +75,7 @@ install -Dpm0644 dist/bpfrag.service %{buildroot}%{_unitdir}/bpfrag.service
 install -Dpm0644 dist/bpfrag.8 %{buildroot}%{_mandir}/man8/bpfrag.8
 install -Dpm0644 dist/bpfrag.default %{buildroot}%{_sysconfdir}/default/bpfrag
 install -Dpm0644 dist/bpfrag.toml %{buildroot}%{_sysconfdir}/bpfrag/bpfrag.toml
+install -Dpm0644 dist/bpfrag.preset %{buildroot}%{_presetdir}/80-bpfrag.preset
 
 %check
 export RUSTFLAGS="%{?build_rustflags}"
@@ -82,11 +83,15 @@ export CARGO_PROFILE_RELEASE_STRIP=none
 export CARGO_PROFILE_RELEASE_DEBUG=line-tables-only
 cargo test --release --frozen
 
-# Installed but not enabled: run `bpfrag --check` first, then enable it.
-# On removal the unit is stopped while /usr/bin/bpfrag still exists, so
-# ExecStopPost can restore any settings changed during a match.
+# The preset enables the service on first install, and it is started
+# then too; it does nothing until a match is detected. On removal the unit
+# is stopped while /usr/bin/bpfrag still exists, so ExecStopPost can
+# restore any settings changed during a match.
 %post
 %systemd_post bpfrag.service
+if [ $1 -eq 1 ]; then
+    systemctl start bpfrag.service >/dev/null 2>&1 || :
+fi
 
 %preun
 %systemd_preun bpfrag.service
@@ -99,6 +104,7 @@ cargo test --release --frozen
 %doc README.md
 %{_bindir}/bpfrag
 %{_unitdir}/bpfrag.service
+%{_presetdir}/80-bpfrag.preset
 %{_mandir}/man8/bpfrag.8*
 %dir %{_sysconfdir}/bpfrag
 %config(noreplace) %{_sysconfdir}/bpfrag/bpfrag.toml

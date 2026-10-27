@@ -1,18 +1,12 @@
 post_install() {
-  cat <<MSG
-==> bpfrag installed. Check what works on this machine, then enable it:
-      sudo bpfrag --check && sudo bpfrag --selftest
-      sudo systemctl enable --now bpfrag
-    Flags: /etc/default/bpfrag   Tiers and lists: /etc/bpfrag/bpfrag.toml
-MSG
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now bpfrag.service >/dev/null 2>&1 || true
 }
 
 post_upgrade() {
+  # Respects a disabled service: only restarts it if it's running.
   systemctl daemon-reload >/dev/null 2>&1 || true
-  if systemctl is-active --quiet bpfrag.service 2>/dev/null; then
-    echo "==> restarting bpfrag"
-    systemctl try-restart bpfrag.service
-  fi
+  systemctl try-restart bpfrag.service >/dev/null 2>&1 || true
 }
 
 pre_remove() {

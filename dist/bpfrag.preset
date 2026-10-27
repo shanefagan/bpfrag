@@ -1,0 +1,3 @@
+# Enable bpfrag when the package is installed. It does nothing until a
+# game's match is detected, and puts every setting back afterwards.
+enable bpfrag.service
