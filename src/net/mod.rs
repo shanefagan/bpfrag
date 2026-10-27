@@ -6,11 +6,13 @@
 //! - this file: which interfaces exist, which carry default routes, and
 //!   what kind each one is;
 //! - [`ethtool`]: NIC interrupt coalescing through the ethtool ioctl;
-//! - [`nl80211`]: Wi-Fi power save over generic netlink.
+//! - [`nl80211`]: Wi-Fi power save over generic netlink;
+//! - [`genl`]: the generic netlink it uses.
 //!
 //! What to change and when lives in `tune`.
 
 pub mod ethtool;
+pub mod genl;
 pub mod nl80211;
 
 use std::ffi::CStr;
