@@ -10,7 +10,7 @@
 #define __BPFRAG_INTF_H
 
 enum consts {
-	MAX_PROCS = 8192,	/* tracked UDP-using processes */
+	MAX_PROCS = 8192,	/* tracked processes using UDP or TCP */
 	MAX_WATCH = 64,		/* processes we want exit events for */
 	MAX_PORTS = 1024,	/* game UDP ports being DSCP marked */
 	MAX_IFACES = 64,
@@ -29,7 +29,11 @@ enum stat_idx {
 	NR_STATS,
 };
 
-/* Per-process (tgid) UDP counters, one copy per CPU. */
+/*
+ * Per-process (tgid) counters, one copy per CPU. Packets and bytes are UDP
+ * (what match detection looks at); TCP bytes are counted separately, for
+ * spotting bulk transfers during a match.
+ */
 struct proc_stats {
 	__u64 tx_pkts;
 	__u64 rx_pkts;
@@ -37,6 +41,8 @@ struct proc_stats {
 	__u64 rx_bytes;
 	__u32 ifindex;		/* egress device seen on a connected socket */
 	__u32 _pad;
+	__u64 tcp_tx_bytes;
+	__u64 tcp_rx_bytes;
 };
 
 /* Local UDP port owned by a game process, learned in the send hook. */

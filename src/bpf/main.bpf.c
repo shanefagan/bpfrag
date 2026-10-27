@@ -4,13 +4,13 @@
  *
  * Copyright (C) 2025-2026 Shane Fagan
  *
- * Keep the kernel side dumb and cheap: count UDP datagrams per process, tell
+ * Keep the kernel side dumb and cheap: count traffic per process, tell
  * userspace when a watched game exits, and rewrite DSCP on packets leaving a
  * game's UDP ports. All the "is this a match, which tier" decisions live in
  * the Rust side, where they are easy to test and cannot upset the verifier.
  *
  * Hooks (kernel 6.6+):
- *   raw_tp/sock_send_length, raw_tp/sock_recv_length  UDP counting per process
+ *   raw_tp/sock_send_length, raw_tp/sock_recv_length  UDP and TCP counting per process
  *   raw_tp/sched_process_exit                         game exit -> revert now
  *   tc egress (tcx link)                              DSCP marking
  *   tc ingress (tcx link)                             arrival gaps per game port
@@ -128,7 +128,7 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	if (family != AF_INET && family != AF_INET6)
 		return;
 	proto = BPF_CORE_READ(sk, sk_protocol);
-	if (proto != IPPROTO_UDP)
+	if (proto != IPPROTO_UDP && proto != IPPROTO_TCP)
 		return;
 
 	tgid = bpf_get_current_pid_tgid() >> 32;
@@ -146,6 +146,13 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	}
 
 	/* per-CPU value: plain increments are safe */
+	if (proto == IPPROTO_TCP) {
+		if (tx)
+			st->tcp_tx_bytes += ret;
+		else
+			st->tcp_rx_bytes += ret;
+		return;
+	}
 	if (!tx) {
 		st->rx_pkts++;
 		st->rx_bytes += ret;
@@ -187,7 +194,7 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	}
 }
 
-/* ---- UDP counting: generic socket tracepoints ---------------------------- */
+/* ---- counting: generic socket tracepoints -------------------------------- */
 
 SEC("raw_tp/sock_send_length")
 int BPF_PROG(bpfrag_send_tp, struct sock *sk, int ret, int flags)

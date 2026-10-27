@@ -157,6 +157,62 @@ pub const BUILTIN_GAME_PATHS: &[&str] = &[
 /// Sysctls bpftune tunes itself. bpftune's sysctl watcher disables the
 /// owning tuner as soon as any other process writes one of these, so while
 /// bpftune runs we leave them to it (it sizes them from real drop data).
+/// Never demoted as bulk during a match, however much they move: their
+/// traffic is what the player is doing right now. Streaming and game
+/// streaming upload (a streamer's OBS must not land in the Bulk tin), voice
+/// and video calls, and VPN or overlay clients that carry the game's own
+/// packets inside their tunnel.
+pub const BUILTIN_BULK_NEVER: &[&str] = &[
+    // streaming, recording, game streaming hosts
+    "obs",
+    "obs-studio",
+    "sunshine",
+    "parsecd",
+    "moonlight",
+    "rustdesk",
+    // voice and video calls
+    "discord",
+    "discordcanary",
+    "discordptb",
+    "vesktop",
+    "webcord",
+    "legcord",
+    "armcord",
+    "equibop",
+    "teamspeak*",
+    "ts3client*",
+    "mumble",
+    "zoom",
+    "teams-for-linux",
+    "skypeforlinux",
+    // VPN and overlay clients: their traffic may be the game's
+    "openvpn",
+    "openconnect",
+    "tailscaled",
+    "zerotier-one",
+    "nebula",
+    "netbird*",
+    "warp-svc",
+    "sing-box",
+    "xray",
+    "v2ray",
+    "wstunnel",
+    "ssh",
+];
+
+/// Always demoted during a match while they move anything: peer-to-peer
+/// clients, whose many connections are the classic cause of bufferbloat.
+pub const BUILTIN_BULK_ALWAYS: &[&str] = &[
+    "qbittorrent*",
+    "transmission-*",
+    "deluge*",
+    "rtorrent",
+    "aria2c",
+    "ktorrent",
+    "fragments",
+    "tixati",
+];
+
 pub const BPFTUNE_SYSCTLS: &[&str] = &[
     // net_buffer tuner
     "net.core.netdev_max_backlog",

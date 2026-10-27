@@ -15,8 +15,8 @@ use crate::bpf_intf;
 use crate::bpf_skel::BpfSkel;
 use crate::detect::Sample;
 
-/// Cumulative UDP counters for every process the BPF side has seen, summed
-/// over CPUs. A process's entry disappears when it exits.
+/// Cumulative UDP and TCP counters for every process the BPF side has seen,
+/// summed over CPUs. A process's entry disappears when it exits.
 pub fn read_proc_stats(skel: &BpfSkel) -> Vec<Sample> {
     let map = &skel.maps.proc_stats;
     let mut out = Vec::new();
@@ -34,6 +34,8 @@ pub fn read_proc_stats(skel: &BpfSkel) -> Vec<Sample> {
             s.rx_pkts += ps.rx_pkts;
             s.tx_bytes += ps.tx_bytes;
             s.rx_bytes += ps.rx_bytes;
+            s.tcp_tx_bytes += ps.tcp_tx_bytes;
+            s.tcp_rx_bytes += ps.tcp_rx_bytes;
             if ps.ifindex != 0 {
                 s.ifindex = ps.ifindex;
             }

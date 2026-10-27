@@ -34,13 +34,15 @@ use crate::bpf::{self, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
 use crate::config::{Config, parse_dscp};
+use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
-use crate::detect::{Action, Detector, SessionInfo};
+use crate::detect::{Action, Detector, Sample, SessionInfo};
 use crate::health;
 use crate::net::{self, Iface};
 use crate::stats::{
-    self, AppliedMetric, Counters, DscpMetrics, Metrics, RecentMatch, SessionMetrics, TopProc,
+    self, AppliedMetric, BulkMetric, Counters, DscpMetrics, Metrics, RecentMatch, SessionMetrics,
+    TopProc,
 };
 use crate::tune::{Knobs, coexist};
 
@@ -133,6 +135,8 @@ pub struct Tuner<'a> {
     /// The current match's connection health.
     health: health::Tracker,
     detector: Detector,
+    /// Processes moving bulk data during the match.
+    bulk: BulkDetector,
     procs: ProcfsLookup,
     knobs: Knobs,
     /// When the current match started (None between matches).
@@ -202,6 +206,7 @@ impl<'a> Tuner<'a> {
             knobs: Knobs::new(&run_dir, run.dry_run),
             run_dir,
             detector: Detector::new(cfg.detect.clone()),
+            bulk: BulkDetector::new(&cfg.bulk),
             procs: ProcfsLookup::new(&cfg.classify),
             cfg,
             skel,
@@ -334,6 +339,7 @@ impl<'a> Tuner<'a> {
         maps::clear_port_rx(&self.skel);
         self.health.finish();
         self.egress.reset();
+        self.bulk.reset();
         let (done, kept) = self.knobs.restore_all();
         if !done.is_empty() {
             debug!("restored: {}", done.join(", "));
@@ -474,6 +480,38 @@ impl<'a> Tuner<'a> {
 
     /// The snapshot written to stats.json every tick, for `--monitor`,
     /// `--waybar` and the `--stats` log line.
+    /// What happens to bulk packets, for the log and --monitor.
+    fn bulk_marking(&self) -> String {
+        if !self.cfg.bulk.enabled {
+            "not marked: bulk.enabled is off".into()
+        } else if self.dry_run {
+            format!("dry run: would mark {}", self.cfg.bulk.class)
+        } else {
+            format!("marked {}", self.cfg.bulk.class)
+        }
+    }
+
+    /// Follow which other processes move bulk data while a match is on.
+    fn track_bulk(&mut self, dt: f64, samples: &[Sample]) {
+        let Some(game) = self.detector.session().map(|s| s.tgid) else {
+            return;
+        };
+        let procs = &self.procs;
+        let mut names = |tgid: u32| procs.names(tgid);
+        let events = self.bulk.tick(dt, samples, &[game], &mut names);
+        for e in events {
+            match e {
+                BulkEvent::Started(p) => info!(
+                    "Bulk transfer during the match: {} at {:.0} Mbit/s ({})",
+                    p.name,
+                    p.mbps,
+                    self.bulk_marking()
+                ),
+                BulkEvent::Stopped { name, .. } => info!("{name} is no longer moving bulk data"),
+            }
+        }
+    }
+
     fn get_metrics(&mut self) -> Metrics {
         let session = self.detector.session().map(|s| SessionMetrics {
             tgid: s.tgid,
@@ -487,6 +525,16 @@ impl<'a> Tuner<'a> {
                 .unwrap_or(0),
             egress: iface_names(&self.seen_egress()),
             health: self.health.latest().cloned(),
+            bulk: self
+                .bulk
+                .bulk()
+                .into_iter()
+                .map(|b| BulkMetric {
+                    name: b.name,
+                    mbps: b.mbps,
+                })
+                .collect(),
+            bulk_marking: self.bulk_marking(),
         });
         let applied = self
             .knobs
@@ -626,6 +674,7 @@ impl<'a> Tuner<'a> {
             for a in actions {
                 self.handle(a);
             }
+            self.track_bulk(dt, &samples);
 
             self.track_session();
             let m = self.get_metrics();

@@ -23,6 +23,7 @@
 //! asymmetric confidence for up/down changes, a dwell time between changes,
 //! and "never fall back to CASUAL while traffic is still flowing".
 
+pub mod bulk;
 pub mod classify;
 pub mod egress;
 
@@ -41,11 +42,22 @@ const CONFIDENCE_TO_CASUAL: u32 = 6;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sample {
     pub tgid: u32,
+    /// UDP only: what match detection looks at.
     pub tx_pkts: u64,
     pub rx_pkts: u64,
     pub tx_bytes: u64,
     pub rx_bytes: u64,
     pub ifindex: u32,
+    /// TCP bytes, for spotting bulk transfers.
+    pub tcp_tx_bytes: u64,
+    pub tcp_rx_bytes: u64,
+}
+
+impl Sample {
+    /// Every byte this process has sent and received, UDP and TCP.
+    pub fn total_bytes(&self) -> u64 {
+        self.tx_bytes + self.rx_bytes + self.tcp_tx_bytes + self.tcp_rx_bytes
+    }
 }
 
 /// One sampling window for one process.
@@ -788,6 +800,7 @@ mod tests {
                 tx_bytes: 300,
                 rx_bytes: 300,
                 ifindex: 0,
+                ..Default::default()
             },
         );
         sim.procs.games.push(88);

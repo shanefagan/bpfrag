@@ -13,7 +13,8 @@
 mod builtin;
 
 pub use builtin::{
-    BPFTUNE_SYSCTLS, BUILTIN_DENY, BUILTIN_GAME_PATHS, BUILTIN_LAUNCHERS, builtin_profiles,
+    BPFTUNE_SYSCTLS, BUILTIN_BULK_ALWAYS, BUILTIN_BULK_NEVER, BUILTIN_DENY, BUILTIN_GAME_PATHS,
+    BUILTIN_LAUNCHERS, builtin_profiles,
 };
 
 use std::collections::BTreeMap;
@@ -230,10 +231,63 @@ impl Default for Dscp {
     }
 }
 
+/// Demoting bulk transfers (downloads, torrents, uploads) while a match is
+/// on: their packets get a low-priority DSCP, so CAKE or a QoS router
+/// serves the game first.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Bulk {
+    /// Mark bulk flows. When off, bulk transfers are still detected and
+    /// shown (in --monitor and the log), but nothing is marked.
+    pub enabled: bool,
+    /// DSCP for bulk packets. LE (RFC 8622) is CAKE's Bulk tin with
+    /// diffserv3/4/8; use CS1 for routers that predate LE.
+    pub class: String,
+    /// A process moving at least this many megabits per second (sent plus
+    /// received) for `secs` seconds is bulk.
+    pub min_mbps: f64,
+    pub secs: u32,
+    /// Seconds below the rate before a process stops being bulk.
+    pub release_secs: u32,
+    /// Process globs (comm or exe name) never demoted, added to the
+    /// built-in list (streaming, voice, VPN clients).
+    pub never: Vec<String>,
+    /// Process globs demoted whenever they move anything, added to the
+    /// built-in list (torrent clients).
+    pub always: Vec<String>,
+    /// If false, the built-in lists are replaced instead of extended.
+    pub use_builtin_lists: bool,
+}
+
+impl Default for Bulk {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            class: "LE".into(),
+            min_mbps: 2.0,
+            secs: 5,
+            release_secs: 10,
+            never: vec![],
+            always: vec![],
+            use_builtin_lists: true,
+        }
+    }
+}
+
+impl Bulk {
+    pub fn never_list(&self) -> Vec<String> {
+        Classify::merged(&self.never, BUILTIN_BULK_NEVER, self.use_builtin_lists)
+    }
+    pub fn always_list(&self) -> Vec<String> {
+        Classify::merged(&self.always, BUILTIN_BULK_ALWAYS, self.use_builtin_lists)
+    }
+}
+
 pub fn parse_dscp(s: &str) -> Result<u8> {
     let up = s.trim().to_ascii_uppercase();
     let v = match up.as_str() {
         "BE" | "CS0" | "DF" => 0,
+        "LE" => 1, // RFC 8622 lower effort: CAKE's Bulk tin
         "CS1" => 8,
         "CS2" => 16,
         "CS3" => 24,
@@ -378,6 +432,7 @@ struct ConfigFile {
     detect: Detect,
     classify: Classify,
     dscp: Dscp,
+    bulk: Bulk,
     tier: TiersFile,
 }
 
@@ -387,6 +442,7 @@ pub struct Config {
     pub detect: Detect,
     pub classify: Classify,
     pub dscp: Dscp,
+    pub bulk: Bulk,
     /// Indexed by `Tier as usize`; use `profile()`.
     pub profiles: [Profile; 3],
 }
@@ -398,6 +454,7 @@ impl Default for Config {
             detect: Detect::default(),
             classify: Classify::default(),
             dscp: Dscp::default(),
+            bulk: Bulk::default(),
             profiles: builtin_profiles(),
         }
     }
@@ -423,6 +480,7 @@ impl Config {
             detect: file.detect,
             classify: file.classify,
             dscp: file.dscp,
+            bulk: file.bulk,
             profiles,
         };
         cfg.validate()?;
@@ -472,6 +530,13 @@ impl Config {
             bail!("general.tick_ms must be >= 100");
         }
         parse_dscp(&self.dscp.class)?;
+        parse_dscp(&self.bulk.class).context("bulk.class")?;
+        if !self.bulk.min_mbps.is_finite() || self.bulk.min_mbps <= 0.0 {
+            bail!("bulk.min_mbps must be above 0");
+        }
+        if self.bulk.secs == 0 || self.bulk.release_secs == 0 {
+            bail!("bulk.secs and bulk.release_secs must be >= 1");
+        }
         for p in &self.profiles {
             for k in p.sysctl.keys() {
                 if crate::util::sysctl_path(k).is_none() {
@@ -509,6 +574,7 @@ impl Config {
             detect: &'a Detect,
             classify: &'a Classify,
             dscp: &'a Dscp,
+            bulk: &'a Bulk,
             tier: BTreeMap<String, TierOut>,
         }
         let tier = self
@@ -536,6 +602,7 @@ impl Config {
             detect: &self.detect,
             classify: &self.classify,
             dscp: &self.dscp,
+            bulk: &self.bulk,
             tier,
         })?)
     }
@@ -556,6 +623,7 @@ mod tests {
         assert_eq!(parse_dscp("EF").unwrap(), 46);
         assert_eq!(parse_dscp("AF41").unwrap(), 34);
         assert_eq!(parse_dscp("10").unwrap(), 10);
+        assert_eq!(parse_dscp("le").unwrap(), 1);
         assert!(parse_dscp("AF51").is_err());
         assert!(parse_dscp("64").is_err());
     }

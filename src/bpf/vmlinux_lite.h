@@ -42,6 +42,7 @@ typedef _Bool bool;
 #define AF_INET 2
 #define AF_INET6 10
 #define IPPROTO_UDP 17
+#define IPPROTO_TCP 6
 #define ETH_P_IP 0x0800
 #define ETH_P_IPV6 0x86DD
 #define ETH_HLEN 14

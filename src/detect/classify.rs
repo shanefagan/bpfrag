@@ -394,6 +394,16 @@ impl ProcfsLookup {
     }
 }
 
+impl ProcfsLookup {
+    /// Display name, and the names lists are matched against (comm, exe
+    /// name). None if the process is gone.
+    pub fn names(&self, tgid: u32) -> Option<(String, Vec<String>)> {
+        let info = self.classifier.read(tgid)?;
+        let all = vec![info.comm.clone(), info.exe_name().to_string()];
+        Some((info.display_name(), all))
+    }
+}
+
 impl ProcessLookup for ProcfsLookup {
     fn verdict(&mut self, tgid: u32) -> (Verdict, String) {
         self.lookup(tgid)

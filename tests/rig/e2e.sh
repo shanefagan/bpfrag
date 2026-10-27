@@ -19,7 +19,7 @@ snap() { for k in $KEYS; do echo "$k = $(sysctl -n $k 2>&1 | tr '\t' ' ')"; done
 same() { snap > $W/now; if diff -q $W/base $W/now >/dev/null; then ok "$1: settings identical to baseline"; else bad "$1"; diff $W/base $W/now; fi; }
 
 cleanup() {
-  pkill -f "^[^ ]*(fakeshooter|Discord|firefox|randomd) $W/" 2>/dev/null
+  pkill -f "^[^ ]*(fakeshooter|Discord|firefox|randomd|steam|obs) $W/" 2>/dev/null
   [ -n "${SRV:-}" ] && kill $SRV 2>/dev/null
   [ -n "${D:-}" ] && kill -INT $D 2>/dev/null && wait $D 2>/dev/null
   umount "$W/run8" 2>/dev/null
@@ -34,10 +34,10 @@ cleanup() {
 trap cleanup EXIT
 
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
-cp "$HERE/client.py" "$HERE/server.py" $W/
+cp "$HERE/client.py" "$HERE/server.py" "$HERE/bulk.py" $W/
 mkdir -p $W/steamapps/common/FakeShooter $W/apps
 ln -s "$(command -v python3)" $W/steamapps/common/FakeShooter/fakeshooter
-for n in Discord firefox randomd; do ln -s "$(command -v python3)" $W/apps/$n; done
+for n in Discord firefox randomd steam obs; do ln -s "$(command -v python3)" $W/apps/$n; done
 ln -s "$(command -v sleep)" $W/apps/bpftune
 cat > $W/cfg.toml <<EOT
 [general]
@@ -185,6 +185,25 @@ else
   echo "  skip cannot make a read-only bind mount here"
 fi
 kill -INT $D; wait $D; D=
+
+echo "== 9. bulk transfers during a match"
+# "steam" downloads and "obs" uploads, both well over the rate; only the
+# Steam-like download is bulk (OBS is on the never list).
+cat $W/cfg.toml > $W/cfg9.toml
+printf '[bulk]\nenabled = true\nmin_mbps = 2\nsecs = 2\nrelease_secs = 3\n' >> $W/cfg9.toml
+"$B" -c $W/cfg9.toml > $W/d9.log 2>&1 & D=$!; sleep 1
+game 64 180; sleep 5
+$W/apps/steam $W/bulk.py down 10 & BS=$!
+$W/apps/obs $W/bulk.py up 10 & BO=$!
+sleep 5
+grep -q "Bulk transfer during the match: steam" $W/d9.log && ok "a download during the match is bulk" || bad "steam not seen as bulk"
+grep -q "Bulk transfer during the match: obs" $W/d9.log && bad "OBS upload treated as bulk" || ok "OBS upload left alone"
+# (the rig's own server is a local process too, so it can show up as well)
+"$B" -c $W/cfg9.toml --monitor 0 | grep -q "bulk: .*steam .*marked LE" && ok "monitor shows the bulk transfer" || bad "monitor: $("$B" -c $W/cfg9.toml --monitor 0 | grep bulk)"
+kill $BS; sleep 5
+grep -q "steam is no longer moving bulk data" $W/d9.log && ok "bulk released when the download stops" || bad "bulk not released"
+kill $BO $G; kill -INT $D; wait $D; D=
+same "after bulk match"
 
 echo; echo "passed $PASS, failed $FAIL"
 [ $FAIL = 0 ]

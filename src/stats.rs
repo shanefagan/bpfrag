@@ -30,6 +30,18 @@ pub struct SessionMetrics {
     /// Connection health so far.
     #[serde(default)]
     pub health: Option<Health>,
+    /// Processes moving bulk data during the match.
+    #[serde(default)]
+    pub bulk: Vec<BulkMetric>,
+    /// What happens to their packets: "marked LE", "not marked (...)".
+    #[serde(default)]
+    pub bulk_marking: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkMetric {
+    pub name: String,
+    pub mbps: f64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -203,6 +215,14 @@ impl Metrics {
         }
         if let Some(h) = self.session.as_ref().and_then(|s| s.health.as_ref()) {
             writeln!(w, "  connection: {}", h.summary())?;
+        }
+        if let Some(s) = self.session.as_ref().filter(|s| !s.bulk.is_empty()) {
+            let list: Vec<String> = s
+                .bulk
+                .iter()
+                .map(|b| format!("{} {:.0} Mbit/s", b.name, b.mbps))
+                .collect();
+            writeln!(w, "  bulk: {} ({})", list.join(", "), s.bulk_marking)?;
         }
         if !self.applied.is_empty() {
             writeln!(w, "\nApplied:")?;
