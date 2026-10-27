@@ -5,6 +5,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     # GitHub's Ubuntu runners have kernel BTF, the sock_*_length tracepoints
