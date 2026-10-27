@@ -128,6 +128,9 @@ container) and the .rpm (Fedora container).
 
 Small, focused commits with a message that says what changed and why.
 Behaviour changes, refactors and dependency bumps go in separate commits.
+An agent's commits end with a `Co-Authored-By:` trailer naming it; don't
+add links to chat sessions (they're private, so dead links for everyone
+else).
 
 Commits on `main` are GPG-signed by Shane. An agent that can't sign as him
 delivers its work as commits on a `claude/<topic>` branch in his checkout,
