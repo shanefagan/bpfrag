@@ -5,7 +5,7 @@
 #
 #   packaging/bump-version.sh 0.2.0 "Per-match network health report"
 #   git commit -am "Release 0.2.0"
-#   git tag -a v0.2.0 -m "bpfrag 0.2.0"
+#   git tag -a v0.2.0                # its message becomes the release notes
 #   git push origin main v0.2.0      # CI builds the packages and the release
 #
 # Updates Cargo.toml and Cargo.lock, the RPM spec (Version, Release,
@@ -54,5 +54,5 @@ deb=packaging/debian/changelog
 sed -i "1s/^\.TH BPFRAG 8 \"[^\"]*\" \"bpfrag [^\"]*\"/.TH BPFRAG 8 \"$(date +%Y-%m)\" \"bpfrag $new\"/" dist/bpfrag.8
 
 echo "bpfrag $old -> $new. Next:"
-echo "  git commit -am \"Release $new\" && git tag -a v$new -m \"bpfrag $new\""
+echo "  git commit -am \"Release $new\" && git tag -a v$new   # message = release notes"
 echo "  git push origin main v$new"

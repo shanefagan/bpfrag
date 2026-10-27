@@ -538,16 +538,18 @@ baseline.
 
 ```sh
 packaging/bump-version.sh 0.2.0 "One line about what changed"
-git commit -am "Release 0.2.0" && git tag -a v0.2.0 -m "bpfrag 0.2.0"
+git commit -am "Release 0.2.0"
+git tag -a v0.2.0            # the tag message becomes the release notes
 git push origin main v0.2.0
 ```
 
 The script updates `Cargo.toml`, `Cargo.lock`, the RPM spec, the Debian
 changelog and the man page; a unit test fails if any of them disagree. For
 a `v*` tag, CI runs everything as usual, checks the tag matches
-`Cargo.toml`, and publishes a GitHub release with the `.deb`, `.rpm`,
-`.src.rpm`, the vendored-crates tarball the spec needs, the binary tarball
-and `SHA256SUMS`.
+`Cargo.toml`, and publishes a GitHub release. The tag's message becomes the
+release notes, and the release carries the `.deb`, `.rpm`, `.src.rpm`, the
+vendored-crates tarball the spec needs, the binary tarball and
+`SHA256SUMS`.
 
 ## License
 

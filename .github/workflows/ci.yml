@@ -166,11 +166,14 @@ jobs:
         with:
           path: artifacts
       - name: Publish the release
+        # The release notes are the annotated tag's message. checkout can
+        # leave the tag as a plain ref, so fetch the tag object itself.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          git fetch --force --depth=1 origin "+refs/tags/$GITHUB_REF_NAME:refs/tags/$GITHUB_REF_NAME"
           mkdir release
           find artifacts -type f -exec mv -t release/ {} +
           (cd release && sha256sum -- * > SHA256SUMS)
           gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-            --title "bpfrag ${GITHUB_REF_NAME#v}" --generate-notes release/*
+            --title "bpfrag ${GITHUB_REF_NAME#v}" --notes-from-tag --verify-tag release/*
