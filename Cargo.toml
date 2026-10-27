@@ -7,6 +7,8 @@ authors = ["Shane Fagan <mail@shanefagan.com>"]
 license = "MIT"
 description = "eBPF-driven, self-reverting network tuning for competitive gaming on Linux"
 readme = "README.md"
+repository = "https://github.com/shanefagan/bpfrag"
+homepage = "https://github.com/shanefagan/bpfrag"
 keywords = ["ebpf", "gaming", "latency", "tuning", "linux"]
 categories = ["command-line-utilities", "games"]
 

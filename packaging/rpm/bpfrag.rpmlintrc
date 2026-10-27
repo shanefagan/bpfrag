@@ -1,9 +1,4 @@
 # rpmlint -r packaging/rpm/bpfrag.rpmlintrc ...
-# Technical terms (eBPF, sysctls, sched_ext) aren't misspellings, and the
-# source tarballs are made locally by build.sh, not downloaded.
+# Technical terms (eBPF, sysctls, sched_ext) aren't misspellings.
 addFilter("spelling-error")
 addFilter("summary-not-capitalized")
-addFilter("invalid-url Source")
-addFilter("no-url-tag")
-# CI and local builds are unsigned; repositories sign.
-addFilter("no-signature")

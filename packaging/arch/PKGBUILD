@@ -9,6 +9,7 @@ _pkgname=bpfrag
 pkgver=0.1.0.r1.g0000000
 pkgrel=1
 pkgdesc="eBPF-driven, self-reverting network tuning for competitive gaming"
+url="https://github.com/shanefagan/bpfrag"
 arch=('x86_64' 'aarch64')
 license=('MIT' 'GPL-2.0-only')
 depends=('gcc-libs' 'glibc' 'libelf' 'zlib')

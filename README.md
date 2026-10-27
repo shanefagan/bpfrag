@@ -221,9 +221,13 @@ that.
 
 ## Install
 
-Building needs Rust 1.85 or newer, clang, libclang (for bindgen), libelf
-and zlib. Every route below installs the service without enabling it, so
-check the machine first:
+Every [release](https://github.com/shanefagan/bpfrag/releases) has a `.deb`
+(Debian 12+, Ubuntu 22.04+), an `.rpm` (current Fedora) and a binary tarball
+that runs on any x86-64 distro with glibc 2.35 or newer.
+
+Building it yourself needs Rust 1.85 or newer, clang, libclang (for
+bindgen), libelf and zlib. Every route below installs the service without
+enabling it, so check the machine first:
 
 ```sh
 sudo bpfrag --check && sudo bpfrag --selftest
@@ -236,6 +240,15 @@ whatever is committed:
 
 ```sh
 cd packaging/arch && makepkg -si
+```
+
+makepkg compiles with the flags in `/etc/makepkg.conf`. CachyOS sets those
+for the build machine's CPU (AVX-512 on Zen 4, for example), so a package
+built there crashes with SIGILL on older CPUs. To build one to share, use
+portable flags:
+
+```sh
+RUSTFLAGS="-C target-cpu=x86-64-v2" CFLAGS="-O2 -march=x86-64-v2 -mtune=generic" makepkg -f
 ```
 
 **Debian 12+, Ubuntu 22.04+.** Build a `.deb` with
@@ -268,7 +281,9 @@ still installed, so any settings changed mid-match are restored first.
 Edits to `/etc/default/bpfrag` and `/etc/bpfrag/bpfrag.toml` survive
 upgrades.
 
-**Anything else.** Install the build dependencies and use the Makefile:
+**Anything else.** Unpack the release tarball (binary, systemd unit, man
+page, example config), or install the build dependencies and use the
+Makefile:
 
 ```sh
 make
@@ -384,6 +399,7 @@ dist/                    systemd unit, man page, /etc/default file, example conf
 packaging/arch/          PKGBUILD (bpfrag-git) + install hook
 packaging/debian/        changelog + postinst for cargo-deb ([package.metadata.deb])
 packaging/rpm/           spec, build.sh (vendored, offline), rpmlintrc
+packaging/bump-version.sh set a new version everywhere it is recorded
 tests/rig/e2e.sh         end-to-end test in a throwaway netns (root)
 .github/workflows/ci.yml fmt, clippy, tests, --selftest and the e2e rig as root,
                          MSRV check, .deb and .rpm builds
@@ -456,6 +472,21 @@ daemon-shaped noise, and checks:
 
 In every case where bpfrag owns the change, the system ends byte-identical to
 baseline.
+
+## Releasing
+
+```sh
+packaging/bump-version.sh 0.2.0 "One line about what changed"
+git commit -am "Release 0.2.0" && git tag -a v0.2.0 -m "bpfrag 0.2.0"
+git push origin main v0.2.0
+```
+
+The script updates `Cargo.toml`, `Cargo.lock`, the RPM spec, the Debian
+changelog and the man page; a unit test fails if any of them disagree. For
+a `v*` tag, CI runs everything as usual, checks the tag matches
+`Cargo.toml`, and publishes a GitHub release with the `.deb`, `.rpm`,
+`.src.rpm`, the vendored-crates tarball the spec needs, the binary tarball
+and `SHA256SUMS`.
 
 ## License
 

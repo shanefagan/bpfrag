@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 #
-# Builds offline from two tarballs: the source (git archive of HEAD) and
-# the crates it needs (cargo vendor). packaging/rpm/build.sh makes both
-# and runs rpmbuild. For COPR or mock, upload the .src.rpm it produces.
+# Builds offline from two tarballs: the source and the crates it needs
+# (cargo vendor). Each GitHub release carries both, so `spectool -g` or
+# COPR can fetch them; packaging/rpm/build.sh makes the same two files
+# from a checkout and runs rpmbuild.
 
 # libbpf (C, vendored by libbpf-sys) is built into a static library;
 # keep its objects plain so they link into the Rust binary.
@@ -17,8 +18,9 @@ Summary:        eBPF network tuning for competitive gaming that undoes itself
 # into the binary: MIT OR Apache-2.0, MIT, Unlicense OR MIT, BSD-2-Clause
 # (libbpf-sys) and LGPL-2.1-only OR BSD-2-Clause (libbpf-rs, libbpf).
 License:        MIT AND (GPL-2.0-only OR MIT) AND (MIT OR Apache-2.0) AND (Unlicense OR MIT) AND BSD-2-Clause AND (LGPL-2.1-only OR BSD-2-Clause)
-Source0:        %{name}-%{version}.tar.gz
-Source1:        %{name}-%{version}-vendor.tar.xz
+URL:            https://github.com/shanefagan/bpfrag
+Source0:        %{url}/archive/v%{version}/%{name}-%{version}.tar.gz
+Source1:        %{url}/releases/download/v%{version}/%{name}-%{version}-vendor.tar.xz
 
 ExclusiveArch:  x86_64 aarch64
 

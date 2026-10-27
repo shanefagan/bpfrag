@@ -1,4 +1,8 @@
 # SPDX-License-Identifier: MIT
+#
+# Every push runs the tests and builds the .deb, .rpm and binary tarball.
+# Pushing a tag vX.Y.Z (see packaging/bump-version.sh) also publishes them
+# as a GitHub release.
 name: CI
 
 on:
@@ -15,7 +19,7 @@ jobs:
     # real here, not just compiles.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install build and test dependencies
         run: |
@@ -55,7 +59,7 @@ jobs:
     # rust-version in Cargo.toml: 1.85, Debian 13's rustc.
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -78,7 +82,7 @@ jobs:
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
             clang libclang-dev libelf-dev zlib1g-dev pkg-config dpkg-dev lintian
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Rust toolchain and cargo-deb
         run: |
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -88,6 +92,14 @@ jobs:
         run: cargo deb --locked
       - name: Lint
         run: lintian --suppress-tags initial-upload-closes-no-bugs target/debian/*.deb
+      - name: Binary tarball (glibc 2.35+, any distro)
+        run: |
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          d=bpfrag-$ver-x86_64-linux
+          mkdir -p "target/$d"
+          cp target/release/bpfrag dist/bpfrag.service dist/bpfrag.8 dist/bpfrag.toml \
+            dist/bpfrag.default README.md LICENSE LICENSE-GPL-2.0 "target/$d/"
+          tar -C target -czf "target/$d.tar.gz" "$d"
       - name: Install, selftest the installed binary, remove, purge
         run: |
           apt-get install -y ./target/debian/*.deb
@@ -96,18 +108,22 @@ jobs:
           apt-get remove -y bpfrag
           apt-get purge -y bpfrag
           test ! -e /etc/bpfrag
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bpfrag-deb
-          path: target/debian/*.deb
+          path: |
+            target/debian/*.deb
+            target/bpfrag-*-x86_64-linux.tar.gz
 
   rpm:
     runs-on: ubuntu-24.04
     container: fedora:latest
+    env:
+      LC_ALL: C.UTF-8
     steps:
       - name: Install rpm tooling
         run: dnf -y install git rpm-build rpmlint
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install the spec's BuildRequires
         run: dnf -y builddep packaging/rpm/bpfrag.spec
       - name: Build .src.rpm and .rpm
@@ -122,9 +138,39 @@ jobs:
           bpfrag --version
           bpfrag --dump-config >/dev/null
           dnf -y remove bpfrag
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bpfrag-rpm
           path: |
             target/rpm/RPMS/*/*.rpm
             target/rpm/SRPMS/*.rpm
+            target/rpm/SOURCES/*-vendor.tar.xz
+
+  release:
+    # A vX.Y.Z tag publishes everything the jobs above built.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [test, msrv, deb, rpm]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches the version in Cargo.toml
+        run: |
+          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
+          if [ "$GITHUB_REF_NAME" != "v$ver" ]; then
+            echo "tag $GITHUB_REF_NAME, but Cargo.toml says $ver (run packaging/bump-version.sh)"
+            exit 1
+          fi
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir release
+          find artifacts -type f -exec mv -t release/ {} +
+          (cd release && sha256sum -- * > SHA256SUMS)
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "bpfrag ${GITHUB_REF_NAME#v}" --generate-notes release/*
