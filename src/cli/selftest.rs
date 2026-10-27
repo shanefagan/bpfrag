@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// `bpfrag --selftest`: load the BPF object on *this* kernel and push
-// hand-built IPv4/IPv6 packets through the DSCP marker with
-// BPF_PROG_TEST_RUN. Nothing is attached and no system setting changes.
-// Checks the rewritten DSCP / traffic class, that ECN bits and the IPv6
-// flow label survive, that the IPv4 header checksum is still valid, and
-// that non-game, stale-owner and fragment packets are left untouched.
+
+//! `bpfrag --selftest`: load the BPF object on *this* kernel and push
+//! hand-built IPv4/IPv6 packets through the DSCP marker with
+//! BPF_PROG_TEST_RUN. Nothing is attached and no system setting changes.
+//! Checks the rewritten DSCP / traffic class, that ECN bits and the IPv6
+//! flow label survive, that the IPv4 header checksum is still valid, and
+//! that non-game, stale-owner and fragment packets are left untouched.
 
 use std::mem::MaybeUninit;
 
@@ -202,7 +202,7 @@ pub fn run(cfg: &Config) -> Result<bool> {
     let m = &skel.maps;
     m.mark_ifaces.update(
         &LOOPBACK_IFINDEX.to_ne_bytes(),
-        &crate::bpf::mark_iface_bytes(14),
+        &crate::bpf::maps::mark_iface_bytes(14),
         MapFlags::ANY,
     )?;
     m.mark_tgids
@@ -305,7 +305,7 @@ pub fn run(cfg: &Config) -> Result<bool> {
         .iter()
         .filter(|c| c.name.contains("game port") && !c.name.contains("fragment"))
         .count() as u64;
-    let got = crate::bpf::game_packets(&skel)
+    let got = crate::bpf::maps::game_packets(&skel)
         .into_iter()
         .find(|(i, _)| *i == LOOPBACK_IFINDEX)
         .map_or(0, |(_, n)| n);

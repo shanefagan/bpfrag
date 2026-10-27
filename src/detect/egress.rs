@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// Which interfaces carry the game's traffic, from the DSCP marker's
-// per-interface packet counters. An interface counts once it carries a real
-// share of the game's packets, and stops counting only after a while
-// without one, so a few stray packets on a second link (relay pings, a
-// brief route flap) don't move per-interface settings back and forth.
+
+//! Which interfaces carry the game's traffic, from the DSCP marker's
+//! per-interface packet counters. An interface counts once it carries a real
+//! share of the game's packets, and stops counting only after a while
+//! without one, so a few stray packets on a second link (relay pings, a
+//! brief route flap) don't move per-interface settings back and forth.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};

@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// Wi-Fi power save over nl80211 (what `iw dev wlan0 get/set power_save`
-// does), with plain generic netlink and no extra dependencies.
-//
-// Power save lets the radio doze between beacons. During a steady 64-tick
-// stream it mostly stays awake, but lulls (between rounds, a quiet second
-// on a slow tick server) let it doze, and the next packets then wait for
-// the wake-up. Turning it off for the match removes that, and it comes
-// back on when the match ends.
+
+//! Wi-Fi power save over nl80211 (what `iw dev wlan0 get/set power_save`
+//! does), with plain generic netlink and no extra dependencies.
+//!
+//! A generic netlink request is an `nlmsghdr`, a `genlmsghdr` and a list
+//! of attributes, each 4-byte aligned. nl80211's family id isn't fixed, so
+//! every call first asks the generic netlink controller for it by name.
 
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -234,11 +232,6 @@ pub fn set_power_save(ifindex: u32, on: bool) -> io::Result<()> {
         ],
     )?;
     Ok(())
-}
-
-pub fn is_wireless(ifname: &str) -> bool {
-    std::path::Path::new(&format!("/sys/class/net/{ifname}/wireless")).exists()
-        || std::path::Path::new(&format!("/sys/class/net/{ifname}/phy80211")).exists()
 }
 
 #[cfg(test)]

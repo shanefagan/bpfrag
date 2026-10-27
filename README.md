@@ -377,32 +377,53 @@ Userspace wakes once a second.
 
 ## Layout
 
-The structure follows the sched_ext Rust schedulers:
+The top level follows the sched_ext Rust schedulers (`main.rs`,
+`bpf_skel.rs`, `bpf_intf.rs`, `stats.rs`, BPF sources in `src/bpf/`); the
+rest is grouped by job:
 
 ```
-src/bpf/main.bpf.c       BPF programs
-src/bpf/intf.h           shared C/Rust interface (bindgen -> bpf_intf.rs)
-src/bpf/vmlinux_lite.h   minimal CO-RE kernel types
-src/bpf_skel.rs          libbpf-cargo skeleton (BpfSkel)
-src/main.rs              Opts + Tuner::init()/run(), the "Scheduler" of this project
-src/detect.rs            windows, smoothing, tiers, hysteresis (pure, unit tested)
-src/classify.rs          is-it-a-game rules
-src/knobs.rs             journalled, reversible knobs
-src/coexist.rs           bpftune / sched_ext / gamemode / tuned awareness
-src/bpf.rs               hook selection, map access, tc attach
-src/net.rs               interfaces + ethtool coalescing
-src/egress.rs            which links the game uses, with hysteresis
-src/wifi.rs              Wi-Fi power save over nl80211 (generic netlink, no deps)
-src/stats.rs             Metrics, --stats, --monitor
-src/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
-dist/                    systemd unit, man page, /etc/default file, example config
-packaging/arch/          PKGBUILD (bpfrag-git) + install hook
-packaging/debian/        changelog + postinst for cargo-deb ([package.metadata.deb])
-packaging/rpm/           spec, build.sh (vendored, offline), rpmlintrc
-packaging/bump-version.sh set a new version everywhere it is recorded
-tests/rig/e2e.sh         end-to-end test in a throwaway netns (root)
-.github/workflows/ci.yml fmt, clippy, tests, --selftest and the e2e rig as root,
-                         MSRV check, .deb and .rpm builds
+src/main.rs                  command line: options and the one-shot commands
+src/daemon.rs                Tuner::init()/run(), the "Scheduler" of this project
+src/bpf_skel.rs              libbpf-cargo skeleton (BpfSkel)
+src/bpf_intf.rs              bindgen'd src/bpf/intf.h
+src/stats.rs                 metrics, --stats, --monitor, --waybar
+
+src/bpf/main.bpf.c           BPF programs: per-process UDP counters, exit events, DSCP marker
+src/bpf/intf.h               structs and constants shared by C and Rust
+src/bpf/vmlinux_lite.h       minimal CO-RE kernel types
+src/bpf/mod.rs               hook selection (tracepoints or fexit)
+src/bpf/maps.rs              reading and writing the BPF maps
+src/bpf/tc.rs                attaching the marker (tcx, or legacy tc)
+
+src/detect/mod.rs            windows, smoothing, tiers, hysteresis (pure, unit tested)
+src/detect/classify.rs       is-it-a-game rules
+src/detect/egress.rs         which links the game uses, with hysteresis
+
+src/tune/mod.rs              Knobs: apply a profile, restore everything
+src/tune/journal.rs          the restore journal and crash recovery
+src/tune/sysctl.rs           \
+src/tune/coalesce.rs          | one file per knob type, with its apply
+src/tune/writeback.rs         | and restore rules
+src/tune/wifi.rs             /
+src/tune/coexist.rs          bpftune / sched_ext / gamemode / tuned awareness
+
+src/net/mod.rs               interfaces and default routes
+src/net/ethtool.rs           NIC interrupt coalescing (ethtool ioctl)
+src/net/nl80211.rs           Wi-Fi power save (generic netlink, no deps)
+
+src/config/mod.rs            config file, command-line overrides, validation
+src/config/builtin.rs        built-in lists and tier profiles
+src/cli/check.rs             --check
+src/cli/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
+
+dist/                        systemd unit, man page, /etc/default file, example config
+packaging/arch/              PKGBUILD (bpfrag-git) + install hook
+packaging/debian/            changelog + postinst for cargo-deb ([package.metadata.deb])
+packaging/rpm/               spec, build.sh (vendored, offline), rpmlintrc
+packaging/bump-version.sh    set a new version everywhere it is recorded
+tests/rig/                   end-to-end test in a throwaway netns (root)
+.github/workflows/ci.yml     fmt, clippy, tests, --selftest and the e2e rig as root,
+                             MSRV check, .deb/.rpm builds, releases on tags
 ```
 
 ## Lineage
@@ -435,7 +456,7 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, netlink, packaging (43 tests)
+cargo test                     # detector, classifier, config, journal, netlink, packaging (44 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (12 checks)
 sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (33 checks)
 ```

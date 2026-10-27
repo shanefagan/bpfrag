@@ -1,25 +1,35 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// Session detection. This is the userspace port of the window/hysteresis
-// logic from the original bpftune gaming tuner's BPF program, with two
-// structural changes:
-//
-//  * it runs per process instead of on one global UDP counter, so a torrent
-//    client or a browser can't push someone else over the threshold, and the
-//    process we attribute a session to is the one that actually sent it;
-//  * a process must also pass the classifier (classify.rs) before a session
-//    starts.
-//
-// Kept from the original: packets-per-second smoothing over a short history,
-// a variance gate, CASUAL/COMPETITIVE/INTENSE tiers with a hysteresis margin,
-// asymmetric confidence for up/down changes, a dwell time between changes,
-// and "never fall back to CASUAL while traffic is still flowing".
+
+//! Match detection: deciding from per-process UDP counters when a game's
+//! netcode is running, which tier it is in, and when the match is over.
+//!
+//! - this file: the [`Detector`], fed one window of counters per tick;
+//! - [`classify`]: "is this process a game?";
+//! - [`egress`]: which network links the game's packets actually use.
+//!
+//! The detector is the userspace port of the window/hysteresis logic from
+//! the original bpftune gaming tuner's BPF program, with two structural
+//! changes:
+//!
+//!  * it runs per process instead of on one global UDP counter, so a torrent
+//!    client or a browser can't push someone else over the threshold, and the
+//!    process we attribute a session to is the one that actually sent it;
+//!  * a process must also pass the classifier ([`classify`]) before a
+//!    session starts.
+//!
+//! Kept from the original: packets-per-second smoothing over a short history,
+//! a variance gate, CASUAL/COMPETITIVE/INTENSE tiers with a hysteresis margin,
+//! asymmetric confidence for up/down changes, a dwell time between changes,
+//! and "never fall back to CASUAL while traffic is still flowing".
+
+pub mod classify;
+pub mod egress;
 
 use std::collections::{HashMap, VecDeque};
 
-use crate::classify::Verdict;
 use crate::config::{Detect, Tier};
+use classify::Verdict;
 
 /// Consecutive windows that must agree on a new tier before it is applied:
 /// moving up is quick, moving down slower, and back to CASUAL slowest.
@@ -172,8 +182,10 @@ struct Session {
     quiet_secs: f64,
 }
 
-/// What the detector needs from the outside world.
-pub trait Oracle {
+/// What the detector needs to know about a process. In the daemon this is
+/// [`classify::ProcfsLookup`]; tests use a fake, so the detector itself
+/// never touches /proc.
+pub trait ProcessLookup {
     /// Is this process a game, and what should we call it?
     fn verdict(&mut self, tgid: u32) -> (Verdict, String);
     /// Does the process still exist?
@@ -290,7 +302,7 @@ impl Detector {
         now: f64,
         dt: f64,
         samples: &[Sample],
-        oracle: &mut dyn Oracle,
+        procs: &mut dyn ProcessLookup,
     ) -> Vec<Action> {
         let mut actions = Vec::new();
         let dt = dt.max(0.001);
@@ -369,7 +381,7 @@ impl Detector {
         self.ignored.retain(|_, until| *until > now);
 
         // 2. Advance the active session, if any.
-        if let Some(a) = self.advance_session(now, dt, oracle) {
+        if let Some(a) = self.advance_session(now, dt, procs) {
             actions.push(a);
         }
 
@@ -398,7 +410,7 @@ impl Detector {
             if self.ignored.contains_key(&tgid) {
                 continue;
             }
-            let (verdict, name) = oracle.verdict(tgid);
+            let (verdict, name) = procs.verdict(tgid);
             let excluded = matches!(verdict, Verdict::Excluded(_));
             match verdict {
                 Verdict::Game(reason) => {
@@ -453,7 +465,12 @@ impl Detector {
         })
     }
 
-    fn advance_session(&mut self, now: f64, dt: f64, oracle: &mut dyn Oracle) -> Option<Action> {
+    fn advance_session(
+        &mut self,
+        now: f64,
+        dt: f64,
+        procs: &mut dyn ProcessLookup,
+    ) -> Option<Action> {
         let sess = self.session.as_mut()?;
         let tgid = sess.info.tgid;
         let Some(t) = self.tracks.get(&tgid) else {
@@ -472,7 +489,7 @@ impl Detector {
         if last.total() <= self.cfg.idle_pps as f64 {
             sess.quiet_secs += dt;
             let quiet = sess.quiet_secs;
-            if idle && !oracle.alive(tgid) {
+            if idle && !procs.alive(tgid) {
                 return self.end("game exited".into());
             }
             if quiet >= self.cfg.linger_secs as f64 {
@@ -538,13 +555,13 @@ impl Detector {
 mod tests {
     use super::*;
 
-    struct Fake {
+    struct FakeProcs {
         games: Vec<u32>,
         excluded: Vec<u32>,
         dead: Vec<u32>,
     }
 
-    impl Oracle for Fake {
+    impl ProcessLookup for FakeProcs {
         fn verdict(&mut self, tgid: u32) -> (Verdict, String) {
             if self.games.contains(&tgid) {
                 (Verdict::Game("test".into()), format!("game{tgid}"))
@@ -564,7 +581,7 @@ mod tests {
         det: Detector,
         now: f64,
         counters: HashMap<u32, Sample>,
-        oracle: Fake,
+        procs: FakeProcs,
     }
 
     impl Sim {
@@ -573,7 +590,7 @@ mod tests {
                 det: Detector::new(Detect::default()),
                 now: 0.0,
                 counters: HashMap::new(),
-                oracle: Fake {
+                procs: FakeProcs {
                     games: games.to_vec(),
                     excluded: vec![],
                     dead: vec![],
@@ -595,7 +612,7 @@ mod tests {
             }
             self.now += 1.0;
             let samples: Vec<Sample> = self.counters.values().copied().collect();
-            self.det.tick(self.now, 1.0, &samples, &mut self.oracle)
+            self.det.tick(self.now, 1.0, &samples, &mut self.procs)
         }
 
         fn run(&mut self, secs: usize, rates: &[(u32, u64, u64, u64)]) -> Vec<Action> {
@@ -743,7 +760,7 @@ mod tests {
         assert!(a.iter().any(|x| matches!(x, Action::Ignored { .. })));
         sim.exit(77);
         sim.run(1, &[]);
-        sim.oracle.games.push(77);
+        sim.procs.games.push(77);
         // baseline tick + 3 steady windows; no stale history or ignore entry
         assert!(starts(&sim.run(3, &[(77, 30, 30, 150)])).is_empty());
         let a = sim.run(1, &[(77, 30, 30, 150)]);
@@ -773,12 +790,12 @@ mod tests {
                 ifindex: 0,
             },
         );
-        sim.oracle.games.push(88);
+        sim.procs.games.push(88);
         sim.now += 1.0;
         let samples: Vec<Sample> = sim.counters.values().copied().collect();
         assert!(
             sim.det
-                .tick(sim.now, 1.0, &samples, &mut sim.oracle)
+                .tick(sim.now, 1.0, &samples, &mut sim.procs)
                 .is_empty()
         );
         assert!(starts(&sim.run(2, &[(88, 30, 30, 150)])).is_empty());
@@ -834,7 +851,7 @@ mod tests {
         sim.run(12, &[(9, 150, 150, 150)]);
         let a = sim.run(1, &[(9, 50, 50, 150)]);
         assert!(a.is_empty(), "{a:?}");
-        sim.oracle.dead.push(9);
+        sim.procs.dead.push(9);
         sim.exit(9);
         let a = sim.run(1, &[]);
         match &a[..] {
@@ -851,7 +868,7 @@ mod tests {
     #[test]
     fn excluded_processes_are_flagged() {
         let mut sim = Sim::new(&[]);
-        sim.oracle.excluded.push(99);
+        sim.procs.excluded.push(99);
         let a = sim.run(5, &[(99, 50, 50, 120), (98, 50, 50, 120)]);
         let flags: Vec<(u32, bool)> = a
             .iter()

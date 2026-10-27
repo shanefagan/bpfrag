@@ -1,24 +1,32 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// "Is this process a game?"  Traffic alone can't answer that: a Discord call
-// is a steady 50 pkt/s UDP stream too. The original bpftune patches learned
-// this the hard way (QUIC bursts, torrents, voice chat), and grew launcher
-// lineage checks. Here every candidate is a specific process (the BPF side
-// counts per tgid), so we can look at who it really is.
-//
-// Signals, strongest first:
-//   BPFRAG_GAME=1/0 in the environment     explicit tag (Steam launch options)
-//   allow / deny globs on comm + exe name   user + built-in lists
-//   SteamAppId / SteamGameId                 anything Steam launched
-//   LD_PRELOAD with gamemode / MangoHud      people only use these on games
-//   exe/cmdline inside a game library        steamapps/common, ~/Games, ...
-//   Wine / Proton                            wine* binary, or argv[0] is an .exe
-//   an ancestor that is a launcher           reaper, gamescope, lutris, umu...
 
+//! "Is this process a game?"  Traffic alone can't answer that: a Discord call
+//! is a steady 50 pkt/s UDP stream too. The original bpftune patches learned
+//! this the hard way (QUIC bursts, torrents, voice chat), and grew launcher
+//! lineage checks. Here every candidate is a specific process (the BPF side
+//! counts per tgid), so we can look at who it really is.
+//!
+//! Signals, strongest first:
+//!
+//! ```text
+//! BPFRAG_GAME=1/0 in the environment     explicit tag (Steam launch options)
+//! allow / deny globs on comm + exe name   user + built-in lists
+//! SteamAppId / SteamGameId                anything Steam launched
+//! LD_PRELOAD with gamemode / MangoHud     people only use these on games
+//! exe/cmdline inside a game library       steamapps/common, ~/Games, ...
+//! Wine / Proton                           wine* binary, or argv[0] is an .exe
+//! an ancestor that is a launcher          reaper, gamescope, lutris, umu...
+//! ```
+//!
+//! [`ProcfsLookup`] wraps the classifier with a cache for the daemon.
+
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
+use super::ProcessLookup;
 use crate::config::Classify;
 use crate::util::first_match;
 
@@ -39,7 +47,7 @@ impl Verdict {
         }
     }
 
-    /// "game: <why>" / "not a game: <why>", for status output.
+    /// `game: <why>` / `not a game: <why>`, for status output.
     pub fn describe(&self) -> String {
         match self {
             Verdict::Game(r) => format!("game: {r}"),
@@ -143,7 +151,7 @@ fn is_exe(arg: &str) -> bool {
     arg.len() > 4 && arg.as_bytes()[arg.len() - 4..].eq_ignore_ascii_case(b".exe")
 }
 
-/// `"name"  "Deadlock"` from a Steam appmanifest_<id>.acf.
+/// `"name"  "Deadlock"` from a Steam `appmanifest_<id>.acf`.
 fn manifest_name(path: &Path) -> Option<String> {
     let text = fs::read_to_string(path).ok()?;
     text.lines().find_map(|l| {
@@ -154,7 +162,7 @@ fn manifest_name(path: &Path) -> Option<String> {
     })
 }
 
-/// /proc/<pid>/stat field 22 (starttime), used to spot PID reuse.
+/// `/proc/<pid>/stat` field 22 (starttime), used to spot PID reuse.
 pub fn start_time(root: &Path, pid: u32) -> Option<u64> {
     let stat = fs::read_to_string(root.join(pid.to_string()).join("stat")).ok()?;
     let after = &stat[stat.rfind(')')? + 1..];
@@ -328,6 +336,71 @@ impl Classifier {
         }
 
         Verdict::NotGame("no game signals".into())
+    }
+}
+
+/// How long a verdict is reused before /proc is read again.
+const VERDICT_TTL: Duration = Duration::from_secs(30);
+
+/// One cached verdict. `start` (the process start time) tells a reused pid
+/// apart from the process the verdict was for.
+struct Cached {
+    start: u64,
+    verdict: Verdict,
+    name: String,
+    at: Instant,
+}
+
+/// The classifier over the real /proc, with a short-lived cache: the
+/// daemon asks about the same handful of processes every second.
+pub struct ProcfsLookup {
+    classifier: Classifier,
+    cache: HashMap<u32, Cached>,
+}
+
+impl ProcfsLookup {
+    pub fn new(cfg: &Classify) -> Self {
+        Self {
+            classifier: Classifier::new(cfg),
+            cache: HashMap::new(),
+        }
+    }
+
+    /// Verdict and display name for `tgid`.
+    pub fn lookup(&mut self, tgid: u32) -> (Verdict, String) {
+        let start = start_time(Path::new("/proc"), tgid).unwrap_or(0);
+        if let Some(c) = self
+            .cache
+            .get(&tgid)
+            .filter(|c| c.start == start && c.at.elapsed() < VERDICT_TTL)
+        {
+            return (c.verdict.clone(), c.name.clone());
+        }
+        let (verdict, info) = self.classifier.classify(tgid);
+        let name = info
+            .map(|i| i.display_name())
+            .unwrap_or_else(|| format!("pid {tgid}"));
+        let cached = Cached {
+            start,
+            verdict: verdict.clone(),
+            name: name.clone(),
+            at: Instant::now(),
+        };
+        self.cache.insert(tgid, cached);
+        if self.cache.len() > 512 {
+            self.cache.retain(|_, c| c.at.elapsed() < VERDICT_TTL);
+        }
+        (verdict, name)
+    }
+}
+
+impl ProcessLookup for ProcfsLookup {
+    fn verdict(&mut self, tgid: u32) -> (Verdict, String) {
+        self.lookup(tgid)
+    }
+
+    fn alive(&mut self, tgid: u32) -> bool {
+        Path::new(&format!("/proc/{tgid}")).exists()
     }
 }
 

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// Tiny logger: syslog-style "<N>" prefixes when running under journald (so
-// `journalctl -p` filtering works), timestamps otherwise.
+
+//! Tiny logger: syslog-style `<N>` prefixes when running under journald (so
+//! `journalctl -p` filtering works), timestamps otherwise.
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
 use std::io::Write;

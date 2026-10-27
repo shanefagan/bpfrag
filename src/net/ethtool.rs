@@ -1,114 +1,34 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// Interface discovery and NIC interrupt coalescing (legacy ethtool ioctl,
-// ported from the original gaming tuner patch).
 
-use std::ffi::CStr;
-use std::fs;
+//! NIC interrupt coalescing through the legacy ethtool ioctl (what
+//! `ethtool -c` / `ethtool -C` do), ported from the original gaming-tuner
+//! patch. The ioctl is used rather than ethtool netlink so this needs
+//! nothing but a socket.
+//!
+//! `struct ethtool_coalesce` is handled as raw u32 words: a command word
+//! followed by 22 fields, of which bpfrag only reads or changes four.
+
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-
-use crate::util::read_trim;
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Iface {
-    pub name: String,
-    pub ifindex: u32,
-    /// Bytes of link-layer header in front of the IP header at tc egress.
-    pub l2_len: u32,
-    /// Backed by real hardware (has a /sys/class/net/X/device link).
-    pub physical: bool,
-}
-
-impl Iface {
-    /// An L3 tunnel (wg, tun, ppp): packets leave again through another
-    /// interface underneath.
-    pub fn is_tunnel(&self) -> bool {
-        self.l2_len == 0
-    }
-}
-
-pub fn iface_by_name(name: &str) -> Option<Iface> {
-    let base = format!("/sys/class/net/{name}");
-    let ifindex: u32 = read_trim(format!("{base}/ifindex")).ok()?.parse().ok()?;
-    let ty: u32 = read_trim(format!("{base}/type")).ok()?.parse().ok()?;
-    let l2_len = match ty {
-        1 => 14,          // ARPHRD_ETHER (also Wi-Fi)
-        65534 | 512 => 0, // ARPHRD_NONE (wg, tun), ARPHRD_PPP
-        _ => return None, // something exotic: leave it alone
-    };
-    Some(Iface {
-        name: name.to_string(),
-        ifindex,
-        l2_len,
-        physical: fs::metadata(format!("{base}/device")).is_ok(),
-    })
-}
-
-pub fn iface_by_index(ifindex: u32) -> Option<Iface> {
-    let mut buf = [0 as libc::c_char; libc::IF_NAMESIZE];
-    let p = unsafe { libc::if_indextoname(ifindex, buf.as_mut_ptr()) };
-    if p.is_null() {
-        return None;
-    }
-    let name = unsafe { CStr::from_ptr(buf.as_ptr()) }
-        .to_string_lossy()
-        .into_owned();
-    iface_by_name(&name)
-}
-
-/// Interfaces carrying an IPv4 or IPv6 default route.
-pub fn default_route_ifaces() -> Vec<Iface> {
-    let mut names: Vec<String> = Vec::new();
-    if let Ok(t) = fs::read_to_string("/proc/net/route") {
-        for line in t.lines().skip(1) {
-            let f: Vec<&str> = line.split_whitespace().collect();
-            // Iface Destination Gateway Flags RefCnt Use Metric Mask ...
-            if f.len() > 7 && f[1] == "00000000" && f[7] == "00000000" {
-                names.push(f[0].to_string());
-            }
-        }
-    }
-    if let Ok(t) = fs::read_to_string("/proc/net/ipv6_route") {
-        for line in t.lines() {
-            let f: Vec<&str> = line.split_whitespace().collect();
-            // dest plen src splen nexthop metric refcnt use flags dev
-            if f.len() >= 10 && f[0].chars().all(|c| c == '0') && f[1] == "00" && f[9] != "lo" {
-                names.push(f[9].to_string());
-            }
-        }
-    }
-    names.sort();
-    names.dedup();
-    names.iter().filter_map(|n| iface_by_name(n)).collect()
-}
-
-/// Kernel driver behind an interface ("igc", "r8169", ...), for messages.
-pub fn driver(ifname: &str) -> String {
-    fs::read_link(format!("/sys/class/net/{ifname}/device/driver"))
-        .ok()
-        .and_then(|p| p.file_name().map(|f| f.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "unknown driver".into())
-}
-
-// ---- ethtool coalescing -----------------------------------------------------
 
 const SIOCETHTOOL: libc::c_ulong = 0x8946;
 const ETHTOOL_GCOALESCE: u32 = 0x0e;
 const ETHTOOL_SCOALESCE: u32 = 0x0f;
 
 pub const COALESCE_WORDS: usize = 23;
-const RX_USECS: usize = 1;
-const TX_USECS: usize = 5;
-const ADAPTIVE_RX: usize = 10;
-const ADAPTIVE_TX: usize = 11;
+// Word offsets in struct ethtool_coalesce (word 0 is the command).
+const RX_USECS: usize = 1; // rx_coalesce_usecs
+const TX_USECS: usize = 5; // tx_coalesce_usecs
+const ADAPTIVE_RX: usize = 10; // use_adaptive_rx_coalesce
+const ADAPTIVE_TX: usize = 11; // use_adaptive_tx_coalesce
 
-/// struct ethtool_coalesce, as raw u32 words (cmd + 22 fields).
+/// `struct ethtool_coalesce`, as raw u32 words (cmd + 22 fields).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct Coalesce(pub [u32; COALESCE_WORDS]);
 
+/// `struct ifreq` with `ifr_data` pointing at the ethtool request.
 #[repr(C)]
 struct IfReq {
     name: [libc::c_char; libc::IF_NAMESIZE],

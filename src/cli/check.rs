@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// `bpfrag --check`: what will (and won't) work on this machine, and who
-// else is tuning it.
+
+//! `bpfrag --check`: what will (and won't) work on this machine, and who
+//! else is tuning it.
 
 use std::path::Path;
 
-use crate::coexist;
 use crate::config::Config;
 use crate::net;
+use crate::tune::coexist;
 use crate::util::{is_root, read_trim, sysctl_path};
 
+/// One report line: `ok` is pass / fail / just information (None).
 fn line(ok: Option<bool>, what: &str, detail: impl AsRef<str>) {
     let mark = match ok {
         Some(true) => " ok ",
@@ -85,7 +86,7 @@ pub fn run(cfg: &Config) -> bool {
         );
     }
     for i in &ifaces {
-        let wireless = crate::wifi::is_wireless(&i.name);
+        let wireless = net::is_wireless(&i.name);
         let kind = match (i.l2_len, wireless) {
             (14, true) => "wifi",
             (14, false) => "ethernet",
@@ -93,7 +94,7 @@ pub fn run(cfg: &Config) -> bool {
         };
         let co = if wireless {
             // Wi-Fi drivers rarely do coalescing; power save is the knob there.
-            match crate::wifi::get_power_save(i.ifindex) {
+            match net::nl80211::get_power_save(i.ifindex) {
                 Ok(true) => match cfg.tiers_where(|p| p.wifi_powersave_off) {
                     Some(t) => format!("power save on, turned off during {t}"),
                     None => "power save on, left alone (no tier turns it off)".into(),
@@ -102,7 +103,7 @@ pub fn run(cfg: &Config) -> bool {
                 Err(e) => format!("power save unreadable via nl80211 ({e})"),
             }
         } else if i.physical {
-            match net::get_coalesce(&i.name) {
+            match net::ethtool::get_coalesce(&i.name) {
                 Ok(c) => format!("coalescing {}", c.describe()),
                 Err(e) => format!("coalescing unsupported ({e})"),
             }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025-2026 Shane Fagan
-//
-// Metrics, shared between the daemon (writes /run/bpfrag/stats.json every
-// tick, prints a line with --stats) and `bpfrag --monitor` (reads it).
+
+//! Metrics, shared between the daemon (writes /run/bpfrag/stats.json every
+//! tick, prints a line with --stats) and `bpfrag --monitor` (reads it).
 
 use std::fs;
 use std::io::Write;
