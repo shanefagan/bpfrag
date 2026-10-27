@@ -8,8 +8,10 @@
 //! For the DSCP marker it checks the rewritten DSCP / traffic class, that
 //! ECN bits and the IPv6 flow label survive, that the IPv4 header checksum
 //! is still valid, and that non-game, stale-owner and fragment packets are
-//! left untouched. For the arrival meter, that packets to the game's port
-//! are counted and timed and nothing else is.
+//! left untouched; then that a bulk process's TCP and UDP flows are demoted
+//! to the bulk class, unless the app marked them itself. For the arrival
+//! meter, that packets to the game's port are counted and timed and nothing
+//! else is.
 
 use std::mem::MaybeUninit;
 
@@ -122,6 +124,159 @@ fn tos_of(p: &[u8]) -> u8 {
     }
 }
 
+const AF_INET: u8 = 2;
+const AF_INET6: u8 = 10;
+const TCP: u8 = 6;
+const UDP: u8 = 17;
+const HOST_V4: [u8; 4] = [10, 99, 0, 1];
+const PEER_V4: [u8; 4] = [10, 99, 0, 2];
+const HOST_V6: [u8; 16] = [0xfd, 0, 0, 0x99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+const PEER_V6: [u8; 16] = [0xfd, 0, 0, 0x99, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+/// A TCP (20-byte header, ACK set) or UDP header plus a small payload.
+fn l4(proto: u8, sport: u16, dport: u16) -> Vec<u8> {
+    let mut h = Vec::new();
+    h.extend_from_slice(&sport.to_be_bytes());
+    h.extend_from_slice(&dport.to_be_bytes());
+    if proto == TCP {
+        h.extend_from_slice(&[0, 0, 0, 1, 0, 0, 0, 1, 0x50, 0x10, 0xff, 0xff, 0, 0, 0, 0]);
+    } else {
+        h.extend_from_slice(&108u16.to_be_bytes());
+        h.extend_from_slice(&[0, 0]);
+    }
+    h.extend(std::iter::repeat_n(0x5a, 100));
+    h
+}
+
+fn pkt4(tos: u8, proto: u8, src: [u8; 4], dst: [u8; 4], body: Vec<u8>) -> Vec<u8> {
+    let mut ip = vec![0x45, tos, 0, 0, 0x12, 0x34, 0x40, 0, 64, proto, 0, 0];
+    ip.extend_from_slice(&src);
+    ip.extend_from_slice(&dst);
+    let tot = (ip.len() + body.len()) as u16;
+    ip[2..4].copy_from_slice(&tot.to_be_bytes());
+    let c = csum16(&ip);
+    ip[10..12].copy_from_slice(&c.to_be_bytes());
+    let mut p = eth(0x0800);
+    p.extend(ip);
+    p.extend(body);
+    p
+}
+
+fn pkt6(tc: u8, proto: u8, src: [u8; 16], dst: [u8; 16], body: Vec<u8>) -> Vec<u8> {
+    let first = (6u32 << 28) | (u32::from(tc) << 20) | 0x54321;
+    let mut ip = first.to_be_bytes().to_vec();
+    ip.extend_from_slice(&(body.len() as u16).to_be_bytes());
+    ip.extend_from_slice(&[proto, 64]);
+    ip.extend_from_slice(&src);
+    ip.extend_from_slice(&dst);
+    let mut p = eth(0x86dd);
+    p.extend(ip);
+    p.extend(body);
+    p
+}
+
+fn words(b: &[u8]) -> [u32; 4] {
+    let mut w = [0u32; 4];
+    for (i, c) in b.chunks(4).enumerate().take(4) {
+        w[i] = u32::from_ne_bytes(c.try_into().unwrap());
+    }
+    w
+}
+
+/// A bulk_flows key as the kernel side builds it: addresses as they appear
+/// in the packet, ports in host order, local first.
+fn flow_key(family: u8, proto: u8, local: &[u8], lport: u16, remote: &[u8], rport: u16) -> Vec<u8> {
+    let k = bpf_intf::flow_key {
+        family,
+        proto,
+        lport,
+        rport,
+        laddr: words(local),
+        raddr: words(remote),
+        ..Default::default()
+    };
+    as_bytes(&k).to_vec()
+}
+
+fn as_bytes<T>(v: &T) -> &[u8] {
+    // only used for the plain integer structs from intf.h
+    unsafe { std::slice::from_raw_parts((v as *const T).cast::<u8>(), size_of::<T>()) }
+}
+
+/// Bulk flows through the marker. Returns (cases run, failures).
+fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
+    let m = &skel.maps;
+    let owner = bpf_intf::bulk_flow { tgid: 777 };
+    for key in [
+        flow_key(AF_INET, TCP, &HOST_V4, 40000, &PEER_V4, 27016),
+        // an unconnected UDP socket: protocol and local port only
+        flow_key(0, UDP, &[0; 4], 40001, &[0; 4], 0),
+        flow_key(AF_INET6, TCP, &HOST_V6, 40002, &PEER_V6, 443),
+    ] {
+        m.bulk_flows.update(&key, as_bytes(&owner), MapFlags::ANY)?;
+    }
+    crate::bpf::maps::bulk_active(skel, true);
+    let b = bulk << 2;
+    let af11 = 10u8 << 2;
+    let cases = [
+        Case {
+            name: "IPv4 TCP bulk flow demoted".into(),
+            pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 27016)),
+            expect: b,
+        },
+        Case {
+            name: "IPv4 bulk flow, ECT(0) kept".into(),
+            pkt: pkt4(0x02, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 27016)),
+            expect: b | 2,
+        },
+        Case {
+            name: "IPv4 bulk flow the app marked AF11 left alone".into(),
+            pkt: pkt4(af11, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 27016)),
+            expect: af11,
+        },
+        Case {
+            name: "IPv4 UDP from an unconnected bulk socket demoted".into(),
+            pkt: pkt4(0, UDP, HOST_V4, PEER_V4, l4(UDP, 40001, 9999)),
+            expect: b,
+        },
+        Case {
+            name: "IPv4 TCP from a bulk port to another peer untouched".into(),
+            pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 443)),
+            expect: 0,
+        },
+        Case {
+            name: "IPv6 TCP bulk flow demoted".into(),
+            pkt: pkt6(0, TCP, HOST_V6, PEER_V6, l4(TCP, 40002, 443)),
+            expect: b,
+        },
+        Case {
+            name: "IPv4 game UDP keeps the game class while bulk is on".into(),
+            pkt: pkt4(0, UDP, HOST_V4, PEER_V4, l4(UDP, GAME_PORT, 9999)),
+            expect: game << 2,
+        },
+    ];
+    let mut failed = 0;
+    let mut run = |c: &Case| match run_case(skel, c) {
+        Ok(()) => println!("  PASS {}", c.name),
+        Err(e) => {
+            failed += 1;
+            println!("  FAIL {}: {e}", c.name);
+        }
+    };
+    for c in &cases {
+        run(c);
+    }
+    // with the switch off, nothing is looked up or demoted
+    crate::bpf::maps::bulk_active(skel, false);
+    run(&Case {
+        name: "bulk switched off: nothing demoted".into(),
+        pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 27016)),
+        expect: 0,
+    });
+    crate::bpf::maps::clear_bulk(skel);
+    Ok((cases.len() + 1, failed))
+}
+
 /// The packet with its UDP destination port set to `dport`.
 fn to_port(mut p: Vec<u8>, dport: u16) -> Vec<u8> {
     let udp = if p[12..14] == [0x08, 0x00] {
@@ -133,9 +288,6 @@ fn to_port(mut p: Vec<u8>, dport: u16) -> Vec<u8> {
     p
 }
 
-/// Arrivals through the meter: packets to the game's port must be counted
-/// and timed, packets to other ports, to an untracked owner's port, and
-/// non-first fragments ignored.
 /// The tc programs must return TCX_NEXT (-1), so other tcx programs and
 /// classic tc filters on the interface still run. TC_ACT_OK would end the
 /// chain there and, for example, skip a CAKE setup's redirect to its IFB.
@@ -150,6 +302,9 @@ fn check_verdict(ret: u32) -> Result<(), String> {
     }
 }
 
+/// Arrivals through the meter: packets to the game's port must be counted
+/// and timed, packets to other ports, to an untracked owner's port, and
+/// non-first fragments ignored.
 fn check_meter(skel: &BpfSkel) -> Result<String, String> {
     let to_game = [
         to_port(ipv4(0, OTHER_PORT, 0x4000, 0), GAME_PORT),
@@ -271,6 +426,8 @@ pub fn run(cfg: &Config) -> Result<bool> {
     rodata.dscp = dscp;
     rodata.dscp_override = over;
     rodata.set_priority = cfg.dscp.set_priority;
+    let bulk = parse_dscp(&cfg.bulk.class)?;
+    rodata.bulk_dscp = bulk;
     // Only the tc program is under test; don't depend on the tracing hooks.
     let p = &mut open.progs;
     p.bpfrag_send_tp.set_autoload(false);
@@ -392,7 +549,7 @@ pub fn run(cfg: &Config) -> Result<bool> {
         .into_iter()
         .find(|(i, _)| *i == LOOPBACK_IFINDEX)
         .map_or(0, |(_, n)| n);
-    let total = cases.len() + 2;
+    let mut total = cases.len() + 2;
     if got == want {
         println!("  PASS game packets counted per interface ({got})");
     } else {
@@ -406,6 +563,9 @@ pub fn run(cfg: &Config) -> Result<bool> {
             println!("  FAIL arrival meter: {e}");
         }
     }
+    let (n, f) = check_bulk(&skel, bulk, dscp)?;
+    total += n;
+    failed += f;
     println!("{}/{total} passed", total - failed);
     Ok(failed == 0)
 }

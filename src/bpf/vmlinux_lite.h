@@ -30,6 +30,7 @@ typedef _Bool bool;
 
 /* uapi: enum bpf_map_type (subset) */
 #define BPF_MAP_TYPE_HASH 1
+#define BPF_MAP_TYPE_ARRAY 2
 #define BPF_MAP_TYPE_PERCPU_ARRAY 6
 #define BPF_MAP_TYPE_LRU_HASH 9
 #define BPF_MAP_TYPE_LRU_PERCPU_HASH 10
@@ -51,6 +52,7 @@ typedef _Bool bool;
  * which accepts the packet and skips all of those. */
 #define TCX_NEXT -1
 #define TC_PRIO_INTERACTIVE 6
+#define TC_PRIO_BULK 2
 #define MSG_PEEK 0x2
 #define MSG_ERRQUEUE 0x2000
 
@@ -98,10 +100,23 @@ struct dst_entry {
 	struct net_device *dev;
 };
 
+struct in6_addr {
+	union {
+		__u8 u6_addr8[16];
+		__be32 u6_addr32[4];
+	} in6_u;
+};
+
 struct sock_common {
-	/* skc_num lives inside anonymous unions/structs in the kernel */
+	/* these live inside anonymous unions/structs in the kernel */
+	__be32 skc_daddr;
+	__be32 skc_rcv_saddr;
+	__be16 skc_dport;
 	__u16 skc_num;
 	unsigned short skc_family;
+	/* only with CONFIG_IPV6: check bpf_core_field_exists() first */
+	struct in6_addr skc_v6_daddr;
+	struct in6_addr skc_v6_rcv_saddr;
 };
 
 struct sock {
@@ -139,6 +154,12 @@ struct ipv6hdr {
 	__u8 hop_limit;
 	__u8 saddr[16];
 	__u8 daddr[16];
+};
+
+/* the first four bytes of a TCP or UDP header */
+struct l4ports {
+	__be16 source;
+	__be16 dest;
 };
 
 struct udphdr {

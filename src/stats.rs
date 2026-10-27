@@ -81,6 +81,9 @@ pub struct Counters {
     pub dscp_kept: u64,
     pub exits: u64,
     pub events_dropped: u64,
+    /// Bulk packets demoted to `bulk.class`.
+    #[serde(default)]
+    pub bulk_marked: u64,
 }
 
 /// A finished match, newest first in `Metrics::recent`.
@@ -251,8 +254,14 @@ impl Metrics {
         let c = &self.counters;
         writeln!(
             w,
-            "\nCounters: udp {:.0} pkt/s over {} procs | dscp marked {} kept {} | exits {} | ringbuf drops {}",
-            c.udp_pps, c.udp_procs, c.dscp_marked, c.dscp_kept, c.exits, c.events_dropped
+            "\nCounters: udp {:.0} pkt/s over {} procs | dscp marked {} kept {} | bulk demoted {} | exits {} | ringbuf drops {}",
+            c.udp_pps,
+            c.udp_procs,
+            c.dscp_marked,
+            c.dscp_kept,
+            c.bulk_marked,
+            c.exits,
+            c.events_dropped
         )?;
         for n in &self.neighbours {
             writeln!(w, "Note: {n}")?;

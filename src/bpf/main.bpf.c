@@ -5,8 +5,9 @@
  * Copyright (C) 2025-2026 Shane Fagan
  *
  * Keep the kernel side dumb and cheap: count traffic per process, tell
- * userspace when a watched game exits, and rewrite DSCP on packets leaving a
- * game's UDP ports. All the "is this a match, which tier" decisions live in
+ * userspace when a watched game exits, rewrite DSCP on packets leaving a
+ * game's UDP ports, and demote the flows of processes userspace has
+ * declared bulk. All the "is this a match, which tier" decisions live in
  * the Rust side, where they are easy to test and cannot upset the verifier.
  *
  * Hooks (kernel 6.6+):
@@ -34,6 +35,7 @@ char _license[] SEC("license") = "Dual MIT/GPL";
 const volatile __u8 dscp = 32;			/* CS4: RFC 4594 real-time interactive */
 const volatile bool dscp_override = false;	/* rewrite app-chosen DSCP too */
 const volatile bool set_priority = true;	/* skb->priority = TC_PRIO_INTERACTIVE */
+const volatile __u8 bulk_dscp = 1;		/* LE: RFC 8622 lower effort */
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -101,6 +103,31 @@ struct {
 	__type(value, struct port_rx);
 } port_rx SEC(".maps");
 
+/* processes userspace declared bulk for this match */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MAX_WATCH);
+	__type(key, __u32);
+	__type(value, __u8);
+} bulk_tgids SEC(".maps");
+
+/* their sockets, learned in the counting hooks, matched by the tc programs */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, MAX_BULK_FLOWS);
+	__type(key, struct flow_key);
+	__type(value, struct bulk_flow);
+} bulk_flows SEC(".maps");
+
+/* slot 0 is non-zero while any process is bulk: the tc programs skip the
+ * flow lookups entirely otherwise */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} bulk_on SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 64 * 1024);
@@ -112,6 +139,53 @@ static __always_inline void stat_inc(__u32 idx)
 
 	if (v)
 		(*v)++;
+}
+
+/*
+ * Remember a bulk process's socket so the tc programs can find its packets.
+ * IPv4-mapped IPv6 sockets send IPv4 packets, so they are keyed as IPv4.
+ */
+static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short family,
+					    __u16 proto, __u32 tgid)
+{
+	struct bulk_flow v = { .tgid = tgid };
+	struct flow_key k = {};
+
+	k.proto = proto;
+	k.lport = BPF_CORE_READ(sk, __sk_common.skc_num);
+	k.rport = bpf_ntohs(BPF_CORE_READ(sk, __sk_common.skc_dport));
+	if (!k.lport)
+		return;
+	if (!k.rport) {
+		/* unconnected: protocol and local port only */
+		if (proto != IPPROTO_UDP)
+			return;
+	} else if (family == AF_INET6 &&
+		   bpf_core_field_exists(sk->__sk_common.skc_v6_daddr)) {
+		struct in6_addr d = {}, l = {};
+
+		BPF_CORE_READ_INTO(&d, sk, __sk_common.skc_v6_daddr);
+		if (d.in6_u.u6_addr32[0] == 0 && d.in6_u.u6_addr32[1] == 0 &&
+		    d.in6_u.u6_addr32[2] == bpf_htonl(0x0000ffff)) {
+			k.family = AF_INET;
+			k.raddr[0] = d.in6_u.u6_addr32[3];
+			k.laddr[0] = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+		} else {
+			BPF_CORE_READ_INTO(&l, sk, __sk_common.skc_v6_rcv_saddr);
+			k.family = AF_INET6;
+			__builtin_memcpy(k.raddr, d.in6_u.u6_addr32, 16);
+			__builtin_memcpy(k.laddr, l.in6_u.u6_addr32, 16);
+		}
+	} else if (family == AF_INET) {
+		k.family = AF_INET;
+		k.raddr[0] = BPF_CORE_READ(sk, __sk_common.skc_daddr);
+		k.laddr[0] = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+	} else {
+		return;
+	}
+	if (bpf_map_lookup_elem(&bulk_flows, &k))
+		return; /* known: a lookup is far cheaper than an update */
+	bpf_map_update_elem(&bulk_flows, &k, &v, BPF_ANY);
 }
 
 static __always_inline void account(struct sock *sk, long ret, bool tx)
@@ -134,6 +208,8 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	tgid = bpf_get_current_pid_tgid() >> 32;
 	if (!tgid)
 		return;
+	if (bpf_map_lookup_elem(&bulk_tgids, &tgid))
+		learn_bulk_flow(sk, family, proto, tgid);
 
 	st = bpf_map_lookup_elem(&proc_stats, &tgid);
 	if (!st) {
@@ -275,14 +351,89 @@ static __always_inline bool want_rewrite(__u8 old_tc)
 	return false;
 }
 
+/* Set an IPv4 packet's DSCP, keeping ECN, and fix the header checksum. */
+static __always_inline void set_dscp4(struct __sk_buff *skb, __u32 l2, __u8 old_tos, __u8 val)
+{
+	__u8 new_tos = (val << 2) | (old_tos & 0x3);
+
+	if (new_tos == old_tos)
+		return;
+	bpf_l3_csum_replace(skb, l2 + __builtin_offsetof(struct iphdr, check),
+			    bpf_htons(old_tos), bpf_htons(new_tos), 2);
+	bpf_skb_store_bytes(skb, l2 + __builtin_offsetof(struct iphdr, tos), &new_tos, 1, 0);
+}
+
+/* Set an IPv6 packet's traffic class (b0, b1: its first two bytes), keeping
+ * ECN and the flow label. No checksum covers it. */
+static __always_inline void set_dscp6(struct __sk_buff *skb, __u32 l2, __u8 b0, __u8 b1, __u8 val)
+{
+	__u8 old_tc = ((b0 & 0x0f) << 4) | (b1 >> 4);
+	__u8 new_tc = (val << 2) | (old_tc & 0x3);
+	__u8 nb[2];
+
+	if (new_tc == old_tc)
+		return;
+	nb[0] = (b0 & 0xf0) | (new_tc >> 4);
+	nb[1] = (b1 & 0x0f) | ((new_tc & 0x0f) << 4);
+	bpf_skb_store_bytes(skb, l2, nb, 2, 0);
+}
+
+static __always_inline bool bulk_active(void)
+{
+	__u32 zero = 0;
+	__u32 *on = bpf_map_lookup_elem(&bulk_on, &zero);
+
+	return on && *on;
+}
+
+/* Is this a bulk process's flow? Tries the exact socket, then (for UDP) an
+ * unconnected socket on the same local port. */
+static __always_inline bool is_bulk_flow(struct flow_key *k)
+{
+	struct flow_key any = {};
+
+	if (bpf_map_lookup_elem(&bulk_flows, k))
+		return true;
+	if (k->proto != IPPROTO_UDP)
+		return false;
+	any.proto = IPPROTO_UDP;
+	any.lport = k->lport;
+	return bpf_map_lookup_elem(&bulk_flows, &any) != NULL;
+}
+
+/* A game packet was marked: the interactive band for pfifo_fast & friends. */
+static __always_inline int game_marked(struct __sk_buff *skb)
+{
+	if (set_priority && skb->priority == 0)
+		skb->priority = TC_PRIO_INTERACTIVE;
+	stat_inc(STAT_DSCP_MARKED);
+	return TCX_NEXT;
+}
+
+static __always_inline int bulk_marked(struct __sk_buff *skb)
+{
+	if (set_priority && skb->priority == 0)
+		skb->priority = TC_PRIO_BULK;
+	stat_inc(STAT_BULK_MARKED);
+	return TCX_NEXT;
+}
+
+/*
+ * Egress: game packets (UDP from the game's ports) get the game's DSCP;
+ * packets of a bulk process's flows get the bulk DSCP. Bulk packets an app
+ * already marked are always left alone.
+ */
 SEC("tc")
 int bpfrag_dscp(struct __sk_buff *skb)
 {
 	void *data = (void *)(long)skb->data;
 	void *data_end = (void *)(long)skb->data_end;
 	__u32 ifindex = skb->ifindex;
+	struct flow_key k = {};
 	struct mark_iface *mi;
+	struct l4ports *pt;
 	__u32 l2;
+	__u8 proto;
 
 	mi = bpf_map_lookup_elem(&mark_ifaces, &ifindex);
 	if (!mi)
@@ -292,72 +443,75 @@ int bpfrag_dscp(struct __sk_buff *skb)
 
 	if (skb->protocol == bpf_htons(ETH_P_IP)) {
 		struct iphdr *ip = data + l2;
-		struct udphdr *udp;
-		__u8 old_tos, new_tos;
+		__u8 old_tos;
 		__u32 ihl;
 
 		if ((void *)(ip + 1) > data_end)
 			return TCX_NEXT;
-		if (ip->protocol != IPPROTO_UDP)
+		proto = ip->protocol;
+		if (proto != IPPROTO_UDP && proto != IPPROTO_TCP)
 			return TCX_NEXT;
 		if (ip->frag_off & bpf_htons(0x1fff))
-			return TCX_NEXT; /* non-first fragment, no UDP header */
+			return TCX_NEXT; /* non-first fragment, no ports */
 		ihl = (ip->ver_ihl & 0x0f) * 4;
 		if (ihl < sizeof(struct iphdr))
 			return TCX_NEXT;
-		udp = (void *)ip + ihl;
-		if ((void *)(udp + 1) > data_end)
+		pt = (void *)ip + ihl;
+		if ((void *)(pt + 1) > data_end)
 			return TCX_NEXT;
-		if (!is_game_port(udp->source, mi))
-			return TCX_NEXT;
-
 		old_tos = ip->tos;
-		if (!want_rewrite(old_tos))
-			return TCX_NEXT;
-		new_tos = (dscp << 2) | (old_tos & 0x3); /* keep ECN bits */
-		if (new_tos != old_tos) {
-			bpf_l3_csum_replace(skb, l2 + __builtin_offsetof(struct iphdr, check),
-					    bpf_htons(old_tos), bpf_htons(new_tos), 2);
-			bpf_skb_store_bytes(skb, l2 + __builtin_offsetof(struct iphdr, tos),
-					    &new_tos, 1, 0);
+		if (proto == IPPROTO_UDP && is_game_port(pt->source, mi)) {
+			if (!want_rewrite(old_tos))
+				return TCX_NEXT;
+			set_dscp4(skb, l2, old_tos, dscp);
+			return game_marked(skb);
 		}
+		if (!bulk_active() || (old_tos >> 2))
+			return TCX_NEXT;
+		k.family = AF_INET;
+		k.proto = proto;
+		k.lport = bpf_ntohs(pt->source);
+		k.rport = bpf_ntohs(pt->dest);
+		k.laddr[0] = ip->saddr;
+		k.raddr[0] = ip->daddr;
+		if (!is_bulk_flow(&k))
+			return TCX_NEXT;
+		set_dscp4(skb, l2, old_tos, bulk_dscp);
+		return bulk_marked(skb);
 	} else if (skb->protocol == bpf_htons(ETH_P_IPV6)) {
 		struct ipv6hdr *ip6 = data + l2;
-		struct udphdr *udp;
-		__u8 b0, b1, old_tc, new_tc;
-		__u8 nb[2];
+		__u8 b0, b1, old_tc;
 
 		if ((void *)(ip6 + 1) > data_end)
 			return TCX_NEXT;
-		if (ip6->nexthdr != IPPROTO_UDP)
+		proto = ip6->nexthdr;
+		if (proto != IPPROTO_UDP && proto != IPPROTO_TCP)
 			return TCX_NEXT; /* extension headers: not worth it */
-		udp = (void *)(ip6 + 1);
-		if ((void *)(udp + 1) > data_end)
+		pt = (void *)(ip6 + 1);
+		if ((void *)(pt + 1) > data_end)
 			return TCX_NEXT;
-		if (!is_game_port(udp->source, mi))
-			return TCX_NEXT;
-
 		b0 = ip6->vtc_flow[0];
 		b1 = ip6->vtc_flow[1];
 		old_tc = ((b0 & 0x0f) << 4) | (b1 >> 4);
-		if (!want_rewrite(old_tc))
-			return TCX_NEXT;
-		new_tc = (dscp << 2) | (old_tc & 0x3);
-		if (new_tc != old_tc) {
-			/* traffic class is not covered by any checksum */
-			nb[0] = (b0 & 0xf0) | (new_tc >> 4);
-			nb[1] = (b1 & 0x0f) | ((new_tc & 0x0f) << 4);
-			bpf_skb_store_bytes(skb, l2, nb, 2, 0);
+		if (proto == IPPROTO_UDP && is_game_port(pt->source, mi)) {
+			if (!want_rewrite(old_tc))
+				return TCX_NEXT;
+			set_dscp6(skb, l2, b0, b1, dscp);
+			return game_marked(skb);
 		}
-	} else {
-		return TCX_NEXT;
+		if (!bulk_active() || (old_tc >> 2))
+			return TCX_NEXT;
+		k.family = AF_INET6;
+		k.proto = proto;
+		k.lport = bpf_ntohs(pt->source);
+		k.rport = bpf_ntohs(pt->dest);
+		__builtin_memcpy(k.laddr, ip6->saddr, 16);
+		__builtin_memcpy(k.raddr, ip6->daddr, 16);
+		if (!is_bulk_flow(&k))
+			return TCX_NEXT;
+		set_dscp6(skb, l2, b0, b1, bulk_dscp);
+		return bulk_marked(skb);
 	}
-
-	/* pfifo_fast & friends: send it through the interactive band */
-	if (set_priority && skb->priority == 0)
-		skb->priority = TC_PRIO_INTERACTIVE;
-
-	stat_inc(STAT_DSCP_MARKED);
 	return TCX_NEXT;
 }
 

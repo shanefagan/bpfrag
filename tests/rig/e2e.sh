@@ -193,15 +193,26 @@ cat $W/cfg.toml > $W/cfg9.toml
 printf '[bulk]\nenabled = true\nmin_mbps = 2\nsecs = 2\nrelease_secs = 3\n' >> $W/cfg9.toml
 "$B" -c $W/cfg9.toml > $W/d9.log 2>&1 & D=$!; sleep 1
 game 64 180; sleep 5
-$W/apps/steam $W/bulk.py down 10 & BS=$!
-$W/apps/obs $W/bulk.py up 10 & BO=$!
+$W/apps/steam $W/bulk.py down 10 40100 & BS=$!
+$W/apps/obs $W/bulk.py up 10 40200 & BO=$!
 sleep 5
 grep -q "Bulk transfer during the match: steam" $W/d9.log && ok "a download during the match is bulk" || bad "steam not seen as bulk"
 grep -q "Bulk transfer during the match: obs" $W/d9.log && bad "OBS upload treated as bulk" || ok "OBS upload left alone"
+cap() { ip netns exec bpfrag-srv timeout 4 tcpdump -n -i bpfrag1 -c 40 -w $W/$1.pcap "$2" 2>/dev/null; python3 "$HERE/pcap_check.py" $W/$1.pcap; }
+SB=$(cap bulk-acks 'tcp and src 10.99.0.1 and src port 40100')
+echo "$SB" | grep -q "ipv4 dscp=1 csum=ok" && ! echo "$SB" | grep -q "dscp=0" && ok "the download's outgoing packets are marked LE" || bad "steam egress: $SB"
+SO=$(cap obs-up 'tcp and src 10.99.0.1 and src port 40200')
+echo "$SO" | grep -q "ipv4 dscp=0 csum=ok" && ! echo "$SO" | grep -q "dscp=1 " && ok "OBS's upload is not marked" || bad "obs egress: $SO"
+SG=$(cap game-bulk 'udp and dst port 27015 and src 10.99.0.1')
+echo "$SG" | grep -q "ipv4 dscp=32" && ok "the game keeps CS4 alongside bulk traffic" || bad "game: $SG"
 # (the rig's own server is a local process too, so it can show up as well)
 "$B" -c $W/cfg9.toml --monitor 0 | grep -q "bulk: .*steam .*marked LE" && ok "monitor shows the bulk transfer" || bad "monitor: $("$B" -c $W/cfg9.toml --monitor 0 | grep bulk)"
 kill $BS; sleep 5
 grep -q "steam is no longer moving bulk data" $W/d9.log && ok "bulk released when the download stops" || bad "bulk not released"
+$W/apps/steam $W/bulk.py up 0.5 40101 & BS=$!; sleep 1
+SR=$(cap bulk-released 'tcp and src 10.99.0.1 and src port 40101')
+echo "$SR" | grep -q "dscp=1 " && bad "still demoting after release: $SR" || ok "nothing demoted once released"
+kill $BS
 kill $BO $G; kill -INT $D; wait $D; D=
 same "after bulk match"
 

@@ -14,6 +14,7 @@ enum consts {
 	MAX_WATCH = 64,		/* processes we want exit events for */
 	MAX_PORTS = 1024,	/* game UDP ports being DSCP marked */
 	MAX_IFACES = 64,
+	MAX_BULK_FLOWS = 16384,	/* sockets of bulk processes being demoted */
 	GAP_BUCKETS = 64,	/* 1 ms each; the last one is ">= 63 ms" */
 	GAP_STALL_MS = 100,	/* a gap this long is a stall the player feels */
 	GAP_IDLE_MS = 2000,	/* longer: the flow paused (lobby), not a stall */
@@ -26,6 +27,7 @@ enum stat_idx {
 	STAT_DSCP_KEPT,		/* game packets already marked by the app */
 	STAT_EXITS,		/* exit events delivered */
 	STAT_EVENTS_DROPPED,	/* ring buffer full */
+	STAT_BULK_MARKED,	/* bulk packets demoted (egress and ingress) */
 	NR_STATS,
 };
 
@@ -68,6 +70,26 @@ struct mark_iface {
 	__u32 l2_len;		/* 14 for Ethernet/Wi-Fi, 0 for L3 tunnels */
 	__u32 _pad;
 	__u64 game_pkts;	/* game packets seen leaving here */
+};
+
+/*
+ * A socket of a bulk process, as its packets show it: addresses in network
+ * order (IPv4 in word 0), ports in host order, local first. An unconnected
+ * UDP socket is keyed by protocol and local port alone (family 0, the rest
+ * zero), since it talks to anyone.
+ */
+struct flow_key {
+	__u8 family;
+	__u8 proto;
+	__u16 lport;
+	__u16 rport;
+	__u16 _pad;
+	__u32 laddr[4];
+	__u32 raddr[4];
+};
+
+struct bulk_flow {
+	__u32 tgid;	/* owner, so its flows can be dropped when it stops being bulk */
 };
 
 enum event_kind {

@@ -184,6 +184,7 @@ impl<'a> Tuner<'a> {
         rodata.dscp = parse_dscp(&cfg.dscp.class)?;
         rodata.dscp_override = cfg.dscp.override_app;
         rodata.set_priority = cfg.dscp.set_priority;
+        rodata.bulk_dscp = parse_dscp(&cfg.bulk.class)?;
 
         let skel = open.load().context("loading BPF programs")?;
 
@@ -340,6 +341,7 @@ impl<'a> Tuner<'a> {
         self.health.finish();
         self.egress.reset();
         self.bulk.reset();
+        maps::clear_bulk(&self.skel);
         let (done, kept) = self.knobs.restore_all();
         if !done.is_empty() {
             debug!("restored: {}", done.join(", "));
@@ -499,16 +501,31 @@ impl<'a> Tuner<'a> {
         let procs = &self.procs;
         let mut names = |tgid: u32| procs.names(tgid);
         let events = self.bulk.tick(dt, samples, &[game], &mut names);
-        for e in events {
+        // marking needs the DSCP marker, which a dry run never attaches
+        let mark = self.cfg.bulk.enabled && !self.dry_run;
+        for e in &events {
             match e {
-                BulkEvent::Started(p) => info!(
-                    "Bulk transfer during the match: {} at {:.0} Mbit/s ({})",
-                    p.name,
-                    p.mbps,
-                    self.bulk_marking()
-                ),
-                BulkEvent::Stopped { name, .. } => info!("{name} is no longer moving bulk data"),
+                BulkEvent::Started(p) => {
+                    info!(
+                        "Bulk transfer during the match: {} at {:.0} Mbit/s ({})",
+                        p.name,
+                        p.mbps,
+                        self.bulk_marking()
+                    );
+                    if mark {
+                        maps::bulk_tgid(&self.skel, p.tgid, true);
+                    }
+                }
+                BulkEvent::Stopped { tgid, name } => {
+                    info!("{name} is no longer moving bulk data");
+                    if mark {
+                        maps::bulk_tgid(&self.skel, *tgid, false);
+                    }
+                }
             }
+        }
+        if mark && !events.is_empty() {
+            maps::bulk_active(&self.skel, !self.bulk.bulk().is_empty());
         }
     }
 
@@ -562,6 +579,7 @@ impl<'a> Tuner<'a> {
             dscp_kept: g[bpf_intf::STAT_DSCP_KEPT as usize],
             exits: g[bpf_intf::STAT_EXITS as usize],
             events_dropped: g[bpf_intf::STAT_EVENTS_DROPPED as usize],
+            bulk_marked: g[bpf_intf::STAT_BULK_MARKED as usize],
         };
         if self
             .neighbours_at
