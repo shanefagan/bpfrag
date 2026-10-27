@@ -41,12 +41,14 @@ $ sudo bpfrag
  tc egress (tcx link) ◄── game's UDP ports ◄──── tier from tick rate:
    rewrites DSCP                                 CASUAL / COMPETITIVE / INTENSE
                                                  apply knobs (journalled first)
+ tc ingress (tcx link) ─► gaps between the ───► match health: packet gaps,
+   times arrivals         game's packets         drop counters
                                                  ... match over -> restore
 ```
 
-The BPF side only counts packets, reports game exits and marks packets. Every
-decision happens in Rust, where it can be unit tested and changed without
-fighting the verifier.
+The BPF side only counts packets, reports game exits, marks packets and times
+their arrival. Every decision happens in Rust, where it can be unit tested
+and changed without fighting the verifier.
 
 ## What gets tuned
 
@@ -164,6 +166,34 @@ once at info, since it may be a native game that needs `--allow`.
 If you want to see the detector's view of your system, run
 `sudo bpfrag --dry-run -v` and `bpfrag --monitor 1` in another terminal. The
 monitor lists the busiest UDP processes, their rates and the verdict for each.
+
+## Is it helping?
+
+Every match gets a health report, live in `--monitor` and the Waybar
+tooltip, and logged when the match ends:
+
+```
+Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 ms+); no drops
+```
+
+- **Packet gaps** are timed on arrival, at tc ingress, on the game's main
+  flow (the port that receives the most). A steady 64-tick server gives
+  gaps of about 16 ms; the 99% figure and the longest gap show the spikes
+  you feel as rubber-banding. A gap of 100 ms or more counts as a stall. A
+  pause of 2 seconds or more means the flow went quiet, between rounds or
+  in a lobby, and isn't counted. Needs kernel 6.6+ (tcx).
+- **Drops** are kernel counters that grow when the receive path can't keep
+  up, each tied to something the tiers tune: socket buffers overflowing
+  (`rmem_*`), the per-CPU input backlog overflowing (`netdev_max_backlog`),
+  the NIC's receive ring overflowing (coalescing). "Ran out of budget" counts
+  when packet processing was deferred (`netdev_budget`, busy polling). These
+  are system-wide, so a big download during the match counts too.
+
+`--dry-run` measures the same way but changes nothing, so a few matches with
+it give a baseline to compare against. Expect most of the spread in packet
+gaps to come from the internet and the game server, not from this machine;
+the tuning shows up more in the drop counters, and in the tail of the gaps
+on a busy or wireless machine.
 
 ## Running alongside other tuners
 
@@ -313,7 +343,7 @@ sudo bpfrag                         run (what the service does)
 sudo bpfrag --dry-run -v            detect and log, change nothing
 bpfrag --monitor 1                  live view of the running instance
 sudo bpfrag --check                 capabilities + bpftune/sched_ext/gamemode status
-sudo bpfrag --selftest              run test packets through the DSCP marker on this kernel
+sudo bpfrag --selftest              run test packets through the tc programs on this kernel
 bpfrag --waybar                     one JSON line for a status bar
 sudo bpfrag --classify <PID>        would this process count as a game, and why
 bpfrag --dump-config                effective config, in the TOML file's format
@@ -371,7 +401,9 @@ inside a cloud microVM, so expect less on bare metal:
 - about 0.25 µs per UDP receive;
 - about 0.4 µs per UDP send;
 - about 0.5 µs per egress packet for the DSCP marker, which is only attached
-  during a match.
+  during a match;
+- about 1.3 times the marker's cost per incoming packet for the arrival
+  meter, also only during a match (measured side by side in the e2e rig).
 
 Userspace wakes once a second.
 
@@ -387,13 +419,16 @@ src/daemon.rs                Tuner::init()/run(), the "Scheduler" of this projec
 src/bpf_skel.rs              libbpf-cargo skeleton (BpfSkel)
 src/bpf_intf.rs              bindgen'd src/bpf/intf.h
 src/stats.rs                 metrics, --stats, --monitor, --waybar
+src/health/mod.rs            per-match health: packet gaps, drop counters
+src/health/counters.rs       the kernel drop counters it reads
 
-src/bpf/main.bpf.c           BPF programs: per-process UDP counters, exit events, DSCP marker
+src/bpf/main.bpf.c           BPF programs: per-process UDP counters, exit events, DSCP
+                             marker, arrival meter
 src/bpf/intf.h               structs and constants shared by C and Rust
 src/bpf/vmlinux_lite.h       minimal CO-RE kernel types
 src/bpf/mod.rs               hook selection (tracepoints or fexit)
 src/bpf/maps.rs              reading and writing the BPF maps
-src/bpf/tc.rs                attaching the marker (tcx, or legacy tc)
+src/bpf/tc.rs                attaching the marker and the meter (tcx, or legacy tc)
 
 src/detect/mod.rs            windows, smoothing, tiers, hysteresis (pure, unit tested)
 src/detect/classify.rs       is-it-a-game rules
@@ -456,22 +491,24 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, netlink, packaging (44 tests)
-sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through the DSCP marker (12 checks)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (33 checks)
+cargo test                     # detector, classifier, config, journal, health, packaging (50 tests)
+sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (13 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (36 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes
-hand-built IPv4 and IPv6 packets through the tc program. Nothing is attached
+hand-built IPv4 and IPv6 packets through the tc programs. Nothing is attached
 and no setting changes. It checks that:
 
 - the DSCP or traffic class is rewritten;
 - ECN bits and the IPv6 flow label survive;
 - the IPv4 header checksum is still valid, including with IP options;
 - non-game ports, fragments, and ports whose owner is no longer marked are
-  left byte-for-byte untouched.
+  left byte-for-byte untouched;
+- the arrival meter counts and times packets to the game's port, and
+  nothing else.
 
-It's the quickest way to confirm the marker on a new kernel.
+It's the quickest way to confirm both programs on a new kernel.
 
 The end-to-end rig creates a throwaway network namespace with an echo
 server. It then runs a fake Steam game alongside Discord-, Firefox- and
@@ -487,6 +524,8 @@ daemon-shaped noise, and checks:
 - a new default route mid-match is followed;
 - per-interface settings move to the interface the game's packets actually use;
 - the Waybar output is correct during and after a match;
+- packet gaps on the game's flow are measured (about 16 ms at 64 pkt/s),
+  logged when the match ends, and measured in `--dry-run` too;
 - bpftune's sysctls are yielded while bpftune runs;
 - `kill -9` followed by `--restore` puts everything back;
 - `--dry-run` changes nothing.

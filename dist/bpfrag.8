@@ -39,6 +39,14 @@ never changes CPU scheduling, so it runs next to sched_ext schedulers.
 While
 .BR bpftune (8)
 is running, bpfrag leaves the sysctls bpftune tunes alone.
+.PP
+Each match gets a health report, shown by
+.B \-\-monitor
+and logged when it ends: the gaps between the game's incoming packets
+(timed at tc ingress; kernel 6.6+) and how much the kernel's receive drop
+counters grew.
+.B \-\-dry\-run
+measures the same way, which gives an untuned baseline.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " \fIfile\fR"
@@ -110,8 +118,8 @@ Classify
 the way the daemon would and exit.
 .TP
 .B \-\-selftest
-Push test packets through the DSCP marker with BPF_PROG_TEST_RUN and
-exit. Nothing is attached and nothing is changed.
+Push test packets through the DSCP marker and the arrival meter with
+BPF_PROG_TEST_RUN and exit. Nothing is attached and nothing is changed.
 .TP
 .B \-\-dump\-config
 Print the effective configuration as TOML and exit.

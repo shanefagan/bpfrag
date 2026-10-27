@@ -73,15 +73,15 @@ pub fn watch(skel: &BpfSkel, tgid: u32, on: bool) {
     set_flag(&skel.maps.watch_tgids, tgid, on, "watch");
 }
 
-/// Start or stop DSCP marking for a process's UDP ports. The send hook
-/// learns the ports of processes in `mark_tgids`; turning marking off also
-/// forgets those ports.
-pub fn set_marking(skel: &BpfSkel, tgid: u32, on: bool) {
-    set_flag(&skel.maps.mark_tgids, tgid, on, "mark");
+/// Start or stop tracking the current game's UDP ports. The send hook
+/// learns the ports of processes in `game_tgids`; the marker and the
+/// arrival meter act on those ports. Stopping also forgets the ports.
+pub fn track_ports(skel: &BpfSkel, tgid: u32, on: bool) {
+    set_flag(&skel.maps.game_tgids, tgid, on, "game");
     if on {
         return;
     }
-    let ports = &skel.maps.mark_ports;
+    let ports = &skel.maps.game_ports;
     let stale: Vec<Vec<u8>> = ports
         .keys()
         .filter(|key| {
@@ -89,7 +89,7 @@ pub fn set_marking(skel: &BpfSkel, tgid: u32, on: bool) {
                 .lookup(key, MapFlags::ANY)
                 .ok()
                 .flatten()
-                .is_some_and(|v| from_bytes::<bpf_intf::port_mark>(&v).tgid == tgid)
+                .is_some_and(|v| from_bytes::<bpf_intf::game_port>(&v).tgid == tgid)
         })
         .collect();
     for key in stale {
@@ -99,7 +99,7 @@ pub fn set_marking(skel: &BpfSkel, tgid: u32, on: bool) {
 
 /// Local UDP ports the current game has used so far.
 pub fn marked_ports(skel: &BpfSkel) -> usize {
-    skel.maps.mark_ports.keys().count()
+    skel.maps.game_ports.keys().count()
 }
 
 /// (ifindex, game packets seen leaving there) for every interface the
@@ -127,6 +127,26 @@ pub fn mark_iface_bytes(l2_len: u32) -> Vec<u8> {
     v.extend_from_slice(&mi._pad.to_ne_bytes());
     v.extend_from_slice(&mi.game_pkts.to_ne_bytes());
     v
+}
+
+/// Arrival statistics per game port, as the meter recorded them.
+pub fn read_port_rx(skel: &BpfSkel) -> Vec<(u16, bpf_intf::port_rx)> {
+    let map = &skel.maps.port_rx;
+    map.keys()
+        .filter_map(|key| {
+            let v = map.lookup(&key, MapFlags::ANY).ok().flatten()?;
+            Some((from_bytes::<u32>(&key) as u16, from_bytes(&v)))
+        })
+        .collect()
+}
+
+/// Forget all arrival statistics (between matches).
+pub fn clear_port_rx(skel: &BpfSkel) {
+    let map = &skel.maps.port_rx;
+    let keys: Vec<Vec<u8>> = map.keys().collect();
+    for k in keys {
+        let _ = map.delete(&k);
+    }
 }
 
 /// A handle on the exit-event ring buffer, for `RingBufferBuilder`.

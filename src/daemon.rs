@@ -29,13 +29,15 @@ use libbpf_rs::skel::{OpenSkel, SkelBuilder};
 use libbpf_rs::{Link, OpenObject, RingBufferBuilder};
 use log::{debug, info};
 
-use crate::bpf::{self, HookKind, maps, tc::TcMarker};
+use crate::bpf::tc::{Role, TcSet};
+use crate::bpf::{self, HookKind, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
 use crate::config::{Config, parse_dscp};
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
 use crate::detect::{Action, Detector, SessionInfo};
+use crate::health;
 use crate::net::{self, Iface};
 use crate::stats::{
     self, AppliedMetric, Counters, DscpMetrics, Metrics, RecentMatch, SessionMetrics, TopProc,
@@ -126,8 +128,11 @@ pub struct Tuner<'a> {
     /// The counting and exit hooks. Dropping a link detaches it.
     _links: Vec<Link>,
     hook: HookKind,
-    /// DSCP marker attachments (only during a match).
-    tc: TcMarker,
+    /// DSCP marker and arrival meter attachments (only during a match).
+    marker: TcSet,
+    meter: TcSet,
+    /// The current match's connection health.
+    health: health::Tracker,
     detector: Detector,
     procs: ProcfsLookup,
     knobs: Knobs,
@@ -227,7 +232,9 @@ impl<'a> Tuner<'a> {
             skel,
             _links: links,
             hook,
-            tc: TcMarker::default(),
+            marker: TcSet::new(Role::Marker),
+            meter: TcSet::new(Role::Meter),
+            health: health::Tracker::default(),
             session_start: None,
             logged_ignores: HashSet::new(),
             bpftune_note: None,
@@ -311,6 +318,8 @@ impl<'a> Tuner<'a> {
 
         let mut changes = self.knobs.apply(&profile, &ifaces, &skip);
         maps::watch(&self.skel, s.tgid, true);
+        // The meter only observes, so it runs in every tier and in dry-run.
+        self.meter.attach(&self.skel, &marker);
         if profile.dscp {
             let names: Vec<&str> = marker.iter().map(|i| i.name.as_str()).collect();
             if self.dry_run {
@@ -320,21 +329,19 @@ impl<'a> Tuner<'a> {
                     names.join(", ")
                 ));
             } else {
-                maps::set_marking(&self.skel, s.tgid, true);
-                for l in self.tc.attach(&self.skel, &marker) {
+                for l in self.marker.attach(&self.skel, &marker) {
                     self.knobs.track_tc_legacy(l);
                 }
-                if !self.tc.ifaces().is_empty() {
+                if !self.marker.ifaces().is_empty() {
                     changes.push(format!(
                         "dscp={} on {}",
                         self.cfg.dscp.class,
-                        self.tc.ifaces().join(",")
+                        self.marker.ifaces().join(",")
                     ));
                 }
             }
         } else {
-            maps::set_marking(&self.skel, s.tgid, false);
-            for l in self.tc.detach_all(&self.skel) {
+            for l in self.marker.detach_all(&self.skel) {
                 self.knobs.untrack_tc_legacy(l);
             }
         }
@@ -345,15 +352,19 @@ impl<'a> Tuner<'a> {
         }
     }
 
-    /// Stop marking and watching the game and put every setting back.
+    /// Stop marking, measuring and watching the game, and put every
+    /// setting back.
     fn end_session(&mut self, tgid: Option<u32>) {
         if let Some(t) = tgid {
-            maps::set_marking(&self.skel, t, false);
+            maps::track_ports(&self.skel, t, false);
             maps::watch(&self.skel, t, false);
         }
-        for l in self.tc.detach_all(&self.skel) {
+        for l in self.marker.detach_all(&self.skel) {
             self.knobs.untrack_tc_legacy(l);
         }
+        self.meter.detach_all(&self.skel);
+        maps::clear_port_rx(&self.skel);
+        self.health.finish();
         self.egress.reset();
         let (done, kept) = self.knobs.restore_all();
         if !done.is_empty() {
@@ -375,6 +386,11 @@ impl<'a> Tuner<'a> {
                 );
                 self.session_start = Some(Instant::now());
                 self.egress.reset();
+                // Learn the game's ports (for the marker and the meter) and
+                // take the health baselines before anything changes.
+                maps::clear_port_rx(&self.skel);
+                maps::track_ports(&self.skel, s.tgid, true);
+                self.health.start(&self.candidates(&s));
                 self.apply_tier(&s);
             }
             Action::Retier { from, to } => {
@@ -388,13 +404,16 @@ impl<'a> Tuner<'a> {
             }
             Action::End { session, reason } => {
                 let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
+                self.health.update(&maps::read_port_rx(&self.skel));
+                let health = self.health.finish();
                 self.recent.push_front(RecentMatch {
-                    name: session.name,
+                    name: session.name.clone(),
                     peak_tier: session.peak_tier.to_string(),
                     peak_pps: session.peak_pps,
                     duration_secs: secs,
                     ended: stats::now_unix(),
                     reason: reason.clone(),
+                    health: health.clone(),
                 });
                 self.recent.truncate(5);
                 self.end_session(Some(session.tgid));
@@ -402,6 +421,9 @@ impl<'a> Tuner<'a> {
                     "Match ended after {} ({reason}); settings restored",
                     stats::fmt_dur(secs)
                 );
+                if let Some(h) = health {
+                    info!("{}: {}", session.name, h.summary());
+                }
             }
             Action::Ignored {
                 tgid,
@@ -429,13 +451,14 @@ impl<'a> Tuner<'a> {
         }
     }
 
-    /// Per-tick upkeep while a match runs: follow the game if its traffic
-    /// moves to another interface (docking, Wi-Fi to Ethernet, a VPN coming
-    /// up).
+    /// Per-tick upkeep while a match runs: refresh its health, and every
+    /// 2 s follow the game if its traffic moves to another interface
+    /// (docking, Wi-Fi to Ethernet, a VPN coming up).
     fn track_session(&mut self) {
         let Some(s) = self.detector.session().cloned() else {
             return;
         };
+        self.health.update(&maps::read_port_rx(&self.skel));
         if self.last_path_check.elapsed() < Duration::from_secs(2) {
             return;
         }
@@ -443,6 +466,8 @@ impl<'a> Tuner<'a> {
         self.egress
             .update(&maps::game_packets(&self.skel), self.last_path_check);
         let (marker, knobs) = self.targets(&s);
+        self.health
+            .watch(if knobs.is_empty() { &marker } else { &knobs });
         let now = Paths::new(&marker, &knobs);
         if now == self.applied_paths {
             return;
@@ -493,6 +518,7 @@ impl<'a> Tuner<'a> {
                 .map(|t| t.elapsed().as_secs())
                 .unwrap_or(0),
             egress: iface_names(&self.seen_egress()),
+            health: self.health.latest().cloned(),
         });
         let applied = self
             .knobs
@@ -504,7 +530,7 @@ impl<'a> Tuner<'a> {
                 baseline: a.baseline,
             })
             .collect();
-        let ifs = self.tc.ifaces();
+        let ifs = self.marker.ifaces();
         let dscp = (!ifs.is_empty()).then(|| DscpMetrics {
             class: self.cfg.dscp.class.clone(),
             interfaces: ifs,
@@ -634,11 +660,11 @@ impl<'a> Tuner<'a> {
                 self.handle(a);
             }
 
+            self.track_session();
             let m = self.get_metrics();
             if let Err(e) = stats::write(&self.run_dir, &m) {
                 debug!("stats write: {e:#}");
             }
-            self.track_session();
 
             if next_stats.is_some_and(|ns| now >= ns) {
                 info!("{}", m.line());

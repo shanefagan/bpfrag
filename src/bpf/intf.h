@@ -14,6 +14,9 @@ enum consts {
 	MAX_WATCH = 64,		/* processes we want exit events for */
 	MAX_PORTS = 1024,	/* game UDP ports being DSCP marked */
 	MAX_IFACES = 64,
+	GAP_BUCKETS = 64,	/* 1 ms each; the last one is ">= 63 ms" */
+	GAP_STALL_MS = 100,	/* a gap this long is a stall the player feels */
+	GAP_IDLE_MS = 2000,	/* longer: the flow paused (lobby), not a stall */
 };
 
 /* Global counters, one slot per CPU (summed by userspace). */
@@ -37,11 +40,24 @@ struct proc_stats {
 };
 
 /* Local UDP port owned by a game process, learned in the send hook. */
-struct port_mark {
+struct game_port {
 	__u32 tgid;
 };
 
-/* An interface the DSCP marker is attached to. */
+/*
+ * Arrivals on one game port, measured at tc ingress: gaps between
+ * consecutive packets, as a histogram plus the longest one.
+ */
+struct port_rx {
+	__u64 pkts;
+	__u64 last_ns;
+	__u64 max_gap_ns;	/* longest gap under GAP_IDLE_MS */
+	__u32 stalls;		/* gaps of GAP_STALL_MS .. GAP_IDLE_MS */
+	__u32 _pad;
+	__u32 hist[GAP_BUCKETS];
+};
+
+/* An interface the DSCP marker or the arrival meter is attached to. */
 struct mark_iface {
 	__u32 l2_len;		/* 14 for Ethernet/Wi-Fi, 0 for L3 tunnels */
 	__u32 _pad;

@@ -2,11 +2,14 @@
 // Copyright (C) 2025-2026 Shane Fagan
 
 //! `bpfrag --selftest`: load the BPF object on *this* kernel and push
-//! hand-built IPv4/IPv6 packets through the DSCP marker with
+//! hand-built IPv4/IPv6 packets through both tc programs with
 //! BPF_PROG_TEST_RUN. Nothing is attached and no system setting changes.
-//! Checks the rewritten DSCP / traffic class, that ECN bits and the IPv6
-//! flow label survive, that the IPv4 header checksum is still valid, and
-//! that non-game, stale-owner and fragment packets are left untouched.
+//!
+//! For the DSCP marker it checks the rewritten DSCP / traffic class, that
+//! ECN bits and the IPv6 flow label survive, that the IPv4 header checksum
+//! is still valid, and that non-game, stale-owner and fragment packets are
+//! left untouched. For the arrival meter, that packets to the game's port
+//! are counted and timed and nothing else is.
 
 use std::mem::MaybeUninit;
 
@@ -119,6 +122,75 @@ fn tos_of(p: &[u8]) -> u8 {
     }
 }
 
+/// The packet with its UDP destination port set to `dport`.
+fn to_port(mut p: Vec<u8>, dport: u16) -> Vec<u8> {
+    let udp = if p[12..14] == [0x08, 0x00] {
+        14 + usize::from(p[14] & 0x0f) * 4
+    } else {
+        14 + 40
+    };
+    p[udp + 2..udp + 4].copy_from_slice(&dport.to_be_bytes());
+    p
+}
+
+/// Arrivals through the meter: packets to the game's port must be counted
+/// and timed, packets to other ports, to an untracked owner's port, and
+/// non-first fragments ignored.
+fn check_meter(skel: &BpfSkel) -> Result<String, String> {
+    let to_game = [
+        to_port(ipv4(0, OTHER_PORT, 0x4000, 0), GAME_PORT),
+        to_port(ipv4(0, OTHER_PORT, 0x4000, 2), GAME_PORT),
+        to_port(ipv6(0, 1, OTHER_PORT), GAME_PORT),
+        to_port(ipv4(0, OTHER_PORT, 0x4000, 0), GAME_PORT),
+    ];
+    let ignored = [
+        to_port(ipv4(0, GAME_PORT, 0x4000, 0), OTHER_PORT),
+        to_port(ipv4(0, GAME_PORT, 0x4000, 0), STALE_PORT),
+        to_port(ipv4(0, OTHER_PORT, 0x00b9, 0), GAME_PORT),
+    ];
+    for pkt in to_game.iter().chain(&ignored) {
+        let input = ProgramInput {
+            data_in: Some(pkt),
+            ..Default::default()
+        };
+        let res = skel
+            .progs
+            .bpfrag_rx
+            .test_run(input)
+            .map_err(|e| format!("test_run failed: {e}"))?;
+        if res.return_value != 0 {
+            return Err(format!(
+                "returned {} instead of TC_ACT_OK",
+                res.return_value
+            ));
+        }
+    }
+    let ports = crate::bpf::maps::read_port_rx(skel);
+    let others: Vec<u16> = ports
+        .iter()
+        .map(|(p, _)| *p)
+        .filter(|p| *p != GAME_PORT)
+        .collect();
+    if !others.is_empty() {
+        return Err(format!("counted arrivals on other ports {others:?}"));
+    }
+    let r = ports
+        .iter()
+        .find(|(p, _)| *p == GAME_PORT)
+        .map(|(_, r)| *r)
+        .ok_or("no arrivals counted on the game port")?;
+    let gaps: u32 = r.hist.iter().sum();
+    let want = to_game.len() as u64;
+    if r.pkts != want || u64::from(gaps) != want - 1 {
+        return Err(format!(
+            "{} packets and {gaps} gaps, expected {want} and {}",
+            r.pkts,
+            want - 1
+        ));
+    }
+    Ok(format!("{want} packets, {gaps} gaps"))
+}
+
 fn run_case(skel: &BpfSkel, c: &Case) -> Result<(), String> {
     let mut out = vec![0u8; c.pkt.len() + 64];
     let input = ProgramInput {
@@ -197,25 +269,28 @@ pub fn run(cfg: &Config) -> Result<bool> {
     p.bpfrag_udpv6_recvmsg.set_autoload(false);
     p.bpfrag_exit.set_autoload(false);
     p.bpfrag_dscp.set_autoload(true);
-    let skel = open.load().context("loading the DSCP marker")?;
+    p.bpfrag_rx.set_autoload(true);
+    let skel = open.load().context("loading the tc programs")?;
 
     let m = &skel.maps;
-    m.mark_ifaces.update(
-        &LOOPBACK_IFINDEX.to_ne_bytes(),
-        &crate::bpf::maps::mark_iface_bytes(14),
-        MapFlags::ANY,
-    )?;
-    m.mark_tgids
+    for map in [&m.mark_ifaces, &m.rx_ifaces] {
+        map.update(
+            &LOOPBACK_IFINDEX.to_ne_bytes(),
+            &crate::bpf::maps::mark_iface_bytes(14),
+            MapFlags::ANY,
+        )?;
+    }
+    m.game_tgids
         .update(&GAME_TGID.to_ne_bytes(), &[1u8], MapFlags::ANY)?;
     for (port, owner) in [(GAME_PORT, GAME_TGID), (STALE_PORT, 9999)] {
-        let pm = bpf_intf::port_mark { tgid: owner };
+        let pm = bpf_intf::game_port { tgid: owner };
         let bytes = unsafe {
             std::slice::from_raw_parts(
-                (&pm as *const bpf_intf::port_mark).cast::<u8>(),
+                (&pm as *const bpf_intf::game_port).cast::<u8>(),
                 size_of_val(&pm),
             )
         };
-        m.mark_ports
+        m.game_ports
             .update(&u32::from(port).to_ne_bytes(), bytes, MapFlags::ANY)?;
     }
 
@@ -309,12 +384,19 @@ pub fn run(cfg: &Config) -> Result<bool> {
         .into_iter()
         .find(|(i, _)| *i == LOOPBACK_IFINDEX)
         .map_or(0, |(_, n)| n);
-    let total = cases.len() + 1;
+    let total = cases.len() + 2;
     if got == want {
         println!("  PASS game packets counted per interface ({got})");
     } else {
         failed += 1;
         println!("  FAIL game packets counted per interface: {got}, expected {want}");
+    }
+    match check_meter(&skel) {
+        Ok(what) => println!("  PASS arrivals on the game port timed ({what})"),
+        Err(e) => {
+            failed += 1;
+            println!("  FAIL arrival meter: {e}");
+        }
     }
     println!("{}/{total} passed", total - failed);
     Ok(failed == 0)

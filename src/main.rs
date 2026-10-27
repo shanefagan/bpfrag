@@ -14,6 +14,7 @@ mod cli;
 mod config;
 mod daemon;
 mod detect;
+mod health;
 mod logger;
 mod net;
 mod stats;
@@ -42,6 +43,9 @@ use tune::Knobs;
 /// NIC interrupt coalescing, buffer headroom, DSCP marking of the game's
 /// packets (helps Wi-Fi WMM and QoS routers) and, optionally, tighter dirty
 /// writeback so background downloads don't flush in bursts mid-match.
+///
+/// Each match also gets a health report (packet gaps, drop counters) in
+/// --monitor and the log; --dry-run measures without changing anything.
 ///
 /// When the match ends or the game exits, every change is put back. bpfrag
 /// never touches CPU scheduling, so it runs fine next to sched_ext
@@ -115,7 +119,7 @@ struct Opts {
     #[clap(long, value_name = "PID")]
     classify: Option<u32>,
 
-    /// Don't run: push test packets through the DSCP marker on this kernel
+    /// Don't run: push test packets through the tc programs on this kernel
     /// (BPF_PROG_TEST_RUN; attaches nothing, changes nothing).
     #[clap(long)]
     selftest: bool,

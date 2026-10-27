@@ -88,11 +88,15 @@ echo "$SUM" | grep -q "csum=BAD" && bad "rewritten packets have bad IPv4 header 
 [ $((E1 - E0)) = 0 ] && ok "server kernel saw no IP checksum/header errors" || bad "server IP errors: $((E1 - E0))"
 RX=$("$B" -c $W/cfg.toml --monitor 0 | awk '$2=="fakeshooter"{split($4,a,"/"); print a[2]}' | head -1)
 [ "${RX:-0}" -gt 0 ] && ok "server echoed marked packets back (rx ${RX}/s)" || bad "no echoes: marked packets dropped?"
+# 64 echoes a second arrive about 15.6 ms apart
+CONN=$("$B" -c $W/cfg.toml --monitor 0 | grep 'connection:')
+echo "$CONN" | grep -q 'packet gaps half ≤1[5-8] ms' && ok "packet gaps measured on the game's flow" || bad "gaps: $CONN"
 echo 150 > $W/rate; sleep 10
 grep -q "COMPETITIVE -> INTENSE" $W/d.log && ok "rate increase -> INTENSE" || bad "no INTENSE"
 "$B" -c $W/cfg.toml --waybar | grep -q '"text":"INTENSE"' && ok "waybar shows the match" || bad "waybar: $("$B" -c $W/cfg.toml --waybar)"
 kill $G; sleep 2
 grep -q "Match ended" $W/d.log && ok "game exit ends the match immediately" || bad "match did not end"
+grep -q "fakeshooter: packet gaps half" $W/d.log && ok "match health logged when it ends" || bad "no health line at match end"
 "$B" -c $W/cfg.toml --waybar | grep -q '"alt":"idle".*Last match: fakeshooter INTENSE' && ok "waybar idle with last match" || bad "waybar idle: $("$B" -c $W/cfg.toml --waybar)"
 same "after game exit"
 kill $N1 $N2 $N3
@@ -147,6 +151,7 @@ same "after path-change match"
 echo "== 7. --dry-run changes nothing"
 "$B" -c $W/cfg.toml --dry-run > $W/d5.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
 grep -q "would set" $W/d5.log && ok "dry run logs intended changes" || bad "dry run silent"
+"$B" -c $W/cfg.toml --monitor 0 | grep -q 'connection: packet gaps half' && ok "dry run still measures the connection" || bad "dry run: no gap measurement"
 same "dry run"; kill $G; kill -INT $D; wait $D; D=
 
 echo "== 8. if the journal can't be written, nothing is changed"

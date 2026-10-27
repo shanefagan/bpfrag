@@ -14,6 +14,7 @@
  *   fexit/udp{,v6}_{send,recv}msg                     fallback (>= 5.17)
  *   raw_tp/sched_process_exit                         game exit -> revert now
  *   tc egress (tcx link, or legacy cls_bpf)           DSCP marking
+ *   tc ingress (tcx link only)                        arrival gaps per game port
  */
 #include "vmlinux_lite.h"
 #include <bpf/bpf_helpers.h>
@@ -53,21 +54,21 @@ struct {
 	__type(value, __u8);
 } watch_tgids SEC(".maps");
 
-/* tgids whose egress UDP gets DSCP marked */
+/* the current game: its ports are learned, marked and measured */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, MAX_WATCH);
 	__type(key, __u32);
 	__type(value, __u8);
-} mark_tgids SEC(".maps");
+} game_tgids SEC(".maps");
 
 /* local UDP port -> owning game, learned from the send hook */
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, MAX_PORTS);
 	__type(key, __u32);
-	__type(value, struct port_mark);
-} mark_ports SEC(".maps");
+	__type(value, struct game_port);
+} game_ports SEC(".maps");
 
 /*
  * ifindex -> interface the marker is attached to: its L2 header length and
@@ -80,6 +81,22 @@ struct {
 	__type(key, __u32);
 	__type(value, struct mark_iface);
 } mark_ifaces SEC(".maps");
+
+/* ifindex -> interface the arrival meter is attached to (l2_len only) */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MAX_IFACES);
+	__type(key, __u32);
+	__type(value, struct mark_iface);
+} rx_ifaces SEC(".maps");
+
+/* local game port -> arrival gaps (cleared by userspace per match) */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, MAX_PORTS);
+	__type(key, __u32);
+	__type(value, struct port_rx);
+} port_rx SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -150,20 +167,20 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	st->tx_bytes += ret;
 
 	/* learn the local port of a game socket so tc can mark it */
-	if (bpf_map_lookup_elem(&mark_tgids, &tgid)) {
+	if (bpf_map_lookup_elem(&game_tgids, &tgid)) {
 		__u32 port = BPF_CORE_READ(sk, __sk_common.skc_num);
-		struct port_mark *cur;
+		struct game_port *cur;
 
 		if (!port)
 			return;
-		cur = bpf_map_lookup_elem(&mark_ports, &port);
+		cur = bpf_map_lookup_elem(&game_ports, &port);
 		if (cur && cur->tgid == tgid)
 			return; /* already known: a lookup is far cheaper than an update */
 
-		struct port_mark pm = {
+		struct game_port pm = {
 			.tgid = tgid,
 		};
-		bpf_map_update_elem(&mark_ports, &port, &pm, BPF_ANY);
+		bpf_map_update_elem(&game_ports, &port, &pm, BPF_ANY);
 	}
 }
 
@@ -247,20 +264,22 @@ int BPF_PROG(bpfrag_exit, struct task_struct *p)
 
 /* ---- tc egress: DSCP marking --------------------------------------------- */
 
+/*
+ * Is this local port the current game's? Only while its owner is still in
+ * game_tgids: the moment userspace drops the game (or a stale legacy filter
+ * outlives a crash) this stops matching, even before game_ports is cleaned.
+ */
+static __always_inline bool game_owns(__u32 port)
+{
+	struct game_port *pm = bpf_map_lookup_elem(&game_ports, &port);
+
+	return pm && bpf_map_lookup_elem(&game_tgids, &pm->tgid);
+}
+
 /* Is this a game's port? Counts the packet against the interface if so. */
 static __always_inline bool is_game_port(__be16 sport, struct mark_iface *mi)
 {
-	__u32 port = bpf_ntohs(sport);
-	struct port_mark *pm = bpf_map_lookup_elem(&mark_ports, &port);
-
-	if (!pm)
-		return false;
-	/*
-	 * Only while the owner is still marked: the moment userspace drops
-	 * the game from mark_tgids (or a stale legacy filter outlives a crash)
-	 * marking stops, even before mark_ports is cleaned up.
-	 */
-	if (!bpf_map_lookup_elem(&mark_tgids, &pm->tgid))
+	if (!game_owns(bpf_ntohs(sport)))
 		return false;
 	__sync_fetch_and_add(&mi->game_pkts, 1);
 	stat_inc(STAT_TC_SEEN);
@@ -359,5 +378,83 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		skb->priority = TC_PRIO_INTERACTIVE;
 
 	stat_inc(STAT_DSCP_MARKED);
+	return TC_ACT_OK;
+}
+
+/* ---- tc ingress: arrival gaps on the game's ports ------------------------ */
+
+static __always_inline void record_arrival(__u32 port)
+{
+	struct port_rx *pr = bpf_map_lookup_elem(&port_rx, &port);
+	__u64 now = bpf_ktime_get_ns(), last, gap, ms;
+
+	if (!pr) {
+		struct port_rx zero = {};
+
+		bpf_map_update_elem(&port_rx, &port, &zero, BPF_NOEXIST);
+		pr = bpf_map_lookup_elem(&port_rx, &port);
+		if (!pr)
+			return;
+	}
+	__sync_fetch_and_add(&pr->pkts, 1);
+	last = pr->last_ns;
+	pr->last_ns = now;
+	if (!last || now <= last)
+		return;
+	gap = now - last;
+	ms = gap / 1000000;
+	if (ms >= GAP_IDLE_MS)
+		return; /* the flow paused; not a stall */
+	if (ms >= GAP_STALL_MS)
+		pr->stalls++;
+	if (gap > pr->max_gap_ns)
+		pr->max_gap_ns = gap;
+	if (ms >= GAP_BUCKETS - 1)
+		ms = GAP_BUCKETS - 1;
+	pr->hist[ms & (GAP_BUCKETS - 1)]++;
+}
+
+SEC("tc")
+int bpfrag_rx(struct __sk_buff *skb)
+{
+	void *data = (void *)(long)skb->data;
+	void *data_end = (void *)(long)skb->data_end;
+	__u32 ifindex = skb->ifindex;
+	struct mark_iface *mi;
+	struct udphdr *udp;
+	__u32 l2, port;
+
+	mi = bpf_map_lookup_elem(&rx_ifaces, &ifindex);
+	if (!mi)
+		return TC_ACT_OK;
+	l2 = mi->l2_len ? ETH_HLEN : 0;
+
+	if (skb->protocol == bpf_htons(ETH_P_IP)) {
+		struct iphdr *ip = data + l2;
+		__u32 ihl;
+
+		if ((void *)(ip + 1) > data_end || ip->protocol != IPPROTO_UDP)
+			return TC_ACT_OK;
+		if (ip->frag_off & bpf_htons(0x1fff))
+			return TC_ACT_OK;
+		ihl = (ip->ver_ihl & 0x0f) * 4;
+		if (ihl < sizeof(struct iphdr))
+			return TC_ACT_OK;
+		udp = (void *)ip + ihl;
+	} else if (skb->protocol == bpf_htons(ETH_P_IPV6)) {
+		struct ipv6hdr *ip6 = data + l2;
+
+		if ((void *)(ip6 + 1) > data_end || ip6->nexthdr != IPPROTO_UDP)
+			return TC_ACT_OK;
+		udp = (void *)(ip6 + 1);
+	} else {
+		return TC_ACT_OK;
+	}
+	if ((void *)(udp + 1) > data_end)
+		return TC_ACT_OK;
+	port = bpf_ntohs(udp->dest);
+	if (!game_owns(port))
+		return TC_ACT_OK;
+	record_arrival(port);
 	return TC_ACT_OK;
 }

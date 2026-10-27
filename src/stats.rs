@@ -14,6 +14,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::health::Health;
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionMetrics {
     pub tgid: u32,
@@ -25,6 +27,9 @@ pub struct SessionMetrics {
     /// Interfaces the game's packets were seen leaving on.
     #[serde(default)]
     pub egress: Vec<String>,
+    /// Connection health so far.
+    #[serde(default)]
+    pub health: Option<Health>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -75,6 +80,8 @@ pub struct RecentMatch {
     pub duration_secs: u64,
     pub ended: u64,
     pub reason: String,
+    #[serde(default)]
+    pub health: Option<Health>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -140,11 +147,15 @@ impl Metrics {
     pub fn line(&self) -> String {
         let sess = match &self.session {
             Some(s) => format!(
-                "{} {} {:.0}pps {}",
+                "{} {} {:.0}pps {}{}",
                 s.name,
                 s.tier,
                 s.pps,
-                fmt_dur(s.since_secs)
+                fmt_dur(s.since_secs),
+                s.health
+                    .as_ref()
+                    .map(|h| format!(" ({})", h.short()))
+                    .unwrap_or_default()
             ),
             None => "idle".into(),
         };
@@ -191,6 +202,9 @@ impl Metrics {
                 s.reason
             )?,
             None => writeln!(w, "\nNo match in progress; baseline settings active.")?,
+        }
+        if let Some(h) = self.session.as_ref().and_then(|s| s.health.as_ref()) {
+            writeln!(w, "  connection: {}", h.summary())?;
         }
         if !self.applied.is_empty() {
             writeln!(w, "\nApplied:")?;
@@ -239,6 +253,9 @@ impl Metrics {
                     r.reason,
                     fmt_dur(now.saturating_sub(r.ended))
                 )?;
+                if let Some(h) = &r.health {
+                    writeln!(w, "  {:<16} {}", "", h.short())?;
+                }
             }
         }
         if !self.top.is_empty() {
@@ -292,11 +309,15 @@ pub fn waybar(run_dir: &Path) -> String {
     };
     let last = m.recent.first().map(|r| {
         format!(
-            "\nLast match: {} {} for {} ({})",
+            "\nLast match: {} {} for {} ({}){}",
             r.name,
             r.peak_tier,
             fmt_dur(r.duration_secs),
-            r.reason
+            r.reason,
+            r.health
+                .as_ref()
+                .map(|h| format!("\n{}", h.short()))
+                .unwrap_or_default()
         )
     });
     let Some(s) = &m.session else {
@@ -317,6 +338,9 @@ pub fn waybar(run_dir: &Path) -> String {
     );
     if !s.egress.is_empty() {
         tip += &format!("\nvia {}", s.egress.join(", "));
+    }
+    if let Some(h) = &s.health {
+        tip += &format!("\n{}", h.short());
     }
     if let Some(d) = &m.dscp {
         tip += &format!("\nDSCP {} on {}", d.class, d.interfaces.join(", "));
