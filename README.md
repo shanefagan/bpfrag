@@ -457,6 +457,7 @@ packaging/debian/            changelog + postinst for cargo-deb ([package.metada
 packaging/rpm/               spec, build.sh (vendored, offline), rpmlintrc
 packaging/bump-version.sh    set a new version everywhere it is recorded
 tests/rig/                   end-to-end test in a throwaway netns (root)
+AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
 .github/workflows/ci.yml     fmt, clippy, tests, --selftest and the e2e rig as root,
                              MSRV check, .deb/.rpm builds, releases on tags
 ```
