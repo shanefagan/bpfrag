@@ -5,4 +5,5 @@
 //! `--waybar` live in `stats`, next to the metrics they read.)
 
 pub mod check;
+pub mod report;
 pub mod selftest;

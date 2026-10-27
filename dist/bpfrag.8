@@ -6,7 +6,7 @@ bpfrag \- eBPF network tuning for competitive gaming that undoes itself
 .RI [ options ]
 .br
 .B bpfrag
-.BR \-\-check " | " \-\-selftest " | " \-\-restore " | " \-\-dump\-config
+.BR \-\-check " | " \-\-selftest " | " \-\-restore " | " \-\-dump\-config " | " \-\-report
 .br
 .B bpfrag \-\-classify
 .I pid
@@ -124,6 +124,18 @@ BPF_PROG_TEST_RUN and exit. Nothing is attached and nothing is changed.
 .B \-\-dump\-config
 Print the effective configuration as TOML and exit.
 .TP
+.B \-\-report
+Print a diagnostic report for a bug report, as Markdown, and exit: the
+version, OS and kernel, the output of
+.BR \-\-check ,
+.BR \-\-selftest ,
+.B \-\-monitor
+and
+.BR \-\-dump\-config ,
+the service state, the restore journal and this boot's log. The hostname,
+user names in home paths, and IP and MAC addresses are replaced. Run it as
+root for the complete report.
+.TP
 .BR \-v ", " \-\-verbose
 More output. Give it twice to include libbpf's messages.
 .TP
@@ -173,6 +185,14 @@ Run as a service:
 .nf
 sudo systemctl enable \-\-now bpfrag
 journalctl \-u bpfrag \-f
+.fi
+.RE
+.PP
+Collect a report to attach to a bug report:
+.PP
+.RS
+.nf
+sudo bpfrag \-\-report > bpfrag\-report.md
 .fi
 .RE
 .SH SEE ALSO

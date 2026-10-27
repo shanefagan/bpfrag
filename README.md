@@ -389,6 +389,20 @@ Tiers, classifier lists and detector thresholds go in
   `/proc/<pid>/environ` when the game runs as your user. The systemd unit
   trims the daemon's capability bounding set to what it needs.
 
+## Reporting a problem
+
+Open an [issue](https://github.com/shanefagan/bpfrag/issues/new/choose) and
+attach a report:
+
+```sh
+sudo bpfrag --report > bpfrag-report.md
+```
+
+It collects the version, OS and kernel, `--check`, `--selftest`,
+`--monitor`, the effective configuration, the service state, the restore
+journal and this boot's log. The hostname, user names in home paths, and
+IP and MAC addresses are replaced, but read it through before posting.
+
 ## Overhead
 
 The raw tracepoints fire on every socket send and receive. Anything that isn't
@@ -447,6 +461,7 @@ src/config/mod.rs            config file, command-line overrides, validation
 src/config/builtin.rs        built-in lists and tier profiles
 src/cli/check.rs             --check
 src/cli/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
+src/cli/report.rs            --report: diagnostics for a bug report, addresses removed
 
 dist/                        systemd unit, man page, /etc/default file, example config
 packaging/arch/              PKGBUILD (bpfrag-git) + install hook

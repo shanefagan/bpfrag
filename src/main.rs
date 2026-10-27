@@ -128,6 +128,11 @@ struct Opts {
     #[clap(long)]
     dump_config: bool,
 
+    /// Don't run: print a diagnostic report for a bug report (Markdown,
+    /// with hostname and addresses removed). Most complete as root.
+    #[clap(long)]
+    report: bool,
+
     /// Verbose output (-v debug, -vv trace including libbpf).
     #[clap(short = 'v', long, action = clap::ArgAction::Count)]
     verbose: u8,
@@ -169,6 +174,19 @@ impl Opts {
 fn main() -> Result<()> {
     let opts = Opts::parse();
     logger::init(opts.verbose);
+
+    // Before loading the config: a config that doesn't load is exactly the
+    // kind of thing a report should show.
+    if opts.report {
+        let run_dir = Config::load(opts.config.as_deref())
+            .map(|c| c.general.run_dir)
+            .unwrap_or_else(|_| Config::default().general.run_dir);
+        print!(
+            "{}",
+            cli::report::run_report(opts.config.as_deref(), std::path::Path::new(&run_dir))
+        );
+        return Ok(());
+    }
 
     let mut cfg = Config::load(opts.config.as_deref())?;
     opts.apply(&mut cfg)?;
