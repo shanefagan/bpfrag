@@ -1,3 +1,9 @@
+bpfrag (0.2.1-1) unstable; urgency=medium
+
+  * tc programs no longer stop CAKE's IFB redirect (download shaping) during matches
+
+ -- Shane Fagan <mail@shanefagan.com>  Tue, 27 Oct 2026 22:40:58 +0000
+
 bpfrag (0.2.0-1) unstable; urgency=medium
 
   * Requires kernel 6.6+; --report for bug reports; packages enable the service on install
