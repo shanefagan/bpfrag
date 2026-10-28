@@ -25,6 +25,50 @@ enum Want {
     AtLeast(Vec<u64>),
 }
 
+impl Want {
+    /// Parse a profile value; None if a raise-only value isn't numbers.
+    fn parse(v: &str) -> Option<Want> {
+        match v.trim().strip_prefix(">=") {
+            Some(nums) => nums
+                .split_whitespace()
+                .map(str::parse::<u64>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()
+                .filter(|n| !n.is_empty())
+                .map(Want::AtLeast),
+            None => Some(Want::Exact(norm_ws(v))),
+        }
+    }
+
+    /// The value to write, given what was there before bpfrag.
+    fn target(&self, baseline: &str) -> String {
+        match self {
+            Want::Exact(s) => s.clone(),
+            Want::AtLeast(n) => {
+                let base: Vec<u64> = baseline
+                    .split_whitespace()
+                    .filter_map(|x| x.parse().ok())
+                    .collect();
+                if base.len() == n.len() {
+                    base.iter()
+                        .zip(n)
+                        .map(|(b, t)| (*b).max(*t).to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                } else {
+                    n.iter().map(u64::to_string).collect::<Vec<_>>().join(" ")
+                }
+            }
+        }
+    }
+}
+
+/// What a profile value `v` would set a sysctl that holds `current` to;
+/// None if `v` is malformed.
+pub fn target_for(v: &str, current: &str) -> Option<String> {
+    Want::parse(v).map(|w| w.target(&norm_ws(current)))
+}
+
 /// "/proc/sys/net/core/busy_poll" -> "net.core.busy_poll", for messages.
 pub fn short_path(path: &str) -> String {
     match path.strip_prefix("/proc/sys/") {
@@ -66,21 +110,11 @@ impl Knobs {
                 debug!("sysctl {k} not present on this kernel, skipping");
                 continue;
             }
-            let want = match v.trim().strip_prefix(">=") {
-                Some(nums) => match nums
-                    .split_whitespace()
-                    .map(str::parse::<u64>)
-                    .collect::<Result<Vec<_>, _>>()
-                {
-                    Ok(n) if !n.is_empty() => Want::AtLeast(n),
-                    _ => {
-                        self.warn_once(&format!("bad:{k}"), || {
-                            format!("sysctl {k}: bad value {v:?}")
-                        });
-                        continue;
-                    }
-                },
-                None => Want::Exact(norm_ws(v)),
+            let Some(want) = Want::parse(v) else {
+                self.warn_once(&format!("bad:{k}"), || {
+                    format!("sysctl {k}: bad value {v:?}")
+                });
+                continue;
             };
             let key = format!("sysctl:{k}");
             wanted.insert(key.clone());
@@ -97,24 +131,7 @@ impl Knobs {
                 Some(Saved::File { value, .. }) => value.clone(),
                 _ => cur.clone(),
             };
-            let target = match &want {
-                Want::Exact(s) => s.clone(),
-                Want::AtLeast(n) => {
-                    let base: Vec<u64> = baseline
-                        .split_whitespace()
-                        .filter_map(|x| x.parse().ok())
-                        .collect();
-                    if base.len() == n.len() {
-                        base.iter()
-                            .zip(n)
-                            .map(|(b, t)| (*b).max(*t).to_string())
-                            .collect::<Vec<_>>()
-                            .join(" ")
-                    } else {
-                        n.iter().map(u64::to_string).collect::<Vec<_>>().join(" ")
-                    }
-                }
-            };
+            let target = want.target(&baseline);
             if target == cur {
                 if prev.is_some() && target == baseline {
                     self.unsave(&key); // back at baseline, nothing to restore
@@ -184,6 +201,15 @@ pub(super) fn restore(path: &str, value: &str, applied: &str) -> Result<Outcome>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn targets_raise_only_and_exact() {
+        assert_eq!(target_for(">=600", "300").as_deref(), Some("600"));
+        assert_eq!(target_for(">=600", "800").as_deref(), Some("800"));
+        assert_eq!(target_for(">=1 50", "4 10").as_deref(), Some("4 50"));
+        assert_eq!(target_for("50", "0").as_deref(), Some("50"));
+        assert_eq!(target_for(">=lots", "0"), None);
+    }
 
     #[test]
     fn short_paths() {

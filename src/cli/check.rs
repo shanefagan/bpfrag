@@ -4,12 +4,13 @@
 //! `bpfrag --check`: what will (and won't) work on this machine, and who
 //! else is tuning it.
 
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::config::Config;
 use crate::net;
-use crate::tune::coexist;
-use crate::util::{is_root, read_trim, sysctl_path};
+use crate::tune::{coexist, target_for};
+use crate::util::{is_root, norm_ws, read_trim, sysctl_path};
 
 /// One report line: `ok` is pass / fail / just information (None).
 fn line(ok: Option<bool>, what: &str, detail: impl AsRef<str>) {
@@ -133,6 +134,10 @@ pub fn run(cfg: &Config) -> bool {
 
     println!();
     let (skip, note) = coexist::skip_set(cfg);
+    settings(cfg, &skip);
+    context();
+
+    println!();
     match coexist::bpftune_pid() {
         Some(p) => line(
             Some(true),
@@ -169,4 +174,268 @@ pub fn run(cfg: &Config) -> bool {
         println!("Ready. Try `sudo bpfrag --dry-run -v` and start a match.");
     }
     !fatal
+}
+
+/// Every sysctl bpfrag sets: its value now, and what each tier would make
+/// it. Distros ship different defaults, so this is where they show.
+fn settings(cfg: &Config, skip: &HashSet<String>) {
+    let mut keys: Vec<&String> = cfg.profiles.iter().flat_map(|p| p.sysctl.keys()).collect();
+    keys.sort();
+    keys.dedup();
+    println!("Settings now, and what each tier would set (\"=\" means it already holds that):");
+    for k in keys {
+        let Some(cur) = sysctl_path(k).and_then(|p| read_trim(p).ok()) else {
+            println!("  {k:<32} not on this kernel");
+            continue;
+        };
+        let cur = norm_ws(&cur);
+        let tiers: Vec<String> = cfg
+            .profiles
+            .iter()
+            .filter_map(|p| {
+                let v = p.sysctl.get(k)?;
+                let t = target_for(v, &cur).unwrap_or_else(|| format!("bad value {v:?}"));
+                let t = if t == cur { "=".into() } else { t };
+                Some(format!("{} {t}", p.tier))
+            })
+            .collect();
+        let note = if skip.contains(k.as_str()) {
+            " (left to bpftune)"
+        } else {
+            ""
+        };
+        println!("  {k:<32} {cur:<12} {}{note}", tiers.join(", "));
+    }
+}
+
+/// Things bpfrag doesn't change that decide how much its settings matter.
+fn context() {
+    println!();
+    let sysctl = |k: &str| {
+        sysctl_path(k)
+            .and_then(|p| read_trim(p).ok())
+            .unwrap_or_else(|| "?".into())
+    };
+    line(
+        None,
+        "default qdisc",
+        format!(
+            "{} (new interfaces' queues)",
+            sysctl("net.core.default_qdisc")
+        ),
+    );
+    line(
+        None,
+        "TCP congestion",
+        format!(
+            "{} (how much queue downloads build)",
+            sysctl("net.ipv4.tcp_congestion_control")
+        ),
+    );
+    let rel = read_trim("/proc/sys/kernel/osrelease").unwrap_or_default();
+    match kernel_config(&rel) {
+        Some(c) => {
+            let hz = config_value(&c, "CONFIG_HZ").unwrap_or("?");
+            let preempt = [
+                ("PREEMPT_RT", "rt"),
+                ("PREEMPT_LAZY", "lazy"),
+                ("PREEMPT", "full"),
+                ("PREEMPT_VOLUNTARY", "voluntary"),
+                ("PREEMPT_NONE", "none"),
+            ]
+            .into_iter()
+            .find(|(k, _)| config_value(&c, &format!("CONFIG_{k}")) == Some("y"))
+            .map_or("?", |(_, m)| m);
+            // With PREEMPT_DYNAMIC the build choice is only the default:
+            // debugfs shows the live mode as "(full)", and preempt= on the
+            // command line overrides it at boot.
+            let live = read_trim("/sys/kernel/debug/sched/preempt")
+                .ok()
+                .and_then(|s| {
+                    s.split_whitespace()
+                        .find_map(|w| w.strip_prefix('(')?.strip_suffix(')').map(String::from))
+                });
+            let cmdline = read_trim("/proc/cmdline").unwrap_or_default();
+            let boot = cmdline
+                .split_whitespace()
+                .find_map(|w| w.strip_prefix("preempt="));
+            let dynamic = config_value(&c, "CONFIG_PREEMPT_DYNAMIC") == Some("y");
+            let mode = match (live, boot) {
+                (Some(m), _) => format!("preemption {m}"),
+                (None, Some(m)) => format!("preemption {m} (from the command line)"),
+                (None, None) if dynamic => format!("preemption {preempt} by default"),
+                (None, None) => format!("preemption {preempt}"),
+            };
+            line(None, "kernel build", format!("HZ={hz}, {mode}"));
+        }
+        None => line(
+            None,
+            "kernel build",
+            "config not found (/boot or /proc/config.gz)",
+        ),
+    }
+    let nm =
+        Path::new("/etc/NetworkManager").exists() || Path::new("/usr/lib/NetworkManager").exists();
+    if nm && nm_wifi_powersave(Path::new("/")).is_none() {
+        line(
+            None,
+            "NM wifi.powersave",
+            "not set (the driver's default, usually on)",
+        );
+    }
+    if let Some((v, file)) = nm_wifi_powersave(Path::new("/")) {
+        let what = match v.as_str() {
+            "0" => "default (the driver's choice)",
+            "1" => "ignore (NetworkManager leaves it alone)",
+            "2" => "disable",
+            "3" => "enable",
+            _ => "unknown value",
+        };
+        line(
+            None,
+            "NM wifi.powersave",
+            format!("{v} = {what}, from {file}"),
+        );
+    }
+}
+
+/// This kernel's build config: /boot/config-<release> (Debian, Ubuntu,
+/// Fedora) or /proc/config.gz (Arch, CachyOS).
+fn kernel_config(release: &str) -> Option<String> {
+    if let Ok(t) = std::fs::read_to_string(format!("/boot/config-{release}")) {
+        return Some(t);
+    }
+    let out = std::process::Command::new("gzip")
+        .args(["-dc", "/proc/config.gz"])
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+fn config_value<'a>(config: &'a str, key: &str) -> Option<&'a str> {
+    config.lines().find_map(|l| {
+        l.strip_prefix(key)
+            .and_then(|r| r.strip_prefix('='))
+            .map(|v| v.trim_matches('"'))
+    })
+}
+
+/// NetworkManager's default `wifi.powersave` and the file that sets it,
+/// following its merge order: NetworkManager.conf, then conf.d files by
+/// name, where /etc beats /run beats /usr/lib for the same name. None if
+/// NetworkManager isn't installed or nothing sets it.
+fn nm_wifi_powersave(root: &Path) -> Option<(String, String)> {
+    let etc = root.join("etc/NetworkManager");
+    if !etc.exists() && !root.join("usr/lib/NetworkManager").exists() {
+        return None;
+    }
+    let mut files: Vec<std::path::PathBuf> = vec![etc.join("NetworkManager.conf")];
+    let mut by_name: BTreeMap<String, std::path::PathBuf> = BTreeMap::new();
+    for dir in [
+        "usr/lib/NetworkManager/conf.d",
+        "run/NetworkManager/conf.d",
+        "etc/NetworkManager/conf.d",
+    ] {
+        let Ok(rd) = std::fs::read_dir(root.join(dir)) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().into_owned();
+            if name.ends_with(".conf") {
+                by_name.insert(name, e.path());
+            }
+        }
+    }
+    files.extend(by_name.into_values());
+    let mut found = None;
+    for f in files {
+        let Ok(text) = std::fs::read_to_string(&f) else {
+            continue;
+        };
+        if let Some(v) = wifi_powersave_in(&text) {
+            let shown = f
+                .strip_prefix(root)
+                .map(|p| format!("/{}", p.display()))
+                .unwrap_or_else(|_| f.display().to_string());
+            found = Some((v, shown));
+        }
+    }
+    found
+}
+
+/// The last `wifi.powersave` in a `[connection...]` section of one file.
+fn wifi_powersave_in(text: &str) -> Option<String> {
+    let mut in_conn = false;
+    let mut found = None;
+    for l in text.lines().map(str::trim) {
+        if l.starts_with('[') {
+            in_conn = l.starts_with("[connection");
+        } else if in_conn {
+            if let Some((k, v)) = l.split_once('=') {
+                if k.trim() == "wifi.powersave" {
+                    found = Some(v.trim().to_string());
+                }
+            }
+        }
+    }
+    found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_kernel_config_values() {
+        let c = "# CONFIG_HZ_250 is not set\nCONFIG_HZ_1000=y\nCONFIG_HZ=1000\nCONFIG_DEFAULT_TCP_CONG=\"cubic\"\n";
+        assert_eq!(config_value(c, "CONFIG_HZ"), Some("1000"));
+        assert_eq!(config_value(c, "CONFIG_DEFAULT_TCP_CONG"), Some("cubic"));
+        assert_eq!(config_value(c, "CONFIG_HZ_250"), None);
+    }
+
+    #[test]
+    fn network_manager_merge_order() {
+        let root = std::env::temp_dir().join(format!("bpfrag-nm-{}", std::process::id()));
+        let w = |p: &str, t: &str| {
+            let f = root.join(p);
+            std::fs::create_dir_all(f.parent().unwrap()).unwrap();
+            std::fs::write(f, t).unwrap();
+        };
+        // Ubuntu's package file, then a user's override with the same name
+        // in /etc, then a later file that only sets something else.
+        w(
+            "etc/NetworkManager/NetworkManager.conf",
+            "[main]\nplugins=keyfile\n",
+        );
+        w(
+            "usr/lib/NetworkManager/conf.d/default-wifi-powersave-on.conf",
+            "[connection]\nwifi.powersave = 3\n",
+        );
+        assert_eq!(
+            nm_wifi_powersave(&root),
+            Some((
+                "3".into(),
+                "/usr/lib/NetworkManager/conf.d/default-wifi-powersave-on.conf".into()
+            ))
+        );
+        w(
+            "etc/NetworkManager/conf.d/default-wifi-powersave-on.conf",
+            "[connection]\nwifi.powersave = 2\n",
+        );
+        w(
+            "etc/NetworkManager/conf.d/zz-dns.conf",
+            "[main]\ndns=none\n[device]\nwifi.powersave=3\n",
+        );
+        assert_eq!(
+            nm_wifi_powersave(&root),
+            Some((
+                "2".into(),
+                "/etc/NetworkManager/conf.d/default-wifi-powersave-on.conf".into()
+            ))
+        );
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(nm_wifi_powersave(&root), None);
+    }
 }

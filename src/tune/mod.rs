@@ -23,6 +23,7 @@ mod coalesce;
 pub mod coexist;
 pub mod journal;
 mod sysctl;
+pub use sysctl::target_for;
 mod wifi;
 mod writeback;
 
