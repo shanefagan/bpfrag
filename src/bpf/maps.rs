@@ -122,20 +122,23 @@ pub fn bulk_tgid(skel: &BpfSkel, tgid: u32, on: bool) {
     }
 }
 
-/// Turn the tc programs' bulk lookups on or off.
-pub fn bulk_active(skel: &BpfSkel, on: bool) {
-    let r = skel.maps.bulk_on.update(
-        &0u32.to_ne_bytes(),
-        &u32::from(on).to_ne_bytes(),
-        MapFlags::ANY,
-    );
-    if let Err(e) = r {
-        warn!("bulk_on map update failed: {e}");
+/// Turn the bulk flow lookups (learning and marking) on or off. A plain
+/// write to the BPF side's .bss, which the kernel side reads directly.
+pub fn bulk_active(skel: &mut BpfSkel, on: bool) {
+    if let Some(bss) = skel.maps.bss_data.as_deref_mut() {
+        bss.bulk_on = on;
+    }
+}
+
+/// Count TCP per process (needed only while a match is on).
+pub fn count_tcp(skel: &mut BpfSkel, on: bool) {
+    if let Some(bss) = skel.maps.bss_data.as_deref_mut() {
+        bss.count_tcp = on;
     }
 }
 
 /// Forget every bulk process and flow (between matches).
-pub fn clear_bulk(skel: &BpfSkel) {
+pub fn clear_bulk(skel: &mut BpfSkel) {
     bulk_active(skel, false);
     for map in [&skel.maps.bulk_tgids, &skel.maps.bulk_flows] {
         let keys: Vec<Vec<u8>> = map.keys().collect();

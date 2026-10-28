@@ -38,6 +38,15 @@ const volatile bool dscp_override = false;	/* rewrite app-chosen DSCP too */
 const volatile bool set_priority = true;	/* skb->priority = TC_PRIO_INTERACTIVE */
 const volatile __u8 bulk_dscp = 1;		/* LE: RFC 8622 lower effort */
 
+/*
+ * Runtime switches, written by userspace through the skeleton's mmapped
+ * .bss (as sched_ext schedulers do): plain memory reads on the hot paths,
+ * no map lookup. TCP is only counted while a match is on, and bulk flows
+ * are only learned and looked up while some process is bulk.
+ */
+volatile bool count_tcp = false;
+volatile bool bulk_on = false;
+
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, NR_STATS);
@@ -120,14 +129,7 @@ struct {
 	__type(value, struct bulk_flow);
 } bulk_flows SEC(".maps");
 
-/* slot 0 is non-zero while any process is bulk: the tc programs skip the
- * flow lookups entirely otherwise */
-struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
-	__type(key, __u32);
-	__type(value, __u32);
-} bulk_on SEC(".maps");
+
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -203,13 +205,17 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	if (family != AF_INET && family != AF_INET6)
 		return;
 	proto = BPF_CORE_READ(sk, sk_protocol);
-	if (proto != IPPROTO_UDP && proto != IPPROTO_TCP)
+	if (proto == IPPROTO_TCP) {
+		if (!count_tcp)
+			return; /* no match on: nothing needs it */
+	} else if (proto != IPPROTO_UDP) {
 		return;
+	}
 
 	tgid = bpf_get_current_pid_tgid() >> 32;
 	if (!tgid)
 		return;
-	if (bpf_map_lookup_elem(&bulk_tgids, &tgid))
+	if (bulk_on && bpf_map_lookup_elem(&bulk_tgids, &tgid))
 		learn_bulk_flow(sk, family, proto, tgid);
 
 	st = bpf_map_lookup_elem(&proc_stats, &tgid);
@@ -381,10 +387,7 @@ static __always_inline void set_dscp6(struct __sk_buff *skb, __u32 l2, __u8 b0, 
 
 static __always_inline bool bulk_active(void)
 {
-	__u32 zero = 0;
-	__u32 *on = bpf_map_lookup_elem(&bulk_on, &zero);
-
-	return on && *on;
+	return bulk_on;
 }
 
 /* Is this a bulk process's flow? Tries the exact socket, then (for UDP) an

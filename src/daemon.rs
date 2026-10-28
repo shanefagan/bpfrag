@@ -341,7 +341,8 @@ impl<'a> Tuner<'a> {
         self.health.finish();
         self.egress.reset();
         self.bulk.reset();
-        maps::clear_bulk(&self.skel);
+        maps::clear_bulk(&mut self.skel);
+        maps::count_tcp(&mut self.skel, false);
         let (done, kept) = self.knobs.restore_all();
         if !done.is_empty() {
             debug!("restored: {}", done.join(", "));
@@ -361,6 +362,7 @@ impl<'a> Tuner<'a> {
                     s.name, s.tgid, s.pps, s.tx_pps, s.rx_pps, s.tier, s.reason
                 );
                 self.session_start = Some(Instant::now());
+                maps::count_tcp(&mut self.skel, true);
                 self.egress.reset();
                 // Learn the game's ports (for the marker and the meter) and
                 // take the health baselines before anything changes.
@@ -530,7 +532,8 @@ impl<'a> Tuner<'a> {
             }
         }
         if mark && !events.is_empty() {
-            maps::bulk_active(&self.skel, !self.bulk.bulk().is_empty());
+            let any = !self.bulk.bulk().is_empty();
+            maps::bulk_active(&mut self.skel, any);
         }
     }
 

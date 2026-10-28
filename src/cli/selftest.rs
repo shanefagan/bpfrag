@@ -205,7 +205,7 @@ fn as_bytes<T>(v: &T) -> &[u8] {
 
 /// Bulk flows through the marker and the meter. Returns (cases run,
 /// failures).
-fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
+fn check_bulk(skel: &mut BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
     let m = &skel.maps;
     let owner = bpf_intf::bulk_flow { tgid: 777 };
     for key in [
@@ -285,7 +285,7 @@ fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
         },
     ];
     let mut failed = 0;
-    let mut run = |c: &Case, ingress: bool| match run_case_on(skel, c, ingress) {
+    let mut run = |skel: &BpfSkel, c: &Case, ingress: bool| match run_case_on(skel, c, ingress) {
         Ok(()) => println!("  PASS {}", c.name),
         Err(e) => {
             failed += 1;
@@ -293,10 +293,10 @@ fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
         }
     };
     for c in &cases {
-        run(c, false);
+        run(skel, c, false);
     }
     for c in &incoming {
-        run(c, true);
+        run(skel, c, true);
     }
     // with the switch off, nothing is looked up or demoted
     crate::bpf::maps::bulk_active(skel, false);
@@ -305,8 +305,9 @@ fn check_bulk(skel: &BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> {
         pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 27016)),
         expect: 0,
     };
-    run(&off, false);
+    run(skel, &off, false);
     run(
+        skel,
         &Case {
             name: "bulk switched off: nothing demoted on ingress".into(),
             pkt: pkt4(0, TCP, PEER_V4, HOST_V4, l4(TCP, 27016, 40000)),
@@ -484,7 +485,7 @@ pub fn run(cfg: &Config) -> Result<bool> {
     p.bpfrag_exit.set_autoload(false);
     p.bpfrag_dscp.set_autoload(true);
     p.bpfrag_rx.set_autoload(true);
-    let skel = open.load().context("loading the tc programs")?;
+    let mut skel = open.load().context("loading the tc programs")?;
 
     let m = &skel.maps;
     for map in [&m.mark_ifaces, &m.rx_ifaces] {
@@ -612,7 +613,7 @@ pub fn run(cfg: &Config) -> Result<bool> {
             println!("  FAIL arrival meter: {e}");
         }
     }
-    let (n, f) = check_bulk(&skel, bulk, dscp)?;
+    let (n, f) = check_bulk(&mut skel, bulk, dscp)?;
     total += n;
     failed += f;
     println!("{}/{total} passed", total - failed);
