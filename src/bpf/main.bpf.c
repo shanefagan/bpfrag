@@ -521,6 +521,19 @@ int bpfrag_dscp(struct __sk_buff *skb)
 
 /* ---- tc ingress: arrival gaps, bulk downloads ---------------------------- */
 
+static __always_inline void count_gap(struct port_rx *pr, __u64 gap)
+{
+	__u64 ms = gap / 1000000;
+
+	if (ms >= GAP_STALL_MS)
+		pr->stalls++;
+	if (gap > pr->max_gap_ns)
+		pr->max_gap_ns = gap;
+	if (ms >= GAP_BUCKETS - 1)
+		ms = GAP_BUCKETS - 1;
+	pr->hist[ms & (GAP_BUCKETS - 1)]++;
+}
+
 static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 {
 	struct port_rx *pr = bpf_map_lookup_elem(&port_rx, &port);
@@ -545,15 +558,32 @@ static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 		return;
 	gap = now - last;
 	ms = gap / 1000000;
-	if (ms >= GAP_IDLE_MS)
-		return; /* the flow paused; not a stall */
-	if (ms >= GAP_STALL_MS)
-		pr->stalls++;
-	if (gap > pr->max_gap_ns)
-		pr->max_gap_ns = gap;
-	if (ms >= GAP_BUCKETS - 1)
-		ms = GAP_BUCKETS - 1;
-	pr->hist[ms & (GAP_BUCKETS - 1)]++;
+	/*
+	 * A stall is the flow going quiet and then coming back at game rate.
+	 * From the first slow gap, hold everything until GAP_RESUME fast gaps
+	 * in a row say the game's tick rate is back, then count the quiet
+	 * stretch as one gap. If it lasted GAP_IDLE_MS or more it was a lobby,
+	 * a menu or loading (games keep sending keepalives there, Deadlock
+	 * about one a second), and isn't counted at all.
+	 */
+	if (ms >= GAP_STALL_MS) {
+		pr->held_ns += pr->resume_ns + gap;
+		pr->resume_ns = 0;
+		pr->resume_n = 0;
+		return;
+	}
+	if (!pr->held_ns) {
+		count_gap(pr, gap);
+		return;
+	}
+	pr->resume_ns += gap;
+	if (++pr->resume_n < GAP_RESUME)
+		return;
+	if (pr->held_ns < (__u64)GAP_IDLE_MS * 1000000)
+		count_gap(pr, pr->held_ns);
+	pr->held_ns = 0;
+	pr->resume_ns = 0;
+	pr->resume_n = 0;
 }
 
 /*

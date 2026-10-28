@@ -10,8 +10,10 @@
 //!   a histogram of the time between consecutive packets on each game
 //!   port. The game's main flow is the port that received the most. A
 //!   steady 64-tick server shows gaps of about 16 ms; spikes above that are
-//!   what a player feels as rubber-banding. Gaps of 100 ms or more count as
-//!   stalls; 2 s or more means the flow paused (a lobby) and isn't counted.
+//!   what a player feels as rubber-banding. A stall is the flow going
+//!   quiet for 100 ms to 2 s and coming back at game rate; the quiet
+//!   stretch counts as one gap. Quiet for 2 s or more is a lobby, a menu
+//!   or loading (games still send keepalives there) and isn't counted.
 //! - Drops come from kernel counters, see [`counters`].
 //! - The receive queue: the meter also records which NAPI instance (one
 //!   per receive queue) handled the game's packets, shown as "eno1 rx
@@ -41,9 +43,9 @@ pub struct Gaps {
     pub pkts: u64,
     /// `hist[i]`: gaps of i to i+1 ms; the last bucket holds longer ones.
     pub hist: [u64; BUCKETS],
-    /// Longest gap under the 2 s idle cut-off.
+    /// Longest gap counted (lobbies and other 2 s+ pauses aren't).
     pub max_gap_ns: u64,
-    /// Gaps of 100 ms up to the idle cut-off.
+    /// Quiet stretches of 100 ms up to 2 s, game rate on both sides.
     pub stalls: u64,
     /// NAPI instance of the latest packet; 0 if unknown.
     pub napi_id: u32,

@@ -22,8 +22,8 @@ show what reaches the machine, not what the game does with it.
 |---|---|---|
 | half ≤N ms | median gap between the game's incoming packets (1 ms buckets) | the server's tick rate; shouldn't change |
 | 99% ≤N ms | the gap 99% of packets beat | jitter anywhere on the path: Wi-Fi, queues, the internet |
-| longest N ms | the longest gap under 2 s | one-off hiccups, Wi-Fi power save |
-| stalls | gaps of 100 ms to 2 s | what a player feels as rubber-banding |
+| longest N ms | the longest gap counted (pauses of 2 s or more aren't) | one-off hiccups, Wi-Fi power save |
+| stalls | the flow went quiet for 100 ms to 2 s, then came back at game rate | what a player feels as rubber-banding |
 | socket buffer drops | UDP receive buffer overflowed (`RcvbufErrors`) | socket buffers, a game that stopped reading |
 | backlog drops | per-CPU input queue overflowed | `netdev_max_backlog` (RPS or virtual devices only) |
 | NIC drops | the NIC's receive ring overflowed | coalescing, ring size, very high rates |
@@ -41,6 +41,13 @@ Limits to keep in mind:
   the 99% figure and the stall count, against a lot of match-to-match noise.
 - **Drop counters are system-wide.** Anything else receiving during the
   match counts too.
+- **Stalls changed meaning in 0.3.1.** Before, every gap of 100 ms to 2 s
+  counted, including the one-a-second keepalives a game sends in a lobby
+  or menu, so a session that included time between matches could show
+  hundreds of stalls and a longest gap of about 1000 ms. From 0.3.1 a
+  stall is the flow going quiet and coming back at game rate. Don't
+  compare stall counts across that version (the CSV has a version
+  column).
 - **It's the incoming direction only.** DSCP and Wi-Fi contention affect
   the outgoing packets first. The server's view of your packets, or the
   game's own network graph, covers that side.

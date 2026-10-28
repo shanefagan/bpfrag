@@ -16,8 +16,9 @@ enum consts {
 	MAX_IFACES = 64,
 	MAX_BULK_FLOWS = 16384,	/* sockets of bulk processes being demoted */
 	GAP_BUCKETS = 64,	/* 1 ms each; the last one is ">= 63 ms" */
-	GAP_STALL_MS = 100,	/* a gap this long is a stall the player feels */
-	GAP_IDLE_MS = 2000,	/* longer: the flow paused (lobby), not a stall */
+	GAP_STALL_MS = 100,	/* a gap this long is a stall the player feels... */
+	GAP_IDLE_MS = 2000,	/* ...up to this; longer means the flow paused */
+	GAP_RESUME = 4,		/* fast gaps in a row that end a quiet stretch */
 };
 
 /* Global counters, one slot per CPU (summed by userspace). */
@@ -59,8 +60,11 @@ struct game_port {
 struct port_rx {
 	__u64 pkts;
 	__u64 last_ns;
-	__u64 max_gap_ns;	/* longest gap under GAP_IDLE_MS */
-	__u32 stalls;		/* gaps of GAP_STALL_MS .. GAP_IDLE_MS */
+	__u64 max_gap_ns;	/* longest gap counted */
+	__u64 held_ns;		/* quiet stretch waiting for game-rate traffic */
+	__u64 resume_ns;	/* fast gaps since then */
+	__u32 resume_n;
+	__u32 stalls;		/* quiet stretches of GAP_STALL_MS .. GAP_IDLE_MS */
 	__u32 napi_id;		/* NAPI instance (receive queue) of the latest packet */
 	__u32 hist[GAP_BUCKETS];
 };

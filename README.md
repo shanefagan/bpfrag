@@ -110,8 +110,9 @@ Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 
 
 - **Packet gaps** are timed as packets arrive, on the game's main flow. A
   64-tick server gives gaps of about 16 ms; the 99% figure, the longest gap
-  and stalls (gaps of 100 ms or more) show the spikes you feel as
-  rubber-banding.
+  and stalls (the flow going quiet for 100 ms or more mid-match) show the
+  spikes you feel as rubber-banding. Lobbies and menus, where games send
+  only keepalives, aren't counted.
 - **Drops** are the kernel counters that grow when the receive path can't
   keep up: socket buffers, the input backlog, the NIC's ring.
 - **The receive queue** is where the game's packets come in, and which IRQ

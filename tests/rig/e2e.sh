@@ -165,6 +165,20 @@ ip route del default via 10.99.0.2 dev bpfrag0 metric 4242
 kill $G; kill -INT $D; wait $D; D=
 same "after path-change match"
 
+echo "== 6b. stalls: a mid-match hiccup counts, a lobby doesn't"
+# Two real hiccups (the client frozen for ~300 ms), then a lobby: a few
+# seconds of one packet a second, the way games idle between rounds.
+"$B" -c $W/cfg.toml > $W/d6b.log 2>&1 & D=$!; sleep 1
+echo 64 > $W/rate6b; game 64 180 $W/rate6b; sleep 6
+for i in 1 2; do kill -STOP $G; sleep 0.3; kill -CONT $G; sleep 2; done
+echo 1 > $W/rate6b; sleep 4; echo 64 > $W/rate6b; sleep 4
+kill $G; sleep 2
+H=$(grep "fakeshooter: packet gaps" $W/d6b.log); echo "  ($H)"
+echo "$H" | grep -q ", 2 stalls (100 ms+)" && ok "two hiccups, two stalls; the lobby isn't one" || bad "stalls: $H"
+echo "$H" | grep -Eq "longest (2[5-9][0-9]|3[0-9][0-9]|4[0-4][0-9]) ms" && ok "longest gap is the hiccup, not a keepalive" || bad "longest: $H"
+kill -INT $D; wait $D; D=
+same "after stall match"
+
 echo "== 7. --dry-run changes nothing"
 "$B" -c $W/cfg.toml --dry-run > $W/d5.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
 grep -q "would set" $W/d5.log && ok "dry run logs intended changes" || bad "dry run silent"

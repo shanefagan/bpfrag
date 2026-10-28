@@ -101,7 +101,7 @@ radio awake. The cost shows after lulls longer than the timeout: between
 rounds, on slow-tick servers, or when the server pauses. Then the first
 packets back can wait for a beacon, up to about 100 ms. Wired: no effect.
 
-**See it:** the longest gap and the stall count (gaps of 100 ms or more)
+**See it:** the longest gap and the stall count (quiet stretches of 100 ms to 2 s)
 in the health line, on Wi-Fi. Compare matches with the default against
 matches with `wifi_powersave_off = false` under `[tier.all]`.
 
