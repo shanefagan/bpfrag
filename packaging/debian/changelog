@@ -1,3 +1,9 @@
+bpfrag (0.4.1-1) unstable; urgency=medium
+
+  * Consecutive matches no longer merge into one
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 28 Oct 2026 17:15:06 +0000
+
 bpfrag (0.4.0-1) unstable; urgency=medium
 
   * A/B experiments; --check shows every setting against its tier; distribution defaults
