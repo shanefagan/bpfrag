@@ -66,6 +66,8 @@ pub struct BulkDetector {
     never: Vec<String>,
     always: Vec<String>,
     tracks: HashMap<u32, Track>,
+    /// Bytes each process (by name) moved while bulk, this match.
+    moved: HashMap<String, u64>,
 }
 
 impl BulkDetector {
@@ -77,11 +79,13 @@ impl BulkDetector {
             never: cfg.never_list(),
             always: cfg.always_list(),
             tracks: HashMap::new(),
+            moved: HashMap::new(),
         }
     }
 
     /// Forget everything (between matches).
     pub fn reset(&mut self) -> Vec<BulkEvent> {
+        self.moved.clear();
         self.tracks
             .drain()
             .filter(|(_, t)| t.bulk)
@@ -188,6 +192,9 @@ impl BulkDetector {
                     name: t.name.clone(),
                 });
             }
+            if t.bulk {
+                *self.moved.entry(t.name.clone()).or_default() += delta;
+            }
         }
         // processes that exited (BPF removed their entry)
         let gone: Vec<u32> = self
@@ -202,6 +209,18 @@ impl BulkDetector {
             }
         }
         events
+    }
+
+    /// (name, bytes) each process moved while bulk this match, most first.
+    pub fn moved(&self) -> Vec<(String, u64)> {
+        let mut v: Vec<(String, u64)> = self
+            .moved
+            .iter()
+            .filter(|(_, b)| **b > 0)
+            .map(|(n, b)| (n.clone(), *b))
+            .collect();
+        v.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        v
     }
 
     /// Processes currently bulk, busiest first.
@@ -300,11 +319,15 @@ mod tests {
         assert!(started(&sim.run(5, &[(10, 40.0)], &[])).is_empty());
         let ev = sim.step(&[(10, 40.0)], &[]);
         assert_eq!(started(&ev), ["steam"]);
+        // the window it became bulk in counts: 40 Mbit/s for 1 s = 5 MB
+        sim.step(&[(10, 40.0)], &[]);
+        assert_eq!(sim.det.moved(), [("steam".to_string(), 10_000_000)]);
         let b = sim.det.bulk();
         assert_eq!(b.len(), 1);
         assert!((b[0].mbps - 40.0).abs() < 0.1, "{b:?}");
         // a short pause doesn't release it, 10 quiet seconds do
         assert!(stopped(&sim.run(9, &[], &[])).is_empty());
+        assert_eq!(sim.det.moved()[0].1, 10_000_000);
         assert_eq!(stopped(&sim.step(&[], &[])), ["steam"]);
         assert!(sim.det.bulk().is_empty());
     }

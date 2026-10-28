@@ -160,6 +160,24 @@ pub struct Health {
     /// The receive queue the main flow arrives on, if known.
     #[serde(default)]
     pub rx_queue: Option<RxQueue>,
+    /// (process, bytes) moved while bulk during the match.
+    #[serde(default)]
+    pub bulk: Vec<(String, u64)>,
+    /// The class bulk packets were marked with; None if they weren't.
+    #[serde(default)]
+    pub bulk_class: Option<String>,
+}
+
+/// "412 MB", "1.3 GB".
+fn size(bytes: u64) -> String {
+    let mb = bytes as f64 / 1e6;
+    if mb >= 1000.0 {
+        format!("{:.1} GB", mb / 1000.0)
+    } else if mb >= 1.0 {
+        format!("{mb:.0} MB")
+    } else {
+        "<1 MB".into()
+    }
 }
 
 impl Health {
@@ -190,6 +208,18 @@ impl Health {
         }
         if let Some(q) = &self.rx_queue {
             s += &format!("; arrives on {}", q.describe());
+        }
+        if !self.bulk.is_empty() {
+            let list: Vec<String> = self
+                .bulk
+                .iter()
+                .map(|(n, b)| format!("{n} {}", size(*b)))
+                .collect();
+            s += &format!("; bulk: {}", list.join(", "));
+            s += &match &self.bulk_class {
+                Some(c) => format!(" marked {c}"),
+                None => " (not marked)".into(),
+            };
         }
         s
     }
@@ -261,6 +291,7 @@ impl Tracker {
             nic_drops,
             squeezed: sys.squeezed,
             rx_queue: self.rx_queue.clone(),
+            ..Default::default()
         });
     }
 
@@ -359,6 +390,20 @@ mod tests {
                 .ends_with("no drops; arrives on eno1 rx queue 1, IRQ 140"),
             "{}",
             q.summary()
+        );
+        let b = Health {
+            bulk: vec![
+                ("steam".into(), 412_300_000),
+                ("aria2c".into(), 1_250_000_000),
+            ],
+            bulk_class: Some("LE".into()),
+            ..Default::default()
+        };
+        assert!(
+            b.summary()
+                .ends_with("; bulk: steam 412 MB, aria2c 1.2 GB marked LE"),
+            "{}",
+            b.summary()
         );
     }
 }

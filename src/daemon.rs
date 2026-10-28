@@ -381,7 +381,12 @@ impl<'a> Tuner<'a> {
             Action::End { session, reason } => {
                 let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
                 self.health.update(&maps::read_port_rx(&self.skel));
-                let health = self.health.finish();
+                let mut health = self.health.finish();
+                if let Some(h) = health.as_mut() {
+                    h.bulk = self.bulk.moved();
+                    h.bulk_class = (self.cfg.bulk.enabled && !self.dry_run)
+                        .then(|| self.cfg.bulk.class.clone());
+                }
                 self.recent.push_front(RecentMatch {
                     name: session.name.clone(),
                     peak_tier: session.peak_tier.to_string(),

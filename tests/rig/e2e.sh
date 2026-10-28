@@ -218,8 +218,9 @@ grep -q "steam is no longer moving bulk data" $W/d9.log && ok "bulk released whe
 $W/apps/steam $W/bulk.py up 0.5 40101 & BS=$!; sleep 1
 SR=$(cap bulk-released 'tcp and src 10.99.0.1 and src port 40101')
 echo "$SR" | grep -q "dscp=1 " && bad "still demoting after release: $SR" || ok "nothing demoted once released"
-kill $BS
-kill $BO $G; kill -INT $D; wait $D; D=
+kill $BS $G; sleep 2
+grep -q "fakeshooter: packet gaps.*; bulk: .*steam [0-9]* MB.* marked LE" $W/d9.log && ok "match summary says how much bulk was demoted" || bad "summary: $(grep 'fakeshooter: packet' $W/d9.log)"
+kill $BO; kill -INT $D; wait $D; D=
 same "after bulk match"
 
 echo "== 10. bulk with --dry-run: reported, never marked"

@@ -2,7 +2,8 @@
 // Copyright (C) 2025-2026 Shane Fagan
 
 //! `bpfrag --report`: everything useful for a bug report, as Markdown to
-//! paste into a GitHub issue.
+//! paste into a GitHub issue: the bpfrag sections below, the service, the
+//! qdiscs (CAKE's tin counters), the restore journal and the log.
 //!
 //! The bpfrag sections (`--check`, `--selftest`, `--monitor`,
 //! `--dump-config`) run this same binary as a child process, so a crash in
@@ -130,6 +131,14 @@ pub fn run_report(config: Option<&Path>, run_dir: &Path) -> String {
         ],
     );
     section(&mut out, "Service", &service);
+
+    // qdiscs, with CAKE's per-tin counters if CAKE is in use (does LE
+    // traffic land in the Bulk tin?)
+    section(
+        &mut out,
+        "tc -s qdisc",
+        &run(Path::new("tc"), &["-s", "qdisc", "show"]),
+    );
 
     let journal = run_dir.join("journal.json");
     let journal = match std::fs::read_to_string(&journal) {
