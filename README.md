@@ -235,8 +235,8 @@ that.
 
 Every [release](https://github.com/shanefagan/bpfrag/releases) has a `.deb`
 (Debian 12+, Ubuntu 22.04+), an `.rpm` (current Fedora) and a binary tarball
-that runs on any x86-64 distro with glibc 2.35 or newer, all on kernel 6.6
-or newer.
+that runs on any x86-64 distro with glibc 2.35 or newer and libdbus, all on
+kernel 6.6 or newer.
 
 The packages enable and start the service when first installed. It does
 nothing until a game's match is detected. To see what this machine supports
@@ -251,7 +251,7 @@ With the binary tarball, copy the files into place and run
 `sudo systemctl enable --now bpfrag` yourself.
 
 Building it yourself needs Rust 1.85 or newer, clang, libclang (for
-bindgen), libelf and zlib.
+bindgen), libelf, libdbus and zlib.
 
 **Arch, CachyOS, EndeavourOS.** Build a package from the checkout. It builds
 whatever is committed:
@@ -276,7 +276,7 @@ The package needs the glibc it was built against or newer, so build on the
 oldest release you'll install it on.
 
 ```sh
-sudo apt install clang libclang-dev libelf-dev zlib1g-dev pkg-config make
+sudo apt install clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config make
 cargo install cargo-deb --locked
 make deb
 sudo apt install ./target/debian/bpfrag_*.deb
@@ -300,13 +300,14 @@ Edits to `/etc/default/bpfrag` and `/etc/bpfrag/bpfrag.toml` survive
 upgrades.
 
 **Anything else.** Unpack the release tarball (binary, systemd unit, man
-page, example config), or install the build dependencies and use the
-Makefile:
+page, example config, D-Bus policy), or install the build dependencies and
+use the Makefile:
 
 ```sh
 make
 sudo make install
 sudo systemctl daemon-reload
+sudo systemctl reload dbus    # loads the D-Bus policy
 ```
 
 The BPF object needs no vmlinux.h or bpftool at build time.
@@ -361,6 +362,20 @@ game, why it counts as a game, every applied setting and the last match.
 `alt` and `class` are `off`, `idle`, `casual`, `competitive` or `intense`, for
 `format-icons` or CSS.
 
+### D-Bus
+
+bpfrag also publishes a read-only interface on the system bus,
+`com.performativenonsense.Bpfrag1`, for programs that want to follow matches
+as they happen: properties for the match in progress, and signals when
+one starts, changes tier and ends, with its health. Any user can read it,
+and nothing on the bus can change what bpfrag does.
+
+```sh
+gdbus monitor --system --dest com.performativenonsense.Bpfrag1
+```
+
+[docs/dbus.md](docs/dbus.md) is the reference.
+
 For the service, put flags in `/etc/default/bpfrag` as `BPFRAG_FLAGS="..."`.
 Tiers, classifier lists and detector thresholds go in
 `/etc/bpfrag/bpfrag.toml`; see `dist/bpfrag.toml` for an annotated example.
@@ -398,6 +413,7 @@ IP and MAC addresses are replaced, but read it through before posting.
 - [docs/experiments.md](docs/experiments.md): experiments and checks worth running, and what each needs
 - [docs/findings.md](docs/findings.md): results, open questions, bugs found, overhead
 - [docs/detection.md](docs/detection.md): how matches, tiers, interfaces and bulk transfers are detected
+- [docs/dbus.md](docs/dbus.md): the read-only D-Bus interface, for programs that follow matches
 - [docs/development.md](docs/development.md): code layout, tests, releases
 - `man bpfrag`, and `dist/bpfrag.toml` for every configuration option
 

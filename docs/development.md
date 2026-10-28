@@ -15,6 +15,7 @@ src/daemon.rs                Tuner::init()/run(), the "Scheduler" of this projec
 src/bpf_skel.rs              libbpf-cargo skeleton (BpfSkel)
 src/bpf_intf.rs              bindgen'd src/bpf/intf.h
 src/stats.rs                 metrics, --stats, --monitor, --waybar
+src/bus.rs                   the read-only D-Bus interface (docs/dbus.md)
 src/health/mod.rs            per-match health: packet gaps, drop counters
 src/health/counters.rs       the kernel drop counters it reads
 
@@ -72,9 +73,9 @@ AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
 ## Testing
 
 ```sh
-cargo test                     # detectors, classifier, config, journal, health, report, packaging (63 tests)
+cargo test                     # detectors, classifier, config, journal, health, report, D-Bus, packaging (86 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (27 checks)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (67 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (84 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes
@@ -119,7 +120,11 @@ daemon-shaped noise, and checks:
   (arriving at the IFB, where CAKE sees it), an OBS upload isn't, marking
   stops once the download does, and the match summary says how much was
   demoted;
-- `--dry-run` changes nothing, bulk traffic included.
+- `--dry-run` changes nothing, bulk traffic included;
+- on a private bus with the shipped policy, another user can read the D-Bus
+  properties but can't set them or take the name, the match signals
+  arrive (including when bpfrag stops mid-match), and without a bus the
+  daemon carries on.
 
 In every case where bpfrag owns the change, the system ends byte-identical to
 baseline.

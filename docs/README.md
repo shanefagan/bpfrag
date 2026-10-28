@@ -18,6 +18,8 @@ use it. These pages go deeper.
   and overhead measurements.
 - [detection.md](detection.md): how a match, its tier, its interfaces and
   bulk transfers are detected.
+- [dbus.md](dbus.md): the read-only D-Bus interface: properties,
+  signals, who can read it and what it leaves out.
 - [development.md](development.md): code layout, tests, overhead and
   releases. Rules for changing the code are in [AGENTS.md](../AGENTS.md).
 

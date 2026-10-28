@@ -32,8 +32,8 @@ level mirrors the sched_ext Rust schedulers (`main.rs`, `bpf_skel.rs`,
 
 ## Build and test
 
-Needs Rust 1.85+, clang, libclang, libelf, zlib. The BPF object is built
-by `build.rs` (libbpf-cargo); `src/bpf/intf.h` is bindgen'd into
+Needs Rust 1.85+, clang, libclang, libelf, libdbus, zlib. The BPF object
+is built by `build.rs` (libbpf-cargo); `src/bpf/intf.h` is bindgen'd into
 `bpf_intf.rs`.
 
 ```sh
