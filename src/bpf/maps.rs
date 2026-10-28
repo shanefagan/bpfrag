@@ -99,27 +99,12 @@ pub fn track_ports(skel: &BpfSkel, tgid: u32, on: bool) {
     }
 }
 
-/// Declare `tgid` bulk (or not). Its sockets are learned from then on, and
-/// dropped when it stops being bulk.
+/// Declare `tgid` bulk (or not). Its sockets are learned from then on. The
+/// BPF side only demotes a flow while its owner is in `bulk_tgids`, so
+/// letting a process go takes effect at once; its flows stay in the LRU map
+/// (ready if it turns bulk again) until evicted or the match ends.
 pub fn bulk_tgid(skel: &BpfSkel, tgid: u32, on: bool) {
     set_flag(&skel.maps.bulk_tgids, tgid, on, "bulk");
-    if on {
-        return;
-    }
-    let flows = &skel.maps.bulk_flows;
-    let stale: Vec<Vec<u8>> = flows
-        .keys()
-        .filter(|key| {
-            flows
-                .lookup(key, MapFlags::ANY)
-                .ok()
-                .flatten()
-                .is_some_and(|v| from_bytes::<bpf_intf::bulk_flow>(&v).tgid == tgid)
-        })
-        .collect();
-    for key in stale {
-        let _ = flows.delete(&key);
-    }
 }
 
 /// Turn the bulk flow lookups (learning and marking) on or off. A plain

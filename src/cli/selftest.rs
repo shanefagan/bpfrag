@@ -216,6 +216,7 @@ fn check_bulk(skel: &mut BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> 
     ] {
         m.bulk_flows.update(&key, as_bytes(&owner), MapFlags::ANY)?;
     }
+    crate::bpf::maps::bulk_tgid(skel, owner.tgid, true);
     crate::bpf::maps::bulk_active(skel, true);
     let b = bulk << 2;
     let af11 = 10u8 << 2;
@@ -298,6 +299,36 @@ fn check_bulk(skel: &mut BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> 
     for c in &incoming {
         run(skel, c, true);
     }
+    // Once its process is let go, a flow still in the map isn't demoted,
+    // even one learned after the release (a send that raced it).
+    crate::bpf::maps::bulk_tgid(skel, owner.tgid, false);
+    for key in [
+        flow_key(AF_INET, TCP, &HOST_V4, 40000, &PEER_V4, 27016),
+        flow_key(0, UDP, &[0; 4], 40001, &[0; 4], 0),
+    ] {
+        skel.maps
+            .bulk_flows
+            .update(&key, as_bytes(&owner), MapFlags::ANY)?;
+    }
+    run(
+        skel,
+        &Case {
+            name: "released bulk process: its flow no longer demoted".into(),
+            pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 27016)),
+            expect: 0,
+        },
+        false,
+    );
+    run(
+        skel,
+        &Case {
+            name: "released bulk process: its unconnected UDP socket neither".into(),
+            pkt: pkt4(0, UDP, PEER_V4, HOST_V4, l4(UDP, 9999, 40001)),
+            expect: 0,
+        },
+        true,
+    );
+    crate::bpf::maps::bulk_tgid(skel, owner.tgid, true);
     // with the switch off, nothing is looked up or demoted
     crate::bpf::maps::bulk_active(skel, false);
     let off = Case {
@@ -316,7 +347,7 @@ fn check_bulk(skel: &mut BpfSkel, bulk: u8, game: u8) -> Result<(usize, usize)> 
         true,
     );
     crate::bpf::maps::clear_bulk(skel);
-    Ok((cases.len() + incoming.len() + 2, failed))
+    Ok((cases.len() + incoming.len() + 4, failed))
 }
 
 /// The packet with its UDP destination port set to `dport`.

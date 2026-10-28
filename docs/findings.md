@@ -60,6 +60,17 @@ each:
 
 ## Bugs found and what they taught
 
+**0.5.0: a released bulk process could stay demoted** (found in an outside
+review). When a process stopped moving bulk data, bpfrag dropped it from
+`bulk_tgids` and then swept its flows out of `bulk_flows`; a packet sent in
+between could learn a flow after the sweep's snapshot, and that flow stayed
+demoted until the match ended. The sweep also cost two syscalls per map
+entry, on the daemon's only thread. Fixed in 0.5.1 the way game ports
+already worked: a flow is only demoted while its owner is in
+`bulk_tgids`, so letting go takes effect at once and nothing is swept.
+`--selftest` now re-adds flows after the release and checks they pass
+unmarked (the old code demotes them).
+
 **0.4.0: consecutive matches merged into one.** Two Deadlock matches played
 without quitting the game came out as a single 54-minute match, with one
 health line and one experiment draw. A match ended after 15 seconds at 10

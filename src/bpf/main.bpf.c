@@ -151,7 +151,7 @@ static __always_inline void stat_inc(__u32 idx)
 static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short family,
 					    __u16 proto, __u32 tgid)
 {
-	struct bulk_flow v = { .tgid = tgid };
+	struct bulk_flow v = { .tgid = tgid }, *old;
 	struct flow_key k = {};
 
 	k.proto = proto;
@@ -186,8 +186,10 @@ static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short fami
 	} else {
 		return;
 	}
-	if (bpf_map_lookup_elem(&bulk_flows, &k))
+	old = bpf_map_lookup_elem(&bulk_flows, &k);
+	if (old && old->tgid == tgid)
 		return; /* known: a lookup is far cheaper than an update */
+	/* new, or a port another process held before: take it over */
 	bpf_map_update_elem(&bulk_flows, &k, &v, BPF_ANY);
 }
 
@@ -390,19 +392,27 @@ static __always_inline bool bulk_active(void)
 	return bulk_on;
 }
 
+/* A flow counts only while its process is still in bulk_tgids, so letting a
+ * process go stops its demotion at once, like game_owns() does for game
+ * ports, without userspace sweeping bulk_flows first. */
+static __always_inline bool bulk_owned(struct bulk_flow *v)
+{
+	return v && bpf_map_lookup_elem(&bulk_tgids, &v->tgid);
+}
+
 /* Is this a bulk process's flow? Tries the exact socket, then (for UDP) an
  * unconnected socket on the same local port. */
 static __always_inline bool is_bulk_flow(struct flow_key *k)
 {
 	struct flow_key any = {};
 
-	if (bpf_map_lookup_elem(&bulk_flows, k))
+	if (bulk_owned(bpf_map_lookup_elem(&bulk_flows, k)))
 		return true;
 	if (k->proto != IPPROTO_UDP)
 		return false;
 	any.proto = IPPROTO_UDP;
 	any.lport = k->lport;
-	return bpf_map_lookup_elem(&bulk_flows, &any) != NULL;
+	return bulk_owned(bpf_map_lookup_elem(&bulk_flows, &any));
 }
 
 /* A game packet was marked: the interactive band for pfifo_fast & friends. */
