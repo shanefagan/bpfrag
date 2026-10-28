@@ -15,11 +15,11 @@ alongside other tuners](#running-alongside-other-tuners)).
 
 ```
 $ sudo bpfrag
-20:14:02 INFO  counting UDP per process via socket tracepoints
-20:14:02 INFO  bpfrag 0.1.0 started; waiting for game traffic
+20:14:02 INFO  bpfrag 0.3.0 started; waiting for game traffic
 20:15:10 INFO  Match detected: Counter-Strike 2 (pid 6230) at ~128 pkt/s (tx 64, rx 64) -> COMPETITIVE [Steam app 730]
 20:15:10 INFO  COMPETITIVE profile: net.core.busy_poll=50, net.core.busy_read=50, enp6s0 coalescing=10us, ..., dscp=CS4 on enp6s0
 20:52:47 INFO  Match ended after 37m37s (game exited); settings restored
+20:52:47 INFO  Counter-Strike 2: packet gaps half ≤16 ms, 99% ≤19 ms, longest 31 ms, 0 stalls (100 ms+); no drops
 ```
 
 ## How it works
@@ -29,7 +29,8 @@ $ sudo bpfrag
  ────────────                                    ────────────────
  raw_tp sock_send_length ─┐
  raw_tp sock_recv_length ─┴─► per-process UDP ─► detector, 1 s windows:
-                              counters (per-CPU)   steady? two-way? small packets?
+                              (and TCP in a        steady? two-way? small packets?
+                              match) counters
                                                        │
  raw_tp sched_process_exit ─► ringbuf ─────────► "game exited": end match now
                                                        │
@@ -73,100 +74,31 @@ game buffers), and the original values raised its hard limit to 32–128 GiB. "R
 already sized larger, and "lower-only" means writeback is only ever
 tightened. Everything is overridable per tier (see `dist/bpfrag.toml`).
 
-How much each knob actually matters:
-
-- **DSCP CS4** is RFC 4594's class for real-time interactive traffic, which
-  covers gaming explicitly. On Wi-Fi it maps to the WMM video queue (RFC 8325),
-  which gets shorter contention windows than best effort. This is the biggest
-  win on a busy wireless network. Routers running cake with diffserv honour it
-  too. ISPs usually strip it, which is harmless. If the game already marks its
-  own packets, bpfrag leaves them alone unless you set `override = true`.
-- **Wi-Fi power save** lets the radio doze between beacons. A steady 64-tick
-  stream mostly keeps it awake, but lulls (between rounds, slow tick servers)
-  let it doze, and waking it can add tens of milliseconds to the next packets.
-  It's off for the match and back on afterwards.
-- **Interrupt coalescing** at 0–10 µs removes up to tens of microseconds of
-  receive jitter on wired NICs. Most Wi-Fi drivers don't support changing it,
-  and bpfrag skips them quietly.
-- **Writeback limits** stop a Steam download or shader-cache write from
-  building up gigabytes of dirty pages that then flush in bursts mid-match.
-  The values are the ones CachyOS ships, so on CachyOS this is a no-op.
-- **Busy polling** trades a little CPU for a little receive latency, and only
-  on drivers with NAPI busy-poll support.
-- **Buffer and backlog headroom** prevents drops during bursts; it doesn't
-  make anything faster. It's kept from the original profiles because drops
-  hurt more than a few KiB of RAM.
+How much each one matters varies a lot. The clearest cases are DSCP CS4,
+which gets the game's packets ahead on busy Wi-Fi and through CAKE or QoS
+routers, and turning Wi-Fi power save off, which avoids wake-up delays after
+lulls. Interrupt coalescing trims up to a quarter of a millisecond while
+something else downloads. The buffer, backlog and budget headroom only
+matter when their drop counters move, and busy polling's effect on games is
+still unmeasured. **[docs/knobs.md](docs/knobs.md)** goes through every
+setting: the kernel mechanism behind it, with sources, what to expect, when
+nothing will happen, and how confident that is.
 
 ## How a match is detected
 
-Every process doing UDP gets a 1-second window of tx/rx packets and bytes. A
-process becomes a candidate after **3 consecutive windows** where:
+A process becomes a candidate after 3 seconds of steady, two-way,
+small-packet UDP traffic at 25 packets/s or more, the shape of a game's
+netcode. A classifier then checks it really is a game: Steam app ids, a
+game library path, Wine/Proton, a launcher ancestor, gamemode or MangoHud,
+and allow and deny lists, so a Discord call or a browser's QUIC traffic
+doesn't count. The tier follows the packet rate (about twice the server's
+tick rate), with hysteresis. A match ends the moment the game exits, or
+after 15 quiet seconds.
 
-- the smoothed rate (8-window mean) is at least **25 pkt/s**;
-- **both directions** carry at least 5 pkt/s. Games send input and receive
-  snapshots; mDNS, DNS bursts and one-way streams don't;
-- the **average payload is ≤ 1100 bytes**. Bulk QUIC and torrents sit at
-  1200 bytes and up;
-- **jitter** (mean absolute deviation ÷ mean) is ≤ 0.5. Tick-driven netcode
-  is close to a metronome.
-
-The candidate then has to pass the **classifier**. A Discord call is also a
-steady 50 pkt/s two-way stream, so traffic alone can't decide. The classifier
-checks these signals, strongest first:
-
-1. `BPFRAG_GAME=1` / `0` in the environment. This is an explicit tag, e.g.
-   `BPFRAG_GAME=1 %command%` in Steam launch options.
-2. Allow and deny globs on the process name. The built-in deny list covers
-   browsers, voice and chat clients, torrent clients, network daemons and the
-   Steam client itself.
-3. `SteamAppId` / `SteamGameId`, which is set for everything Steam launches,
-   native or Proton.
-4. `LD_PRELOAD` containing gamemode or MangoHud.
-5. An executable or command line inside a game library (`steamapps/common/`,
-   `~/Games/`, Lutris, Heroic).
-6. Wine/Proton: `*.exe` on the command line, or a `wine*` executable.
-7. A launcher ancestor: reaper, pressure-vessel, gamescope, Lutris, Heroic,
-   umu, Bottles and so on.
-
-The tier comes from the smoothed packet rate. Total packets per second are
-roughly twice the server tick rate:
-
-- **INTENSE** at ≥ 155 pkt/s: 128-tick servers.
-- **COMPETITIVE** at ≥ 85 pkt/s: 64-tick servers.
-- **CASUAL** below that.
-
-There's ±15 pkt/s of hysteresis around each threshold. Moving up takes 3
-confident windows, moving down takes 4, and tier changes are at least 5
-seconds apart. A match never drops back to CASUAL while traffic is still
-flowing.
-
-bpfrag puts the DSCP marker on the interfaces carrying the default routes,
-or the ones you pass with `--iface`. The marker counts the game's packets per
-interface, and per-interface settings (coalescing, Wi-Fi power save) go only
-on the links carrying at least 10% of them, so a desktop with both Ethernet
-and Wi-Fi up doesn't touch the one the game isn't using. They wait a few
-seconds at the start of a match while the marker finds that out, and a link
-the game stops using keeps its settings for 30 seconds, so stray packets on a
-second link don't toggle anything. If the packets only show up inside
-a tunnel (WireGuard, OpenVPN, PPPoE), they still leave through a real link
-underneath, so those settings stay on every default-route interface.
-
-During a match bpfrag re-checks every 2 seconds, so docking, switching from
-Wi-Fi to Ethernet, or a VPN coming up is followed without waiting for the
-next match.
-
-A match ends **immediately when the game exits** (via the
-`sched_process_exit` hook), or after **15 quiet seconds**, for example back in
-the menus.
-
-Rejections by the deny list (or `BPFRAG_GAME=0`) are only logged at debug
-level (`-v`). A steady UDP process with no game signals at all is logged
-once at info, since it may be a native game that needs `--allow`.
-
-If you want to see the detector's view of your system, run
-`sudo bpfrag --dry-run -v` and `bpfrag --monitor 1` in another terminal. The
-monitor lists the busiest UDP processes, their rates and the verdict for each.
-
+`sudo bpfrag --dry-run -v` with `bpfrag --monitor 1` in another terminal
+shows the detector's view. [docs/detection.md](docs/detection.md) has the
+details: thresholds, classifier signals, tiers, and how the interfaces the
+game uses are followed.
 ## Is it helping?
 
 Every match gets a health report, live in `--monitor` and the Waybar
@@ -176,29 +108,21 @@ tooltip, and logged when the match ends:
 Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 ms+); no drops; arrives on eno1 rx queue 2, IRQ 140
 ```
 
-- **Packet gaps** are timed on arrival, at tc ingress, on the game's main
-  flow (the port that receives the most). A steady 64-tick server gives
-  gaps of about 16 ms; the 99% figure and the longest gap show the spikes
-  you feel as rubber-banding. A gap of 100 ms or more counts as a stall. A
-  pause of 2 seconds or more means the flow went quiet, between rounds or
-  in a lobby, and isn't counted.
-- **Drops** are kernel counters that grow when the receive path can't keep
-  up, each tied to something the tiers tune: socket buffers overflowing
-  (`rmem_*`), the per-CPU input backlog overflowing (`netdev_max_backlog`),
-  the NIC's receive ring overflowing (coalescing). "Ran out of budget" counts
-  when packet processing was deferred (`netdev_budget`, busy polling). These
-  are system-wide, so a big download during the match counts too.
-- **The receive queue** is the NIC queue (its NAPI instance) the game's
-  packets come in on, with the interrupt that serves it. A big download
-  hashed onto the same queue competes with the game for it. The kernel
-  can tell which queue on 6.8+; some Wi-Fi drivers only report a NAPI
-  number.
+- **Packet gaps** are timed as packets arrive, on the game's main flow. A
+  64-tick server gives gaps of about 16 ms; the 99% figure, the longest gap
+  and stalls (gaps of 100 ms or more) show the spikes you feel as
+  rubber-banding.
+- **Drops** are the kernel counters that grow when the receive path can't
+  keep up: socket buffers, the input backlog, the NIC's ring.
+- **The receive queue** is where the game's packets come in, and which IRQ
+  serves it.
 
-`--dry-run` measures the same way but changes nothing, so a few matches with
-it give a baseline to compare against. Expect most of the spread in packet
-gaps to come from the internet and the game server, not from this machine;
-the tuning shows up more in the drop counters, and in the tail of the gaps
-on a busy or wireless machine.
+`--dry-run` measures the same way but changes nothing, which gives a
+baseline. Most of the spread in packet gaps comes from the internet and the
+game server, so one match proves little either way.
+**[docs/measuring.md](docs/measuring.md)** describes how to run a
+comparison you can trust, and `docs/scripts/matches.py` turns the log into
+a CSV of matches. Results go in [docs/findings.md](docs/findings.md).
 
 ## Bulk transfers during a match
 
@@ -452,87 +376,14 @@ It collects the version, OS and kernel, `--check`, `--selftest`,
 journal and this boot's log. The hostname, user names in home paths, and
 IP and MAC addresses are replaced, but read it through before posting.
 
-## Overhead
+## Documentation
 
-The raw tracepoints fire on every socket send and receive. Anything that isn't
-UDP returns after a couple of field reads, and so does TCP outside a match
-(it's only counted while a match is on, for bulk detection). Measured with
-`kernel.bpf_stats_enabled` inside a cloud microVM, so expect less on bare
-metal:
-
-- about 0.25 µs per UDP receive;
-- about 0.4 µs per UDP send;
-- about 0.5 µs per egress packet for the DSCP marker, which is only attached
-  during a match;
-- about 1.3 times the marker's cost per incoming packet for the arrival
-  meter, also only during a match (measured side by side in the e2e rig);
-- during a match, about 0.3–0.5 µs more per TCP send or receive, and while
-  a bulk transfer is being demoted, a flow lookup per packet in the marker
-  and the meter. A 20 Mbit/s download is about 2,000 packets a second:
-  roughly a millisecond of CPU per second.
-
-Userspace wakes once a second.
-
-## Layout
-
-The top level follows the sched_ext Rust schedulers (`main.rs`,
-`bpf_skel.rs`, `bpf_intf.rs`, `stats.rs`, BPF sources in `src/bpf/`); the
-rest is grouped by job:
-
-```
-src/main.rs                  command line: options and the one-shot commands
-src/daemon.rs                Tuner::init()/run(), the "Scheduler" of this project
-src/bpf_skel.rs              libbpf-cargo skeleton (BpfSkel)
-src/bpf_intf.rs              bindgen'd src/bpf/intf.h
-src/stats.rs                 metrics, --stats, --monitor, --waybar
-src/health/mod.rs            per-match health: packet gaps, drop counters
-src/health/counters.rs       the kernel drop counters it reads
-
-src/bpf/main.bpf.c           BPF programs: per-process UDP counters, exit events, DSCP
-                             marker, arrival meter
-src/bpf/intf.h               structs and constants shared by C and Rust
-src/bpf/vmlinux_lite.h       minimal CO-RE kernel types
-src/bpf/mod.rs               kernel check, shared helpers
-src/bpf/maps.rs              reading and writing the BPF maps
-src/bpf/tc.rs                attaching the marker and the meter (tcx links)
-
-src/detect/mod.rs            windows, smoothing, tiers, hysteresis (pure, unit tested)
-src/detect/classify.rs       is-it-a-game rules
-src/detect/egress.rs         which links the game uses, with hysteresis
-src/detect/bulk.rs           which other processes move bulk data during a match
-
-src/tune/mod.rs              Knobs: apply a profile, restore everything
-src/tune/journal.rs          the restore journal and crash recovery
-src/tune/sysctl.rs           \
-src/tune/coalesce.rs          | one file per knob type, with its apply
-src/tune/writeback.rs         | and restore rules
-src/tune/wifi.rs             /
-src/tune/coexist.rs          bpftune / sched_ext / gamemode / tuned awareness
-
-src/net/mod.rs               interfaces and default routes
-src/net/ethtool.rs           NIC interrupt coalescing (ethtool ioctl)
-src/net/nl80211.rs           Wi-Fi power save
-src/net/netdev.rs            which receive queue and IRQ a NAPI instance is
-src/net/genl.rs              generic netlink for both, no deps
-
-src/config/mod.rs            config file, command-line overrides, validation
-src/config/builtin.rs        built-in lists and tier profiles
-src/cli/check.rs             --check
-src/cli/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
-src/cli/report.rs            --report: diagnostics for a bug report, addresses removed
-
-dist/                        systemd unit, man page, /etc/default file, example config
-packaging/arch/              PKGBUILD (bpfrag-git) + install hook
-packaging/debian/            changelog + postinst for cargo-deb ([package.metadata.deb])
-packaging/rpm/               spec, build.sh (vendored, offline), rpmlintrc
-packaging/bump-version.sh    set a new version everywhere it is recorded
-tests/rig/                   end-to-end test in a throwaway netns (root)
-AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
-.github/workflows/ci.yml     fmt, clippy, tests, --selftest and the e2e rig as root,
-                             MSRV check, .deb/.rpm builds, releases on tags
-.github/ISSUE_TEMPLATE/      bug report (asks for --report) and feature request forms
-.github/pull_request_template.md  testing and scope checklist
-```
+- [docs/knobs.md](docs/knobs.md): why each setting, with sources, and what to expect
+- [docs/measuring.md](docs/measuring.md): how to measure whether it helps
+- [docs/findings.md](docs/findings.md): results, open questions, bugs found, overhead
+- [docs/detection.md](docs/detection.md): how matches, tiers, interfaces and bulk transfers are detected
+- [docs/development.md](docs/development.md): code layout, tests, releases
+- `man bpfrag`, and `dist/bpfrag.toml` for every configuration option
 
 ## Lineage
 
@@ -560,83 +411,6 @@ What's new:
 - raise-only and lower-only knobs, and the don't-clobber restore rule;
 - the crash journal;
 - bpftune and sched_ext coexistence.
-
-## Testing
-
-```sh
-cargo test                     # detectors, classifier, config, journal, health, report, packaging (63 tests)
-sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (27 checks)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (52 checks)
-```
-
-`--selftest` loads the BPF object on your running kernel and pushes
-hand-built IPv4 and IPv6 packets through the tc programs. Nothing is attached
-and no setting changes. It checks that:
-
-- the DSCP or traffic class is rewritten;
-- ECN bits and the IPv6 flow label survive;
-- the IPv4 header checksum is still valid, including with IP options;
-- non-game ports, fragments, and ports whose owner is no longer marked are
-  left byte-for-byte untouched;
-- the arrival meter counts and times packets to the game's port, and
-  nothing else;
-- a bulk process's TCP and UDP flows are demoted to LE in both directions,
-  over IPv4 and IPv6, unless the app or the sender marked them, while the
-  game keeps its class;
-- every program returns TCX_NEXT, so later tc filters still run.
-
-It's the quickest way to confirm both programs on a new kernel.
-
-The end-to-end rig creates a throwaway network namespace with an echo
-server. It then runs a fake Steam game alongside Discord-, Firefox- and
-daemon-shaped noise, and checks:
-
-- the noise is ignored, the game is detected and tiers follow its tick rate;
-- the game's packets leave with `tos 0x80` (CS4) while everything else
-  doesn't;
-- every rewritten packet still has a valid IPv4 header checksum, the
-  receiving kernel logs no checksum errors, and it echoes the packets back;
-- an outside change made mid-match is respected;
-- nothing is changed while the journal can't be written;
-- a new default route mid-match is followed;
-- per-interface settings move to the interface the game's packets actually use;
-- the Waybar output is correct during and after a match;
-- packet gaps on the game's flow are measured (about 16 ms at 64 pkt/s),
-  logged when the match ends, and measured in `--dry-run` too;
-- bpftune's sysctls are yielded while bpftune runs;
-- `kill -9` followed by `--restore` puts everything back;
-- classic tc filters redirecting through IFB devices (a desktop CAKE setup)
-  keep seeing every packet during a match;
-- a download during the match is bulk and leaves and arrives marked LE
-  (arriving at the IFB, where CAKE sees it), an OBS upload isn't, marking
-  stops once the download does, and the match summary says how much was
-  demoted;
-- `--dry-run` changes nothing, bulk traffic included.
-
-In every case where bpfrag owns the change, the system ends byte-identical to
-baseline.
-
-## Releasing
-
-```sh
-packaging/bump-version.sh 0.2.0 "One line about what changed"
-git commit -am "Release 0.2.0"
-git tag -a v0.2.0            # the tag message becomes the release notes
-git push origin main v0.2.0
-```
-
-The script updates `Cargo.toml`, `Cargo.lock`, the RPM spec, the Debian
-changelog and the man page; a unit test fails if any of them disagree. For
-a `v*` tag, CI runs everything as usual, checks the tag matches
-`Cargo.toml`, and publishes a GitHub release. The tag's message becomes the
-release notes, and the release carries the `.deb`, `.rpm`, `.src.rpm`, the
-vendored-crates tarball the spec needs, the binary tarball and
-`SHA256SUMS`.
-
-To redo a tag, write the notes to a file and `git tag -s -f -F notes.md
-v0.2.0`. Copying them out of the old tag with `--format='%(contents)'`
-brings its signature along as text, and CI refuses a tag message with a
-signature block in it.
 
 ## License
 

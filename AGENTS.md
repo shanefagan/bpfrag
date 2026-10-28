@@ -22,9 +22,9 @@ without breaking its promises.
 
 ## Layout
 
-See README "Layout". In short: `main.rs` is the CLI, `daemon.rs` the main
-loop, `src/bpf/` holds the BPF C plus its Rust side, `detect/` decides
-when a match is on, `tune/` changes and restores settings (one file per
+See `docs/development.md` ("Layout"). In short: `main.rs` is the CLI,
+`daemon.rs` the main loop, `src/bpf/` holds the BPF C plus its Rust side,
+`detect/` decides when a match is on, `tune/` changes and restores settings (one file per
 knob type), `net/` is plain OS interfaces with no policy, `health/`
 measures each match, `config/` and `cli/` are what they say. The top
 level mirrors the sched_ext Rust schedulers (`main.rs`, `bpf_skel.rs`,
@@ -126,7 +126,7 @@ container) and the .rpm (Fedora container).
   .rpm: `packaging/rpm/bpfrag.spec`, built offline from a vendored-crates
   tarball by `packaging/rpm/build.sh`. Arch: `packaging/arch/PKGBUILD`.
 - Releases: bump the version, commit, tag `vX.Y.Z`, push; CI builds and
-  publishes the GitHub release (see README "Releasing").
+  publishes the GitHub release (see `docs/development.md`, "Releasing").
 - makepkg rewrites `pkgver` in the PKGBUILD on every build; don't commit
   that change on its own.
 - Packages built on CachyOS carry its CPU-specific flags (AVX-512 on
@@ -144,6 +144,17 @@ Commits on `main` are GPG-signed by Shane. An agent that can't sign as him
 delivers its work as commits on a `claude/<topic>` branch in his checkout,
 for him to bring in with `git cherry-pick -S main..claude/<topic>`. Don't
 push unsigned commits to `main`, and don't force-push it.
+
+## Documentation
+
+- README.md is for users: what bpfrag does, install, use. Keep it short and
+  link to `docs/` for depth.
+- `docs/knobs.md` explains every setting bpfrag changes. A new setting, or
+  a changed value, gets a section there: what changes, the kernel mechanism
+  with a primary source (kernel documentation or source, or an RFC), what
+  to expect, when nothing will happen, and the counter that would show it.
+  Mark hypotheses as hypotheses.
+- Measured results go in `docs/findings.md`, null results included.
 
 ## Bug reports
 

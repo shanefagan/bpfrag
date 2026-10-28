@@ -17,5 +17,6 @@
 - [ ] Networking or writeback only: nothing touches CPU scheduling, frequency or IRQ affinity.
 - [ ] New settings are journalled before they change, and restored without overwriting changes made by someone else (see AGENTS.md).
 - [ ] New or renamed flags are in `dist/bpfrag.8`.
+- [ ] A new or changed setting is explained in `docs/knobs.md`, with a source for the mechanism.
 - [ ] Builds on Rust 1.85 (no let-chains).
 - [ ] No code from Oracle's bpftune.
