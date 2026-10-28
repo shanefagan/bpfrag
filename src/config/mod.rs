@@ -739,6 +739,9 @@ mod tests {
         let cfg = Config::from_toml(&uncommented.join("\n")).unwrap();
         assert_eq!(cfg.detect.pin_tier, Some(Tier::Competitive));
         assert_eq!(cfg.profile(Tier::Intense).coalesce_usecs, Some(5));
+        assert!(cfg.bulk.enabled);
+        assert!(cfg.bulk.never_list().iter().any(|n| n == "rclone"));
+        assert!(cfg.bulk.never_list().iter().any(|n| n == "obs"));
     }
 
     #[test]

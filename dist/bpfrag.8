@@ -48,6 +48,15 @@ counters grew, and which receive queue and IRQ the game's packets
 arrive on.
 .B \-\-dry\-run
 measures the same way, which gives an untuned baseline.
+.PP
+With
+.B [bulk]
+enabled in the configuration file, other processes moving bulk data during
+a match (a download, a torrent client) have their packets marked with DSCP
+LE, in both directions, so CAKE or a QoS router serves the game first.
+Streaming hosts, voice apps and VPN clients are never demoted, packets
+already marked are left alone, and nothing is marked outside a match or in
+a dry run.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " \fIfile\fR"

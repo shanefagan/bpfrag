@@ -68,6 +68,10 @@ container) and the .rpm (Fedora container).
 - **Kernel 6.6+ only.** The socket tracepoints (6.4) and tcx (6.6) are
   required (`bpf::check_kernel`); there are no fallbacks for older
   kernels, so don't add classic tc filters or fexit/kprobe hooks.
+- **Bulk demotion is narrow.** Only while a match is on, only with
+  `bulk.enabled` and not in a dry run, and never on a packet that already
+  carries a DSCP. The never list (streaming hosts, voice apps, VPN and
+  overlay clients) exists because demoting those would demote the player.
 - **bpftune coexistence.** Sysctls in `config::BPFTUNE_SYSCTLS` are left
   to bpftune while it runs (`tune/coexist.rs`). Writing them would make
   bpftune switch its own tuners off.

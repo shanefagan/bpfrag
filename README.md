@@ -200,6 +200,44 @@ gaps to come from the internet and the game server, not from this machine;
 the tuning shows up more in the drop counters, and in the tail of the gaps
 on a busy or wireless machine.
 
+## Bulk transfers during a match
+
+A Steam download or a torrent running during a match fills the queues
+the game's packets wait in. bpfrag can mark that traffic low priority
+for the length of the match, so whatever honours DSCP serves the game
+first. It's off by default; turn it on in `/etc/bpfrag/bpfrag.toml`:
+
+```toml
+[bulk]
+enabled = true
+```
+
+- **What counts as bulk:** any process other than the game moving at
+  least 2 Mbit/s (sent plus received, TCP and UDP) for 5 seconds. It stops
+  being bulk after 10 seconds below that. Torrent clients count as soon as
+  they move anything. OBS and other streaming hosts, voice apps, and VPN or
+  overlay clients (whose traffic may be the game's) never count. The
+  thresholds and both lists are in `[bulk]`.
+- **What happens:** its packets get DSCP **LE** (RFC 8622 "lower effort"),
+  in both directions: outgoing at tc egress, incoming at tc ingress. A
+  packet the app or the sender already marked is left alone, and nothing
+  changes outside a match or in a dry run.
+- **Where it helps:**
+  - **CAKE on this machine** (diffserv3/4/8): LE goes in the Bulk tin.
+    bpfrag marks downloads before a CAKE setup's redirect to its IFB, so
+    download shaping sees it too.
+  - **An OpenWrt router running [dscpclassify](https://github.com/jeverley/dscpclassify):**
+    it adopts the DSCP its clients set and, with its `layer_cake_ct`
+    script, applies the connection's mark to the download direction as
+    well. The same goes for the game's CS4.
+  - **Nothing that reads DSCP:** no effect, and no harm.
+- **Seeing it:** `--monitor` lists bulk processes live ("bulk: steam 38
+  Mbit/s (marked LE)"), the log says when one starts and stops, and the
+  match summary says how much each moved ("bulk: steam 412 MB marked
+  LE"). With `[bulk]` off, they are shown but not marked, so you can see
+  what it would do first. `--report` includes `tc -s qdisc`, where CAKE's
+  per-tin counters show LE traffic landing in the Bulk tin.
+
 ## Running alongside other tuners
 
 **sched_ext (scx_lavd, scx_rusty, scx_bpfland...).** There's no overlap.
@@ -417,15 +455,21 @@ IP and MAC addresses are replaced, but read it through before posting.
 ## Overhead
 
 The raw tracepoints fire on every socket send and receive. Anything that isn't
-UDP returns after a single field read. Measured with `kernel.bpf_stats_enabled`
-inside a cloud microVM, so expect less on bare metal:
+UDP returns after a couple of field reads, and so does TCP outside a match
+(it's only counted while a match is on, for bulk detection). Measured with
+`kernel.bpf_stats_enabled` inside a cloud microVM, so expect less on bare
+metal:
 
 - about 0.25 µs per UDP receive;
 - about 0.4 µs per UDP send;
 - about 0.5 µs per egress packet for the DSCP marker, which is only attached
   during a match;
 - about 1.3 times the marker's cost per incoming packet for the arrival
-  meter, also only during a match (measured side by side in the e2e rig).
+  meter, also only during a match (measured side by side in the e2e rig);
+- during a match, about 0.3–0.5 µs more per TCP send or receive, and while
+  a bulk transfer is being demoted, a flow lookup per packet in the marker
+  and the meter. A 20 Mbit/s download is about 2,000 packets a second:
+  roughly a millisecond of CPU per second.
 
 Userspace wakes once a second.
 
@@ -455,6 +499,7 @@ src/bpf/tc.rs                attaching the marker and the meter (tcx links)
 src/detect/mod.rs            windows, smoothing, tiers, hysteresis (pure, unit tested)
 src/detect/classify.rs       is-it-a-game rules
 src/detect/egress.rs         which links the game uses, with hysteresis
+src/detect/bulk.rs           which other processes move bulk data during a match
 
 src/tune/mod.rs              Knobs: apply a profile, restore everything
 src/tune/journal.rs          the restore journal and crash recovery
@@ -519,9 +564,9 @@ What's new:
 ## Testing
 
 ```sh
-cargo test                     # detector, classifier, config, journal, health, report, packaging (57 tests)
-sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (13 checks)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (38 checks)
+cargo test                     # detectors, classifier, config, journal, health, report, packaging (63 tests)
+sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (27 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (52 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes
@@ -534,7 +579,11 @@ and no setting changes. It checks that:
 - non-game ports, fragments, and ports whose owner is no longer marked are
   left byte-for-byte untouched;
 - the arrival meter counts and times packets to the game's port, and
-  nothing else.
+  nothing else;
+- a bulk process's TCP and UDP flows are demoted to LE in both directions,
+  over IPv4 and IPv6, unless the app or the sender marked them, while the
+  game keeps its class;
+- every program returns TCX_NEXT, so later tc filters still run.
 
 It's the quickest way to confirm both programs on a new kernel.
 
@@ -556,7 +605,13 @@ daemon-shaped noise, and checks:
   logged when the match ends, and measured in `--dry-run` too;
 - bpftune's sysctls are yielded while bpftune runs;
 - `kill -9` followed by `--restore` puts everything back;
-- `--dry-run` changes nothing.
+- classic tc filters redirecting through IFB devices (a desktop CAKE setup)
+  keep seeing every packet during a match;
+- a download during the match is bulk and leaves and arrives marked LE
+  (arriving at the IFB, where CAKE sees it), an OBS upload isn't, marking
+  stops once the download does, and the match summary says how much was
+  demoted;
+- `--dry-run` changes nothing, bulk traffic included.
 
 In every case where bpfrag owns the change, the system ends byte-identical to
 baseline.

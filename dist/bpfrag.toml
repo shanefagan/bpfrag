@@ -30,6 +30,18 @@
 # override = false       # also rewrite packets the game already marked
 # interfaces = ["wlan0"] # default: interfaces with a default route
 
+# Bulk transfers during a match (a Steam download, a torrent) can be marked
+# low priority, so CAKE (diffserv3/4/8) or a QoS router serves the game first.
+# Off by default: while off, they are still shown in --monitor and the log.
+[bulk]
+# enabled = true
+# class = "LE"           # RFC 8622 lower effort; CS1 for routers that predate LE
+# min_mbps = 2           # a process moving this much (sent + received)...
+# secs = 5               # ...for this many seconds in a row is bulk
+# release_secs = 10      # seconds below the rate before it isn't
+# never = ["rclone"]     # never demoted, besides OBS, voice apps and VPN clients
+# always = ["my-sync*"]  # demoted whenever they move anything, besides torrent clients
+
 # Tiers: [tier.all] applies to every tier, then [tier.casual],
 # [tier.competitive], [tier.intense]. `knob = false` turns a knob off.
 # sysctl values prefixed with ">=" are raise-only.
