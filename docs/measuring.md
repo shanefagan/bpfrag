@@ -49,6 +49,11 @@ Limits to keep in mind:
   stall is the flow going quiet and coming back at game rate. Don't
   compare stall counts across that version (the CSV has a version
   column).
+- **Gaps measure jitter, not delay.** A queue somewhere on the path that
+  holds a steady 80 ms still delivers packets every ~16 ms, so the gaps
+  look perfect while the player's latency has doubled. The game's own ping
+  shows that; bpfrag doesn't measure round-trip time yet
+  ([experiments.md](experiments.md), M3).
 - **It's the incoming direction only.** DSCP and Wi-Fi contention affect
   the outgoing packets first. The server's view of your packets, or the
   game's own network graph, covers that side.

@@ -42,6 +42,12 @@ There are four kinds:
 | 15 | [bpftune or bpfrag for the settings they share?](#15-bpftune-or-bpfrag-for-the-shared-settings) | Setup | bpftune users |
 | 16 | [How big a difference does noise alone produce?](#16-an-aa-test) | A/B+ | everyone, once |
 | 17 | [How much do time of day and the server matter?](#17-time-of-day-and-server) | analysis, needs M7 | any |
+| 18 | [Is BQL letting this machine queue much in the NIC?](#18-byte-queue-limits) | Check | wired, uploading from this PC |
+| 19 | [Would `tcp_notsent_lowat` help? (expected: no)](#19-tcp_notsent_lowat) | not planned | none |
+
+Entries 18 and 19, and parts of 5, 7, 9, 12 and M3, came from an outside
+review (October 2026); each was checked against kernel sources before
+going in, and 19 is here to record why it's not worth testing.
 
 Suggested order on a wired desktop: 1, 2, 4 and 5 first (they're quick
 and may remove settings outright), then 3, 16 and 10. On Wi-Fi: 1, 2,
@@ -148,7 +154,8 @@ negotiated: if either end doesn't advertise it, the link doesn't use it.
 active". Turning it off is `ethtool --set-eee <iface> eee off` (a link
 renegotiation, so between matches). An A/B needs bpfrag to own it as a
 setting, journalled like coalescing, and applied at daemon start rather
-than per match because of the renegotiation.
+than per match because of the renegotiation: switching it at the start of
+each match would drop the link just as the match begins.
 
 **Read it:** NIC drops, link flaps in `dmesg`, stalls. Sub-millisecond
 wake delays need finer timing (M8).
@@ -175,8 +182,35 @@ timestamps; compare with stall times (M5).
 **Read it:** stalls lining up with scans, at a regular interval.
 
 **Decides:** if yes, a setting to hold off background scans during a
-match (via NetworkManager or wpa_supplicant over D-Bus) becomes worth
-building. That needs care: roaming relies on scans.
+match (via NetworkManager, or wpa_supplicant's `bgscan` over D-Bus)
+becomes worth building. That needs care: roaming relies on scans.
+
+### 18. Byte Queue Limits
+
+**Question:** when this machine uploads (seeding, a backup), how much can
+queue in the NIC's transmit ring, where the qdisc can no longer put the
+game's packets first?
+
+**Why:** Byte Queue Limits size each transmit queue's in-flight bytes
+dynamically: `limit` grows when the ring runs dry and shrinks when it
+doesn't, up to `limit_max`, which defaults to effectively unlimited
+(`DQL_MAX_LIMIT`, `include/linux/dynamic_queue_limits.h`;
+`Documentation/ABI/testing/sysfs-class-net-queues`). Above the ring,
+`fq_codel` keeps flows apart, so only what's already in the ring is
+ahead of the game. At 1 Gbit/s, 30 KB in the ring is about 0.25 ms; on a
+line with a slower upload than the NIC, the real queue forms at the
+router, not here.
+
+**How:** during a match with an upload running, read
+`/sys/class/net/<iface>/queues/tx-*/byte_queue_limits/limit` and
+`inflight`. Capping `limit_max` (an outside suggestion: 4–8 KB under
+INTENSE) would only be worth building if those are large.
+
+**Read it:** `limit` in the tens of KB or less means the ring adds well
+under a millisecond, below what the gap histogram resolves (M8).
+
+**Decides:** small: nothing to do. Hundreds of KB with a download running
+on the same queue: a cap becomes an A/B candidate.
 
 ## Comparisons that run today
 
@@ -287,9 +321,14 @@ the one setting outside networking).
 **Why:** on Wi-Fi, EF goes to voice (UP 6), CS4 to video (UP 4)
 (`cfg80211_classify8021d()`); voice contends harder still (3–7 slots) but
 with shorter transmit opportunities, which matters little for small
-packets. CAKE's diffserv4 puts both in its Voice tin; diffserv3 puts EF in
-its Voice tin but CS4 in best effort (`net/sched/sch_cake.c`). If an
-AP sends a QoS Map, its mapping replaces the kernel's.
+packets. Where it would matter most is against other video-category
+traffic on the same network: a video call marked AF41 also goes to UP 4,
+so CS4 game packets contend with it on equal terms while EF ones win.
+That's the uplink only: the downlink category depends on the access point
+classifying the server's packets, whose marks ISPs often clear. CAKE's
+diffserv4 puts both in its Voice tin; diffserv3 puts EF in its Voice tin
+but CS4 in best effort (`net/sched/sch_cake.c`). If an AP sends a QoS Map,
+its mapping replaces the kernel's.
 
 **Needs:** experiment arms that pick a value rather than on/off
 (`arms = ["CS4", "EF"]`).
@@ -356,7 +395,11 @@ new connections only.
 
 **How:** `sysctl net.ipv4.tcp_congestion_control=bbr` (module
 `tcp_bbr`), a block of matches with a big download, then cubic. If it
-helps, it could become a setting.
+helps, it could become a setting. Switching it per match would only reach
+connections opened during the match: a download that opens new
+connections as it goes (Steam's does) would be mostly affected, a
+long-lived torrent connection not at all, so a by-hand block of matches
+is the cleaner test.
 
 ### 15. bpftune or bpfrag for the shared settings
 
@@ -370,13 +413,37 @@ is the same in both. Given checks 1 and 2 and the drop counters, the
 likely result is "no difference", which would mean either tool can own
 them.
 
+## Suggested, and not expected to help
+
+### 19. `tcp_notsent_lowat`
+
+**Suggestion** (outside review): lower `net.ipv4.tcp_notsent_lowat` from
+its default (no limit, `UINT_MAX`) to 16 KB during matches, so uploads
+build less local bufferbloat ahead of the game's packets.
+
+**Why it's not planned:** it limits unsent data sitting in each TCP
+socket's own write queue (`Documentation/networking/ip-sysctl.rst`;
+`tcp_stream_memory_free()`, `net/ipv4/tcp.c`). That data hasn't been
+handed to the qdisc or the NIC, so it isn't ahead of the game's UDP
+packets anywhere. What a TCP sender may have queued on this machine is
+already bounded by TCP Small Queues to roughly a millisecond of its
+sending rate (`tcp_small_queue_check()`, `net/ipv4/tcp_output.c`, capped
+by `tcp_limit_output_bytes`). The queue that hurts is at the bottleneck,
+set by the congestion window, which this doesn't change. It helps programs
+that prioritise data within one connection (HTTP/2), and memory use.
+
+**What would change that:** a measurement showing local queueing under an
+upload that TSQ doesn't explain. If someone wants to confirm the null
+result, it runs as `sysctl:net.ipv4.tcp_notsent_lowat` once a tier sets
+it.
+
 ## Measurements that would make these possible
 
 | | Measurement | For |
 |---|---|---|
 | M1 | Busy-polled packets (`BusyPollRxPackets`) during the match, in the health line | 1 |
 | M2 | The game's socket buffer sizes (`rb`, via sock_diag as `ss -m` does) | 2 |
-| M3 | Round-trip time to the gateway and a public anycast address, about once a second during a match | 8, 10, 12 |
+| M3 | Round-trip time to the gateway and a public anycast address, about once a second during a match. Arrival gaps measure jitter, not delay: a queue holding a steady 80 ms still delivers a steady 64 Hz stream, so only round-trip time shows it. Game servers and relays may not answer pings, which is why the gateway and a public address are the dependable targets; the server's own address needs M7 | 8, 10, 12, 18 |
 | M4 | Gaps between the game's outgoing packets (the egress marker sees them) to tell a game or host hiccup from a network one | all |
 | M5 | Timestamps of the last stalls in each match, to line them up with tier changes, scans and other events | 4, 7 |
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
