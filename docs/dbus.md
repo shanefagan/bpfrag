@@ -47,6 +47,9 @@ It doesn't see games being launched, or exiting outside a match.
 | `Experiment` | s | "" | this match's `[experiment]` arm, e.g. `busy_polling off`; "" if none |
 | `Applied` | a(sss) | empty | each setting changed: name, value now, value before the match |
 
+In a dry run (`DryRun` true) nothing is changed, so `Applied` lists what
+bpfrag would set, with the "before" value empty.
+
 `Version` and `DryRun` never change. Every other property sends
 `PropertiesChanged` when it changes, with the new values, so there is no
 need to poll.
@@ -73,7 +76,7 @@ report, and the dict is empty when bpfrag stopped:
 | `packets` | t | packets measured on the game's main flow |
 | `gap_p50_ms`, `gap_p99_ms` | u | half, and 99%, of the gaps between them were at most this long; 64 means over 63 ms |
 | `gap_max_ms` | d | the longest gap |
-| `stalls` | t | gaps of 100 ms or more |
+| `stalls` | t | times the game's traffic went quiet for 100 ms to 2 s mid-match and came back (lobbies and loading aren't counted) |
 | `socket_drops` | t | UDP receive buffer overflows, anywhere on the machine |
 | `game_socket_drops` | t | of those, on the game's own sockets |
 | `backlog_drops` | t | per-CPU input backlog overflows |
