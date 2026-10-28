@@ -31,10 +31,13 @@ BuildRequires:  clang-devel
 BuildRequires:  gcc
 BuildRequires:  make
 BuildRequires:  /usr/bin/pkg-config
+BuildRequires:  pkgconfig(dbus-1)
 BuildRequires:  pkgconfig(libelf)
 BuildRequires:  pkgconfig(zlib)
 BuildRequires:  systemd-rpm-macros
 
+# Owns /usr/share/dbus-1/system.d.
+Requires:       dbus-common
 Recommends:     ethtool
 Recommends:     iw
 
@@ -76,6 +79,7 @@ install -Dpm0644 dist/bpfrag.8 %{buildroot}%{_mandir}/man8/bpfrag.8
 install -Dpm0644 dist/bpfrag.default %{buildroot}%{_sysconfdir}/default/bpfrag
 install -Dpm0644 dist/bpfrag.toml %{buildroot}%{_sysconfdir}/bpfrag/bpfrag.toml
 install -Dpm0644 dist/bpfrag.preset %{buildroot}%{_presetdir}/80-bpfrag.preset
+install -Dpm0644 dist/com.performativenonsense.Bpfrag1.conf %{buildroot}%{_datadir}/dbus-1/system.d/com.performativenonsense.Bpfrag1.conf
 
 %check
 export RUSTFLAGS="%{?build_rustflags}"
@@ -88,6 +92,8 @@ cargo test --release --frozen
 # is stopped while /usr/bin/bpfrag still exists, so ExecStopPost can
 # restore any settings changed during a match.
 %post
+# Load the D-Bus policy for the read-only interface before bpfrag starts.
+systemctl reload dbus.service >/dev/null 2>&1 || :
 %systemd_post bpfrag.service
 if [ $1 -eq 1 ]; then
     systemctl start bpfrag.service >/dev/null 2>&1 || :
@@ -105,6 +111,7 @@ fi
 %{_bindir}/bpfrag
 %{_unitdir}/bpfrag.service
 %{_presetdir}/80-bpfrag.preset
+%{_datadir}/dbus-1/system.d/com.performativenonsense.Bpfrag1.conf
 %{_mandir}/man8/bpfrag.8*
 %dir %{_sysconfdir}/bpfrag
 %config(noreplace) %{_sysconfdir}/bpfrag/bpfrag.toml

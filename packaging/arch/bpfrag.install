@@ -1,9 +1,15 @@
 post_install() {
+  # Load the D-Bus policy for bpfrag's read-only interface (the name
+  # can't be owned until the bus has read it).
+  systemctl reload dbus.service >/dev/null 2>&1 || true
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl enable --now bpfrag.service >/dev/null 2>&1 || true
 }
 
 post_upgrade() {
+  # Load the D-Bus policy for bpfrag's read-only interface (the name
+  # can't be owned until the bus has read it).
+  systemctl reload dbus.service >/dev/null 2>&1 || true
   # Respects a disabled service: only restarts it if it's running.
   systemctl daemon-reload >/dev/null 2>&1 || true
   systemctl try-restart bpfrag.service >/dev/null 2>&1 || true

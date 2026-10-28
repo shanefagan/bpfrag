@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+# Load the D-Bus policy for bpfrag's read-only interface first (the
+# name can't be owned until the bus has read it).
+systemctl reload dbus.service >/dev/null 2>&1 || true
+
 # debhelper enables and starts bpfrag.service on first install.
 #DEBHELPER#
 

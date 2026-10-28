@@ -56,6 +56,7 @@ assets = [
     ["dist/bpfrag.default", "etc/default/bpfrag", "644"],
     ["dist/bpfrag.toml", "etc/bpfrag/bpfrag.toml", "644"],
     ["dist/bpfrag.8", "usr/share/man/man8/bpfrag.8", "644"],
+    ["dist/com.performativenonsense.Bpfrag1.conf", "usr/share/dbus-1/system.d/", "644"],
     ["README.md", "usr/share/doc/bpfrag/README.md", "644"],
     ["LICENSE-GPL-2.0", "usr/share/doc/bpfrag/LICENSE-GPL-2.0", "644"],
 ]

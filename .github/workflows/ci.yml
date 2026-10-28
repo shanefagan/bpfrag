@@ -24,7 +24,7 @@ jobs:
       - name: Install build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev zlib1g-dev pkg-config tcpdump iproute2
+          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config tcpdump iproute2
 
       - name: Rust toolchain
         run: |
@@ -63,7 +63,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev zlib1g-dev pkg-config
+          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config
       - name: Rust 1.85
         run: |
           rustup toolchain install 1.85 --profile minimal
@@ -81,7 +81,7 @@ jobs:
         run: |
           apt-get update
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
-            clang libclang-dev libelf-dev zlib1g-dev pkg-config dpkg-dev lintian
+            clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config dpkg-dev lintian
       - uses: actions/checkout@v7
       - name: Rust toolchain and cargo-deb
         run: |
@@ -98,7 +98,7 @@ jobs:
           d=bpfrag-$ver-x86_64-linux
           mkdir -p "target/$d"
           cp target/release/bpfrag dist/bpfrag.service dist/bpfrag.8 dist/bpfrag.toml \
-            dist/bpfrag.default README.md LICENSE LICENSE-GPL-2.0 "target/$d/"
+            dist/bpfrag.default dist/com.performativenonsense.Bpfrag1.conf README.md LICENSE LICENSE-GPL-2.0 "target/$d/"
           tar -C target -czf "target/$d.tar.gz" "$d"
       - name: Install, selftest the installed binary, remove, purge
         run: |
