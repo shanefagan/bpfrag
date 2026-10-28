@@ -26,9 +26,15 @@ the match, bpftune running. ktorrent moved 4.8 GB during a 38-minute match
 (about 17 Mbit/s on average), with `[bulk]` off so it wasn't marked. Packet
 gaps: half ≤14 ms, 99% ≤18 ms, longest 95 ms, 0 stalls. Socket buffer
 drops: 2921, machine-wide; 0.3.0 couldn't say whose (probably ktorrent's
-uTP sockets). Not yet known: the line speed, and whether any QoS (CAKE,
-router SQM) was shaping. This is the "unmarked" side of question 1; the
-other side is the same download with `[bulk] enabled = true`.
+uTP sockets). The line is about 950 Mbit/s down and 100 Mbit/s up, through
+a UniFi gateway and switches on default settings (no Smart Queues), so
+nothing on the path shaped traffic or looked at DSCP, and the download
+used under 2% of the line. With no queue anywhere there was nothing to
+protect the game from: a clean match here says the line has headroom,
+not that demotion is unnecessary. A useful test on this line would load
+the 100 Mbit/s upload (seeding with no upload limit), where a queue can
+form, and read the game's ping or net graph alongside bpfrag's numbers:
+the arrival meter only sees incoming packets.
 
 ## Open questions
 
