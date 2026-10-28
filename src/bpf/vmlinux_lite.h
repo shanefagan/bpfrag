@@ -53,6 +53,8 @@ typedef _Bool bool;
 #define TCX_NEXT -1
 #define TC_PRIO_INTERACTIVE 6
 #define TC_PRIO_BULK 2
+/* bpf_skb_store_bytes(): keep a CHECKSUM_COMPLETE skb->csum in step */
+#define BPF_F_RECOMPUTE_CSUM (1ULL << 0)
 #define MSG_PEEK 0x2
 #define MSG_ERRQUEUE 0x2000
 

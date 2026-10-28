@@ -71,6 +71,16 @@ already worked: a flow is only demoted while its owner is in
 `--selftest` now re-adds flows after the release and checks they pass
 unmarked (the old code demotes them).
 
+**0.5.0: demoting incoming IPv6 bulk traffic left a stale receive checksum**
+(found in the same review). On NICs that report `CHECKSUM_COMPLETE` (mostly
+server NICs such as Mellanox; igc, r8169 and iwlwifi report
+`CHECKSUM_UNNECESSARY`), the NIC's sum covers the IPv6 header, and rewriting
+the traffic class without updating it made the kernel re-check those
+packets in software and log "hw csum failure" once per boot. The packets
+were still accepted (`__skb_checksum_complete()`, `net/core/skbuff.c`).
+Fixed in 0.5.1 with `BPF_F_RECOMPUTE_CSUM`. IPv4 was never affected: a
+correct header checksum update leaves the header's sum unchanged.
+
 **0.4.0: consecutive matches merged into one.** Two Deadlock matches played
 without quitting the game came out as a single 54-minute match, with one
 health line and one experiment draw. A match ended after 15 seconds at 10

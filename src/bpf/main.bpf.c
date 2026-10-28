@@ -373,7 +373,12 @@ static __always_inline void set_dscp4(struct __sk_buff *skb, __u32 l2, __u8 old_
 }
 
 /* Set an IPv6 packet's traffic class (b0, b1: its first two bytes), keeping
- * ECN and the flow label. No checksum covers it. */
+ * ECN and the flow label. No header checksum covers it, but on receive a
+ * NIC that reports CHECKSUM_COMPLETE has summed every byte into skb->csum:
+ * BPF_F_RECOMPUTE_CSUM keeps that sum in step, or the kernel would fall
+ * back to checking the packet in software and log "hw csum failure". (It
+ * does nothing to the CHECKSUM_PARTIAL packets on egress. IPv4 needs none:
+ * fixing the header checksum leaves the header's sum unchanged.) */
 static __always_inline void set_dscp6(struct __sk_buff *skb, __u32 l2, __u8 b0, __u8 b1, __u8 val)
 {
 	__u8 old_tc = ((b0 & 0x0f) << 4) | (b1 >> 4);
@@ -384,7 +389,7 @@ static __always_inline void set_dscp6(struct __sk_buff *skb, __u32 l2, __u8 b0, 
 		return;
 	nb[0] = (b0 & 0xf0) | (new_tc >> 4);
 	nb[1] = (b1 & 0x0f) | ((new_tc & 0x0f) << 4);
-	bpf_skb_store_bytes(skb, l2, nb, 2, 0);
+	bpf_skb_store_bytes(skb, l2, nb, 2, BPF_F_RECOMPUTE_CSUM);
 }
 
 static __always_inline bool bulk_active(void)
