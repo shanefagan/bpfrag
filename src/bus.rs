@@ -446,10 +446,16 @@ fn respond(p: &Published, m: &Message) -> Option<Message> {
     Some(unknown_method(m, &iface, &member))
 }
 
+/// The D-Bus spec lets a caller leave the interface name empty; ours is the
+/// only interface here with properties, so that means ours.
+fn ours(iface: &str) -> bool {
+    iface.is_empty() || iface == IFACE
+}
+
 fn properties(p: &Published, m: &Message, member: &str) -> Message {
     match member {
         "Get" => match m.read2::<&str, &str>() {
-            Ok((i, name)) if i == IFACE => match p.get(name) {
+            Ok((i, name)) if ours(i) => match p.get(name) {
                 Some(v) => m.method_return().append1(Variant(v)),
                 None => error(
                     m,
@@ -461,7 +467,7 @@ fn properties(p: &Published, m: &Message, member: &str) -> Message {
             Err(_) => invalid_args(m),
         },
         "GetAll" => match m.read1::<&str>() {
-            Ok(i) if i == IFACE => m.method_return().append1(p.all()),
+            Ok(i) if ours(i) => m.method_return().append1(p.all()),
             // The standard interfaces have no properties.
             Ok(PROPS | INTROSPECTABLE | PEER) => m.method_return().append1(PropMap::new()),
             Ok(i) => unknown_interface(m, i),
@@ -662,6 +668,17 @@ mod tests {
         assert_eq!(keys, want);
         assert_eq!(all["GamePid"].0.as_u64(), Some(6230));
         assert_eq!(all["Experiment"].0.as_str(), Some("busy_polling off"));
+    }
+
+    #[test]
+    fn an_empty_interface_name_means_ours() {
+        let p = published();
+        let r = respond(&p, &call(PATH, PROPS, "Get").append2("", "Tier")).unwrap();
+        let v: Variant<Box<dyn RefArg>> = r.read1().unwrap();
+        assert_eq!(v.0.as_str(), Some("competitive"));
+        let r = respond(&p, &call(PATH, PROPS, "GetAll").append1("")).unwrap();
+        let all: PropMap = r.read1().unwrap();
+        assert_eq!(all.len(), NAMES.len());
     }
 
     #[test]

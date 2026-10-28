@@ -11,6 +11,9 @@ without root and without polling `/run/bpfrag/stats.json`.
 | Object | `/com/performativenonsense/Bpfrag1` |
 | Interface | `com.performativenonsense.Bpfrag1` |
 
+`Get` and `GetAll` take the interface name or, as the D-Bus specification
+allows, an empty string.
+
 It is read-only. There are no methods, `Set` is refused, and the bus
 policy (`/usr/share/dbus-1/system.d/com.performativenonsense.Bpfrag1.conf`)
 only lets other users call `Get`, `GetAll`, `Introspect` and `Ping`. Only
