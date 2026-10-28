@@ -6,6 +6,8 @@
 //! share of the game's packets, and stops counting only after a while
 //! without one, so a few stray packets on a second link (relay pings, a
 //! brief route flap) don't move per-interface settings back and forth.
+//! Silence moves nothing: while the game sends nothing (loading, between
+//! rounds) the interfaces it last used stay its path.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -47,9 +49,10 @@ impl Egress {
                 }
             }
         }
-        // Interfaces the marker left (unplugged, route gone) drop at once.
+        // Interfaces the marker left (unplugged, route gone) drop at once;
+        // others only once the game's packets have gone elsewhere for HOLD.
         self.active.retain(|i, seen| {
-            counts.iter().any(|(c, _)| c == i) && now.duration_since(*seen) < HOLD
+            counts.iter().any(|(c, _)| c == i) && (total == 0 || now.duration_since(*seen) < HOLD)
         });
         self.last = counts.iter().copied().collect();
     }
@@ -88,6 +91,36 @@ mod tests {
         assert_eq!(e.ifaces(), vec![2, 3], "old link held for a while");
         let t2 = t1 + HOLD + Duration::from_secs(1);
         e.update(&[(2, 600), (3, 1200)], t2);
+        assert_eq!(e.ifaces(), vec![3]);
+    }
+
+    #[test]
+    fn a_quiet_spell_keeps_the_path() {
+        let t0 = Instant::now();
+        let mut e = Egress::default();
+        e.update(&[(2, 600), (3, 0)], t0);
+        // loading screen: nothing sent for longer than the hold
+        let mut t = t0;
+        for _ in 0..30 {
+            t += Duration::from_secs(2);
+            e.update(&[(2, 600), (3, 0)], t);
+            assert_eq!(e.ifaces(), vec![2]);
+        }
+        // traffic comes back on the same link
+        e.update(&[(2, 900), (3, 0)], t + Duration::from_secs(2));
+        assert_eq!(e.ifaces(), vec![2]);
+    }
+
+    #[test]
+    fn a_move_after_a_quiet_spell_drops_the_old_link() {
+        let t0 = Instant::now();
+        let mut e = Egress::default();
+        e.update(&[(2, 600), (3, 0)], t0);
+        let t1 = t0 + HOLD * 2;
+        e.update(&[(2, 600), (3, 0)], t1);
+        assert_eq!(e.ifaces(), vec![2]);
+        // the next match goes out over wlan0 only
+        e.update(&[(2, 600), (3, 300)], t1 + Duration::from_secs(2));
         assert_eq!(e.ifaces(), vec![3]);
     }
 
