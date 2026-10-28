@@ -14,6 +14,7 @@ mod cli;
 mod config;
 mod daemon;
 mod detect;
+mod experiment;
 mod health;
 mod logger;
 mod net;

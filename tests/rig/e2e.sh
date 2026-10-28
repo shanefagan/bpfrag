@@ -247,5 +247,27 @@ SE=$(capi dry-down 'tcp and src 10.99.0.2 and dst port 40102')
 echo "$SD $SE" | grep -q "dscp=1 " && bad "dry run marked packets: $SD / $SE" || ok "dry run marks nothing in either direction"
 kill $BS $G; kill -INT $D; wait $D; D=
 
+echo "== 11. A/B experiment: the drawn arm decides, and is reported"
+# keep = 0 always draws "off", keep = 1 always "on": deterministic arms.
+for keep in 0 1; do
+  { cat $W/cfg.toml; printf '[experiment]\nsetting = "busy_polling"\nkeep = %s\n' $keep; } > $W/cfg11.toml
+  "$B" -c $W/cfg11.toml > $W/d11.log 2>&1 & D=$!; sleep 1
+  game 64 180; sleep 6
+  BP=$(sysctl -n net.core.busy_poll); BR=$(sysctl -n net.core.busy_read)
+  MON=$("$B" -c $W/cfg11.toml --monitor 0)
+  kill $G; sleep 2; kill -INT $D; wait $D; D=
+  if [ $keep = 0 ]; then
+    grep -q "Experiment: busy_polling off for this match" $W/d11.log && ok "arm logged when the match starts" || bad "no arm: $(grep -i experiment $W/d11.log)"
+    [ "$BP" = 0 ] && [ "$BR" = 0 ] && ok "off arm: busy polling left at the default" || bad "off arm set busy_poll=$BP busy_read=$BR"
+    grep -q "net.core.netdev_budget=" $W/d11.log && ok "off arm: the other settings still applied" || bad "off arm changed nothing else: $(grep profile: $W/d11.log)"
+    echo "$MON" | grep -q "experiment: busy_polling off" && ok "--monitor shows the arm" || bad "monitor: $MON"
+    grep -q "fakeshooter: packet gaps.*; experiment: busy_polling off" $W/d11.log && ok "match summary ends with the arm" || bad "summary: $(grep 'fakeshooter: packet' $W/d11.log)"
+  else
+    [ "$BP" = 50 ] && ok "on arm: busy_poll=50 as usual" || bad "on arm busy_poll=$BP"
+  fi
+done
+same "after experiments"
+python3 "$HERE/../../docs/scripts/matches.py" - < $W/d11.log | grep -q ",busy_polling,on," && ok "matches.py reads the arm" || bad "matches.py: $(python3 "$HERE/../../docs/scripts/matches.py" - < $W/d11.log)"
+
 echo; echo "passed $PASS, failed $FAIL"
 [ $FAIL = 0 ]

@@ -36,6 +36,9 @@ pub struct SessionMetrics {
     /// What happens to their packets: "marked LE", "not marked (...)".
     #[serde(default)]
     pub bulk_marking: String,
+    /// The `[experiment]` arm this match got.
+    #[serde(default)]
+    pub experiment: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -226,6 +229,9 @@ impl Metrics {
                 .map(|b| format!("{} {:.0} Mbit/s", b.name, b.mbps))
                 .collect();
             writeln!(w, "  bulk: {} ({})", list.join(", "), s.bulk_marking)?;
+        }
+        if let Some(e) = self.session.as_ref().and_then(|s| s.experiment.as_ref()) {
+            writeln!(w, "  experiment: {e} (chosen at random for this match)")?;
         }
         if !self.applied.is_empty() {
             writeln!(w, "\nApplied:")?;

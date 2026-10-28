@@ -259,6 +259,26 @@ pub struct Bulk {
     pub use_builtin_lists: bool,
 }
 
+/// `[experiment]`: switch one setting off in a random share of matches,
+/// to measure what it does (see `experiment`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Experiment {
+    /// The setting to test, by its docs/knobs.md name; "" for none.
+    pub setting: String,
+    /// Share of matches that keep the setting on (0 to 1).
+    pub keep: f64,
+}
+
+impl Default for Experiment {
+    fn default() -> Self {
+        Self {
+            setting: String::new(),
+            keep: 0.5,
+        }
+    }
+}
+
 impl Default for Bulk {
     fn default() -> Self {
         Self {
@@ -433,6 +453,7 @@ struct ConfigFile {
     classify: Classify,
     dscp: Dscp,
     bulk: Bulk,
+    experiment: Experiment,
     tier: TiersFile,
 }
 
@@ -443,6 +464,7 @@ pub struct Config {
     pub classify: Classify,
     pub dscp: Dscp,
     pub bulk: Bulk,
+    pub experiment: Experiment,
     /// Indexed by `Tier as usize`; use `profile()`.
     pub profiles: [Profile; 3],
 }
@@ -455,6 +477,7 @@ impl Default for Config {
             classify: Classify::default(),
             dscp: Dscp::default(),
             bulk: Bulk::default(),
+            experiment: Experiment::default(),
             profiles: builtin_profiles(),
         }
     }
@@ -481,6 +504,7 @@ impl Config {
             classify: file.classify,
             dscp: file.dscp,
             bulk: file.bulk,
+            experiment: file.experiment,
             profiles,
         };
         cfg.validate()?;
@@ -552,7 +576,36 @@ impl Config {
                 );
             }
         }
+        self.experiment_setting()?;
         Ok(())
+    }
+
+    /// The `[experiment]` setting, checked: None if there's no experiment.
+    pub fn experiment_setting(&self) -> Result<Option<crate::experiment::Setting>> {
+        use crate::experiment::Setting;
+        let e = &self.experiment;
+        let Some(s) = Setting::parse(&e.setting).context("experiment.setting")? else {
+            return Ok(None);
+        };
+        if !(0.0..=1.0).contains(&e.keep) {
+            bail!("experiment.keep must be between 0 and 1");
+        }
+        if !s.used_by(&self.profiles, self.bulk.enabled) {
+            bail!(
+                "experiment.setting {:?}: no tier changes it, so both arms would be the same{}",
+                e.setting,
+                if s == Setting::Bulk {
+                    " (set bulk.enabled = true)"
+                } else {
+                    ""
+                }
+            );
+        }
+        if s == Setting::Dscp && self.bulk.enabled {
+            // the marker does both, so switching it off stops bulk marking
+            bail!("experiment.setting \"dscp\" needs bulk.enabled = false");
+        }
+        Ok(Some(s))
     }
 }
 
@@ -575,6 +628,7 @@ impl Config {
             classify: &'a Classify,
             dscp: &'a Dscp,
             bulk: &'a Bulk,
+            experiment: &'a Experiment,
             tier: BTreeMap<String, TierOut>,
         }
         let tier = self
@@ -603,6 +657,7 @@ impl Config {
             classify: &self.classify,
             dscp: &self.dscp,
             bulk: &self.bulk,
+            experiment: &self.experiment,
             tier,
         })?)
     }
@@ -742,6 +797,45 @@ mod tests {
         assert!(cfg.bulk.enabled);
         assert!(cfg.bulk.never_list().iter().any(|n| n == "rclone"));
         assert!(cfg.bulk.never_list().iter().any(|n| n == "obs"));
+        assert_eq!(cfg.experiment.setting, "busy_polling");
+        assert!(cfg.experiment_setting().unwrap().is_some());
+    }
+
+    #[test]
+    fn experiments_are_checked() {
+        let ok = |t: &str| {
+            Config::from_toml(t)
+                .map(|_| ())
+                .map_err(|e| format!("{e:#}"))
+        };
+        ok("[experiment]\nsetting = \"wifi_power_save\"\n").unwrap();
+        ok("[experiment]\nsetting = \"sysctl:net.core.busy_poll\"\n").unwrap();
+        assert!(
+            ok("[experiment]\nsetting = \"turbo\"\n")
+                .unwrap_err()
+                .contains("unknown setting")
+        );
+        assert!(
+            ok("[experiment]\nsetting = \"dscp\"\nkeep = 1.5\n")
+                .unwrap_err()
+                .contains("keep")
+        );
+        assert!(
+            ok("[experiment]\nsetting = \"bulk\"\n")
+                .unwrap_err()
+                .contains("bulk.enabled = true")
+        );
+        assert!(
+            ok("[experiment]\nsetting = \"sysctl:net.ipv4.tcp_ecn\"\n")
+                .unwrap_err()
+                .contains("no tier changes it")
+        );
+        assert!(
+            ok("[bulk]\nenabled = true\n[experiment]\nsetting = \"dscp\"\n")
+                .unwrap_err()
+                .contains("bulk.enabled = false")
+        );
+        ok("[bulk]\nenabled = true\n[experiment]\nsetting = \"bulk\"\n").unwrap();
     }
 
     #[test]

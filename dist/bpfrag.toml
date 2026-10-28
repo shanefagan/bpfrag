@@ -42,6 +42,15 @@
 # never = ["rclone"]     # never demoted, besides OBS, voice apps and VPN clients
 # always = ["my-sync*"]  # demoted whenever they move anything, besides torrent clients
 
+# A/B testing: switch one setting off in a random share of matches, so you
+# can compare matches with and without it (docs/measuring.md). The log and
+# each match's health line say which it got. Names: all, dscp,
+# wifi_power_save, coalescing, busy_polling, socket_buffers, backlog,
+# budget, writeback, bulk, or sysctl:<name>. Not used in a dry run.
+[experiment]
+# setting = "busy_polling"
+# keep = 0.5             # share of matches that keep it on
+
 # Tiers: [tier.all] applies to every tier, then [tier.casual],
 # [tier.competitive], [tier.intense]. `knob = false` turns a knob off.
 # sysctl values prefixed with ">=" are raise-only.

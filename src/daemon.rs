@@ -38,6 +38,7 @@ use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
 use crate::detect::{Action, Detector, Sample, SessionInfo};
+use crate::experiment;
 use crate::health;
 use crate::net::{self, Iface};
 use crate::stats::{
@@ -156,6 +157,10 @@ pub struct Tuner<'a> {
     egress: Egress,
     /// Finished matches, newest first.
     recent: VecDeque<RecentMatch>,
+    /// The `[experiment]` setting, if any (never in a dry run).
+    experiment: Option<experiment::Setting>,
+    /// This match's draw.
+    arm: Option<experiment::Arm>,
 }
 
 impl<'a> Tuner<'a> {
@@ -201,7 +206,11 @@ impl<'a> Tuner<'a> {
         }
 
         let run_dir = PathBuf::from(&cfg.general.run_dir);
+        // A dry run changes nothing, so it has nothing to switch off.
+        let experiment = cfg.experiment_setting()?.filter(|_| !run.dry_run);
         Ok(Self {
+            experiment,
+            arm: None,
             dry_run: run.dry_run,
             stats_every: run.stats_every,
             knobs: Knobs::new(&run_dir, run.dry_run),
@@ -285,7 +294,10 @@ impl<'a> Tuner<'a> {
     /// DSCP marker. Also used to re-apply after a tier or path change;
     /// `Knobs::apply` reverts whatever the new profile no longer wants.
     fn apply_tier(&mut self, s: &SessionInfo) {
-        let profile = self.cfg.profile(s.tier).clone();
+        let mut profile = self.cfg.profile(s.tier).clone();
+        if let Some(a) = &self.arm {
+            a.apply(&mut profile);
+        }
         let (marker, ifaces) = self.targets(s);
         self.applied_paths = Paths::new(&marker, &ifaces);
         self.last_path_check = Instant::now();
@@ -351,6 +363,7 @@ impl<'a> Tuner<'a> {
             info!("{k}");
         }
         self.session_start = None;
+        self.arm = None;
     }
 
     /// Act on one thing the detector reported.
@@ -362,6 +375,15 @@ impl<'a> Tuner<'a> {
                     s.name, s.tgid, s.pps, s.tx_pps, s.rx_pps, s.tier, s.reason
                 );
                 self.session_start = Some(Instant::now());
+                self.arm = self.experiment.as_ref().map(|e| {
+                    experiment::draw(&self.cfg.experiment.setting, e, self.cfg.experiment.keep)
+                });
+                if let Some(a) = &self.arm {
+                    info!(
+                        "Experiment: {} for this match (chosen at random)",
+                        a.label()
+                    );
+                }
                 maps::count_tcp(&mut self.skel, true);
                 self.egress.reset();
                 // Learn the game's ports (for the marker and the meter) and
@@ -386,8 +408,8 @@ impl<'a> Tuner<'a> {
                 let mut health = self.health.finish();
                 if let Some(h) = health.as_mut() {
                     h.bulk = self.bulk.moved();
-                    h.bulk_class = (self.cfg.bulk.enabled && !self.dry_run)
-                        .then(|| self.cfg.bulk.class.clone());
+                    h.bulk_class = self.bulk_marks().then(|| self.cfg.bulk.class.clone());
+                    h.experiment = self.arm.as_ref().map(experiment::Arm::label);
                 }
                 self.recent.push_front(RecentMatch {
                     name: session.name.clone(),
@@ -493,11 +515,21 @@ impl<'a> Tuner<'a> {
     fn bulk_marking(&self) -> String {
         if !self.cfg.bulk.enabled {
             "not marked: bulk.enabled is off".into()
+        } else if self.arm.as_ref().is_some_and(experiment::Arm::stops_bulk) {
+            "not marked: the experiment switched it off for this match".into()
         } else if self.dry_run {
             format!("dry run: would mark {}", self.cfg.bulk.class)
         } else {
             format!("marked {}", self.cfg.bulk.class)
         }
+    }
+
+    /// Are bulk packets marked this match? Marking needs the DSCP marker,
+    /// which a dry run never attaches.
+    fn bulk_marks(&self) -> bool {
+        self.cfg.bulk.enabled
+            && !self.dry_run
+            && !self.arm.as_ref().is_some_and(experiment::Arm::stops_bulk)
     }
 
     /// Follow which other processes move bulk data while a match is on.
@@ -508,8 +540,7 @@ impl<'a> Tuner<'a> {
         let procs = &self.procs;
         let mut names = |tgid: u32| procs.names(tgid);
         let events = self.bulk.tick(dt, samples, &[game], &mut names);
-        // marking needs the DSCP marker, which a dry run never attaches
-        let mark = self.cfg.bulk.enabled && !self.dry_run;
+        let mark = self.bulk_marks();
         for e in &events {
             match e {
                 BulkEvent::Started(p) => {
@@ -560,6 +591,7 @@ impl<'a> Tuner<'a> {
                 })
                 .collect(),
             bulk_marking: self.bulk_marking(),
+            experiment: self.arm.as_ref().map(experiment::Arm::label),
         });
         let applied = self
             .knobs
@@ -664,6 +696,16 @@ impl<'a> Tuner<'a> {
                 ""
             }
         );
+
+        if self.experiment.is_some() {
+            info!(
+                "Experiment: {} is switched off in {:.0}% of matches, chosen at random",
+                self.cfg.experiment.setting.trim(),
+                (1.0 - self.cfg.experiment.keep) * 100.0
+            );
+        } else if self.dry_run && !self.cfg.experiment.setting.trim().is_empty() {
+            info!("Experiment: not run in a dry run (nothing is changed to switch off)");
+        }
 
         while !shutdown.load(Ordering::Relaxed) {
             // Sleep in the ring buffer until the next tick, waking at least

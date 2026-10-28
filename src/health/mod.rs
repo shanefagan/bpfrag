@@ -175,6 +175,9 @@ pub struct Health {
     /// The class bulk packets were marked with; None if they weren't.
     #[serde(default)]
     pub bulk_class: Option<String>,
+    /// The `[experiment]` arm this match got, e.g. "busy_polling off".
+    #[serde(default)]
+    pub experiment: Option<String>,
 }
 
 /// "412 MB", "1.3 GB".
@@ -233,6 +236,9 @@ impl Health {
                 Some(c) => format!(" marked {c}"),
                 None => " (not marked)".into(),
             };
+        }
+        if let Some(e) = &self.experiment {
+            s += &format!("; experiment: {e}");
         }
         s
     }
