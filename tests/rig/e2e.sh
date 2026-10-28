@@ -185,7 +185,15 @@ echo "== 6c. two matches in one game session are two matches"
 "$B" -c $W/cfg.toml > $W/d6c.log 2>&1 & D=$!; sleep 1
 echo 64 > $W/rate6c; game 64 180 $W/rate6c; sleep 6
 for i in $(seq 1 4); do echo 1 > $W/rate6c; sleep 3; echo 40 > $W/rate6c; sleep 1; done
-echo 64 > $W/rate6c; sleep 8
+# The second match is detected once the detector's 8-second history holds
+# game traffic again plus 3 steady seconds: about 11 s, longer on a slow
+# runner, so wait for it rather than guessing.
+echo 64 > $W/rate6c
+for i in $(seq 1 30); do
+  [ "$(grep -c 'Match detected: fakeshooter' $W/d6c.log)" -ge 2 ] && break
+  sleep 1
+done
+sleep 3
 kill $G; sleep 2; kill -INT $D; wait $D; D=
 N=$(grep -c "Match detected: fakeshooter" $W/d6c.log)
 [ "$N" = 2 ] && ok "menus between matches end the first match" || bad "$N matches: $(grep -E 'Match (detected|ended)' $W/d6c.log)"
