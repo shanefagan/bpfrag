@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.4.1
+Version:        0.5.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -118,6 +118,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.5.0-1
+- Read-only D-Bus interface for following matches
+
 * Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.4.1-1
 - Consecutive matches no longer merge into one
 
