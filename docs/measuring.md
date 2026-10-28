@@ -151,8 +151,10 @@ Ordered by how likely each is to show something:
    longest gap and stalls.
 3. **DSCP on a busy Wi-Fi network** (`dscp`), with other devices
    streaming or downloading.
-4. **Busy polling** (`busy_polling`). Note frame times and CPU use too,
-   since busy polling costs both.
+4. **Busy polling** (`busy_polling`). Check first that it happens at all
+   ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)):
+   it probably doesn't reach the game's socket. Note frame times and CPU
+   use too, since busy polling costs both.
 5. **Everything** (`all`): the overall picture, once the individual
    pieces are understood.
 

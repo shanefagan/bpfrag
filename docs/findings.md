@@ -38,7 +38,9 @@ the arrival meter only sees incoming packets.
 
 ## Open questions
 
-The questions the comparisons above should answer, in rough priority:
+The questions the comparisons above should answer, in rough priority.
+[experiments.md](experiments.md) has the longer list, with how to run
+each:
 
 1. **Does bulk demotion reduce the 99% gap and stalls during a download,**
    with CAKE on the machine or dscpclassify on the router?

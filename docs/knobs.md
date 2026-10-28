@@ -22,8 +22,8 @@ something below is a hypothesis rather than established, it says so.
 | [DSCP CS4](#dscp-cs4-on-the-games-packets) | verified | Real on busy Wi-Fi (uplink) and with CAKE or a QoS router; none on a plain wired LAN | High for the mechanism, unmeasured in matches |
 | [Wi-Fi power save off](#wi-fi-power-save) | verified | Removes wake-up delays of up to a beacon interval after lulls | Medium |
 | [NIC interrupt coalescing](#nic-interrupt-coalescing) | verified (igc) | Up to ~0.25 ms less receive delay, mostly while something else downloads | Medium for the mechanism; too small for the 1 ms gap histogram |
-| [busy_read / busy_poll](#busy-polling-busy_read-busy_poll) | verified | Unknown: depends on how the game reads its socket; may do nothing | Low |
-| [Socket buffers](#socket-buffers-rmem_-wmem_) | verified | None unless the game stops reading for over a second | Low; kept because it's harmless |
+| [busy_read / busy_poll](#busy-polling-busy_read-busy_poll) | verified | Unknown, possibly none: for blocking reads and `poll()` it only reaches sockets created after bpfrag raises it; `epoll` follows it at once | Low; [check 1](experiments.md#1-does-busy-polling-reach-the-game) |
+| [Socket buffers](#socket-buffers-rmem_-wmem_) | verified | None unless the game stops reading for over a second, and the defaults also only apply to new sockets | Low; [check 2](experiments.md#2-do-the-socket-buffer-settings-reach-the-games-socket) |
 | [netdev_max_backlog](#netdev_max_backlog) | verified | None on a NAPI NIC without RPS | Low |
 | [netdev_budget / _usecs](#netdev_budget-and-netdev_budget_usecs) | verified | Only matters when receive processing is saturated | Low |
 | [udp_early_demux](#udp_early_demux) | verified | None: it's already on by default | None (no-op) |
@@ -139,6 +139,15 @@ buckets, which can't resolve differences this small. The health line's
 queue. Measuring it properly would take finer-grained arrival timing (a
 possible future addition) or a hardware-timestamped capture.
 
+**Caution:** on Intel's ixgbe (82599, X540, X550), changing coalescing
+across 10 µs, or away from its default "dynamic" setting, resets the
+adapter (`ixgbe_set_coalesce()` calls `ixgbe_do_reset()`,
+`drivers/net/ethernet/intel/ixgbe/ixgbe_ethtool.c`), which interrupts
+traffic. bpfrag's tiers cross exactly that line (0 and 10 µs), so on
+ixgbe each tier change may cost a brief outage
+([experiments.md](experiments.md#4-do-tier-changes-cause-hiccups)). igc
+and r8169 only write registers.
+
 **Confidence:** medium for the mechanism on igc. The effect is small by
 construction.
 
@@ -158,8 +167,24 @@ construction.
 - For `epoll`, every socket in the epoll set must have the same NAPI ID
   (receive queue) for busy polling to happen.
 - It needs a driver with NAPI, and it costs CPU and power while spinning.
+- **`busy_read` is copied into a socket when the socket is created**
+  (`sk->sk_ll_usec` in `sock_init_data_uid()`, `net/core/sock.c`).
+  Raising it doesn't change sockets that are already open, and `poll()`
+  and `select()` only busy-poll sockets that have it. bpfrag raises both
+  once it has seen the game's traffic for a few seconds, by which time
+  the game's socket exists, so for blocking reads, `poll()` and `select()`
+  only sockets the game opens later in the same session (a reconnect, a
+  new match server) are affected.
+- **`epoll` is different:** it busy-polls whenever `busy_poll` is
+  non-zero, using the receive queue of the last socket that woke it
+  (`ep_busy_loop_on()` and `ep_set_busy_poll_napi_id()`,
+  `fs/eventpoll.c`), so a game waiting in `epoll_wait()` is affected as
+  soon as bpfrag raises it.
 
-**Expect:** unknown. It helps when the game's network thread blocks in
+**Expect:** nothing for a game that waits with `poll()`, `select()` or a
+blocking read on the socket it opened before the match was detected (see
+above). For one that waits in `epoll`, it can apply. It helps when the
+game's network thread blocks in
 `recv()`, `poll()` or `select()` waiting for the next packet. Games that
 read non-blocking sockets from their frame loop, or that use epoll across
 sockets on different queues, would see little or nothing. Wine/Proton
@@ -167,13 +192,15 @@ translate Windows socket calls into their own I/O loop, so a Windows game's
 behaviour under Proton isn't obvious either. The spin time is counted as
 the game thread's CPU time, which a sched_ext scheduler sees.
 
-**See it:** no direct counter. Compare packet gaps and frame times with
-busy polling on and off for the same game: `sysctl = {
-"net.core.busy_read" = false, "net.core.busy_poll" = false }` under
-`[tier.all]` turns it off.
+**See it:** the kernel counts packets received by busy polling:
+`nstat -az TcpExtBusyPollRxPackets` (`BusyPollRxPackets` in
+`/proc/net/netstat`). If it doesn't grow during matches, busy polling did
+nothing ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)).
+If it does, compare packet gaps and frame times with `[experiment] setting
+= "busy_polling"`.
 
-**Confidence:** low. This is the setting most in need of data. If matches
-show no difference, it should go, since it costs power.
+**Confidence:** low. If the counter stays at 0 during matches, it should
+go, since it costs power when it does work.
 
 ## Socket buffers (`rmem_*`, `wmem_*`)
 
@@ -183,10 +210,14 @@ show no difference, it should go, since it costs power.
 **Mechanism:**
 
 - `rmem_default` is the receive buffer a socket gets unless it asks for
-  another size. The kernel default is 256 × the true size of a 256-byte
+  another size. Like `busy_read`, it's copied in when the socket is created
+  (`sk_rcvbuf` and `sk_sndbuf` in `sock_init_data_uid()`,
+  `net/core/sock.c`), so raising it doesn't grow sockets that are already
+  open. The kernel default is 256 × the true size of a 256-byte
   buffer (`SK_RMEM_DEFAULT`, `include/net/sock.h`): 212992 bytes, about
   208 KiB, on x86-64.
-- `rmem_max` only caps what a program may request with `SO_RCVBUF`.
+- `rmem_max` only caps what a program may request with `SO_RCVBUF`, which
+  programs usually do right after creating the socket.
   Linux 6.18 raised its default to 4 MiB (`net/core/sock.c`); before, it
   was 208 KiB, which is what Ubuntu 24.04 still runs (see
   [distros.md](distros.md)).
@@ -196,7 +227,10 @@ show no difference, it should go, since it costs power.
 
 **Expect:** a game's socket only overflows if the game stops reading for
 over a second (a hitch, a loading spike), or if it receives far more than
-its tick rate. Otherwise this changes nothing.
+its tick rate. Otherwise this changes nothing. And because bpfrag raises
+these once a match is detected, they reach only sockets the game opens
+after that; `ss -uampn` shows the game's socket's buffer (`rb`) during a
+match ([experiments.md](experiments.md#2-do-the-socket-buffer-settings-reach-the-games-socket)).
 
 **See it:** the health line's socket buffer drops, specifically "(N the
 game's)": the total is machine-wide (UDP `RcvbufErrors`), the game's

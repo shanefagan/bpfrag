@@ -12,6 +12,8 @@ use it. These pages go deeper.
 - [distros.md](distros.md): what Ubuntu, CachyOS, Bazzite and the kernel
   ship by default, which of bpfrag's settings that leaves to do, and the
   sources.
+- [experiments.md](experiments.md): the backlog of experiments and
+  checks worth running, why, and what each needs.
 - [findings.md](findings.md): results so far, open questions, bugs found,
   and overhead measurements.
 - [detection.md](detection.md): how a match, its tier, its interfaces and

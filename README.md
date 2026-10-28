@@ -395,6 +395,7 @@ IP and MAC addresses are replaced, but read it through before posting.
 - [docs/knobs.md](docs/knobs.md): why each setting, with sources, and what to expect
 - [docs/measuring.md](docs/measuring.md): how to measure whether it helps
 - [docs/distros.md](docs/distros.md): distribution defaults, and what that leaves bpfrag to do
+- [docs/experiments.md](docs/experiments.md): experiments and checks worth running, and what each needs
 - [docs/findings.md](docs/findings.md): results, open questions, bugs found, overhead
 - [docs/detection.md](docs/detection.md): how matches, tiers, interfaces and bulk transfers are detected
 - [docs/development.md](docs/development.md): code layout, tests, releases
