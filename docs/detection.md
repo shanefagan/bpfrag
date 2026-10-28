@@ -61,7 +61,13 @@ next match.
 
 A match ends **immediately when the game exits** (via the
 `sched_process_exit` hook), or after **15 quiet seconds**, for example back in
-the menus.
+the menus. "Quiet" is the median of the last five seconds at 10 packets a
+second or fewer: menus and queues are mostly silent but ping relays in
+short bursts, and judging each second on its own let those bursts keep one
+match going into the next (0.4.0 and earlier). With the game left running,
+each match is its own match: its own health line, its own experiment
+draw, its own row in `matches.py`. A dip while you're dead or waiting to
+respawn stays well above that (Deadlock still gets 70+ packets a second).
 
 Rejections by the deny list (or `BPFRAG_GAME=0`) are only logged at debug
 level (`-v`). A steady UDP process with no game signals at all is logged

@@ -60,6 +60,15 @@ each:
 
 ## Bugs found and what they taught
 
+**0.4.0: consecutive matches merged into one.** Two Deadlock matches played
+without quitting the game came out as a single 54-minute match, with one
+health line and one experiment draw. A match ended after 15 seconds at 10
+packets a second or fewer, judged one second at a time; in the menus the
+game is mostly silent, but any second with a burst over 10 restarted the
+count. Fixed in 0.4.1 by judging quiet on the median of the last five
+seconds. Lesson: the same as the stall bug, from the other side; the time
+between matches has to be modelled, not ignored.
+
 **0.3.0: lobby keepalives counted as stalls.** A Deadlock session that
 covered several matches, 2h28m in all, reported 1671 stalls and a longest
 gap of 1000 ms; a 38-minute session that ended with its match reported 0

@@ -179,6 +179,20 @@ echo "$H" | grep -Eq "longest (2[5-9][0-9]|3[0-9][0-9]|4[0-4][0-9]) ms" && ok "l
 kill -INT $D; wait $D; D=
 same "after stall match"
 
+echo "== 6c. two matches in one game session are two matches"
+# Match, then menus (a packet a second with a burst every fourth second,
+# like relay pings), then another match, all in one game process.
+"$B" -c $W/cfg.toml > $W/d6c.log 2>&1 & D=$!; sleep 1
+echo 64 > $W/rate6c; game 64 180 $W/rate6c; sleep 6
+for i in $(seq 1 4); do echo 1 > $W/rate6c; sleep 3; echo 40 > $W/rate6c; sleep 1; done
+echo 64 > $W/rate6c; sleep 8
+kill $G; sleep 2; kill -INT $D; wait $D; D=
+N=$(grep -c "Match detected: fakeshooter" $W/d6c.log)
+[ "$N" = 2 ] && ok "menus between matches end the first match" || bad "$N matches: $(grep -E 'Match (detected|ended)' $W/d6c.log)"
+grep -q "Match ended after .*(netcode quiet" $W/d6c.log && ok "first match ended on the quiet menus" || bad "no quiet end: $(grep 'Match ended' $W/d6c.log)"
+[ "$(grep -c 'fakeshooter: packet gaps' $W/d6c.log)" = 2 ] && ok "a health line for each match" || bad "health lines: $(grep -c 'fakeshooter: packet gaps' $W/d6c.log)"
+same "after two matches"
+
 echo "== 7. --dry-run changes nothing"
 "$B" -c $W/cfg.toml --dry-run > $W/d5.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
 grep -q "would set" $W/d5.log && ok "dry run logs intended changes" || bad "dry run silent"

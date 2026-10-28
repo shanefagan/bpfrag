@@ -32,6 +32,10 @@ use std::collections::{HashMap, VecDeque};
 use crate::config::{Detect, Tier};
 use classify::Verdict;
 
+/// Windows whose median decides whether the game has gone quiet (back in
+/// the menus): enough that short bursts of relay pings don't count.
+const QUIET_WINDOWS: usize = 5;
+
 /// Consecutive windows that must agree on a new tier before it is applied:
 /// moving up is quick, moving down slower, and back to CASUAL slowest.
 const CONFIDENCE_UP: u32 = 3;
@@ -96,6 +100,18 @@ impl Track {
 
     fn last(&self) -> Window {
         self.hist.back().copied().unwrap_or_default()
+    }
+
+    /// Median total pps over the last `n` windows. Unlike the latest window
+    /// or the mean, a one- or two-second burst doesn't move it: menus and
+    /// queues are mostly silent but ping relays in short bursts.
+    fn recent_median(&self, n: usize) -> f64 {
+        let mut v: Vec<f64> = self.hist.iter().rev().take(n).map(Window::total).collect();
+        if v.is_empty() {
+            return 0.0;
+        }
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
     }
 
     /// Mean total pps over the history.
@@ -488,7 +504,6 @@ impl Detector {
         let Some(t) = self.tracks.get(&tgid) else {
             return self.end("process gone".into());
         };
-        let last = t.last();
         let pps = t.smooth();
         let idle = t.idle_ticks > 0;
         sess.info.pps = pps;
@@ -498,12 +513,12 @@ impl Detector {
             sess.info.ifindex = t.ifindex;
         }
 
-        if last.total() <= self.cfg.idle_pps as f64 {
+        if idle && !procs.alive(tgid) {
+            return self.end("game exited".into());
+        }
+        if t.recent_median(QUIET_WINDOWS) <= self.cfg.idle_pps as f64 {
             sess.quiet_secs += dt;
             let quiet = sess.quiet_secs;
-            if idle && !procs.alive(tgid) {
-                return self.end("game exited".into());
-            }
             if quiet >= self.cfg.linger_secs as f64 {
                 return self.end(format!("netcode quiet for {}s", quiet.round()));
             }
@@ -669,6 +684,49 @@ mod tests {
         let a = sim.run(20, &[(7, 1, 1, 80)]);
         assert!(a.iter().any(|x| matches!(x, Action::End { .. })), "{a:?}");
         assert!(sim.det.session().is_none());
+    }
+
+    #[test]
+    fn menus_with_ping_bursts_still_end_the_match() {
+        let mut sim = Sim::new(&[7]);
+        let a = sim.run(4, &[(7, 64, 128, 120)]);
+        assert_eq!(starts(&a).len(), 1, "{a:?}");
+        // Between matches: a packet a second, and every fourth second a
+        // burst of relay pings well over the quiet threshold. Judged on the
+        // latest second alone, every burst restarted the quiet countdown and
+        // two matches merged into one.
+        let mut ended = None;
+        for i in 0..40 {
+            let r = if i % 4 == 3 {
+                (7, 25, 25, 80)
+            } else {
+                (7, 1, 1, 80)
+            };
+            if sim
+                .step(&[r])
+                .iter()
+                .any(|x| matches!(x, Action::End { .. }))
+            {
+                ended = Some(i);
+                break;
+            }
+        }
+        let at = ended.expect("the match never ended");
+        assert!(at <= 15 + 6, "ended after {at}s");
+        // the next match is a new one, once its traffic fills the history
+        let a = sim.run(12, &[(7, 64, 128, 120)]);
+        assert_eq!(starts(&a).len(), 1, "{a:?}");
+    }
+
+    #[test]
+    fn a_dip_mid_match_is_not_the_end() {
+        let mut sim = Sim::new(&[7]);
+        sim.run(4, &[(7, 64, 128, 120)]);
+        assert!(sim.det.session().is_some());
+        // dead and waiting to respawn: Deadlock still gets ~40-55 pkt/s
+        let a = sim.run(60, &[(7, 32, 45, 120)]);
+        assert!(!a.iter().any(|x| matches!(x, Action::End { .. })), "{a:?}");
+        assert!(sim.det.session().is_some());
     }
 
     #[test]
