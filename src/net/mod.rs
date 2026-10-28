@@ -8,6 +8,7 @@
 //! - [`ethtool`]: NIC interrupt coalescing through the ethtool ioctl;
 //! - [`nl80211`]: Wi-Fi power save over generic netlink;
 //! - [`netdev`]: which receive queue (NAPI instance) a packet came in on;
+//! - [`sockets`]: receive-buffer drops on one process's UDP sockets;
 //! - [`genl`]: the generic netlink both of those use.
 //!
 //! What to change and when lives in `tune`.
@@ -16,6 +17,7 @@ pub mod ethtool;
 pub mod genl;
 pub mod netdev;
 pub mod nl80211;
+pub mod sockets;
 
 use std::ffi::CStr;
 use std::fs;

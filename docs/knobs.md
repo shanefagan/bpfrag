@@ -197,12 +197,13 @@ show no difference, it should go, since it costs power.
 over a second (a hitch, a loading spike), or if it receives far more than
 its tick rate. Otherwise this changes nothing.
 
-**See it:** the health line's socket buffer drops (UDP `RcvbufErrors`,
-system-wide).
+**See it:** the health line's socket buffer drops, specifically "(N the
+game's)": the total is machine-wide (UDP `RcvbufErrors`), the game's
+count comes from its own sockets.
 
 **Confidence:** low that it matters, but raise-only and harmless. Kept from
-the original profiles. If no match ever shows socket buffer drops with the
-defaults, it can go.
+the original profiles. If no match ever shows drops on the game's sockets
+with the defaults, it can go.
 
 `net.ipv4.udp_mem` was removed in 0.1.1. It's counted in pages, the kernel
 already sizes it from RAM, and the original values raised its hard limit to

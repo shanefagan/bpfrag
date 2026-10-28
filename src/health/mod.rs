@@ -25,12 +25,15 @@
 pub mod counters;
 
 use std::collections::HashMap;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
 use crate::bpf_intf;
 use crate::net::Iface;
 use crate::net::netdev::{self, RxQueue};
+use crate::net::sockets;
 use counters::{SysCounters, nic_overruns};
 
 /// Histogram buckets: 1 ms each, the last one "that long or longer".
@@ -151,8 +154,12 @@ impl GapSummary {
 pub struct Health {
     /// None if the meter couldn't attach (no tcx) or nothing arrived yet.
     pub gaps: Option<GapSummary>,
-    /// UDP socket receive buffers overflowed.
+    /// UDP socket receive buffers overflowed, anywhere on the machine.
     pub socket_drops: u64,
+    /// Of those, drops on the game's own sockets; None if they couldn't
+    /// be read.
+    #[serde(default)]
+    pub game_socket_drops: Option<u64>,
     /// The per-CPU input backlog overflowed.
     pub backlog_drops: u64,
     /// The NIC's receive ring overflowed (on the game's interfaces).
@@ -191,8 +198,12 @@ impl Health {
         if self.drops() == 0 {
             "no drops".into()
         } else {
+            let game = match self.game_socket_drops {
+                Some(g) if self.socket_drops > 0 => format!(" ({g} the game's)"),
+                _ => String::new(),
+            };
             format!(
-                "drops: {} socket buffer, {} backlog, {} NIC",
+                "drops: {} socket buffer{game}, {} backlog, {} NIC",
                 self.socket_drops, self.backlog_drops, self.nic_drops
             )
         }
@@ -246,12 +257,69 @@ pub struct Tracker {
     latest: Option<Health>,
     /// The main flow's receive queue, looked up once per NAPI id.
     rx_queue: Option<RxQueue>,
+    /// The game's UDP sockets: drops at the start (0 for sockets opened
+    /// later) and at the latest reading, by inode.
+    game: Option<GameSockets>,
+}
+
+/// Seconds between readings of the game's sockets (a Proton game can hold
+/// thousands of fds, so not every tick).
+const SOCKET_READ_EVERY: Duration = Duration::from_secs(5);
+
+struct GameSockets {
+    tgid: u32,
+    base: HashMap<u64, u64>,
+    last: HashMap<u64, u64>,
+    read_at: Instant,
+    readable: bool,
+}
+
+impl GameSockets {
+    fn start(tgid: u32) -> Self {
+        let now = sockets::udp_drops(Path::new("/proc"), tgid);
+        Self {
+            tgid,
+            readable: now.is_some(),
+            base: now.clone().unwrap_or_default(),
+            last: now.unwrap_or_default(),
+            read_at: Instant::now(),
+        }
+    }
+
+    /// Read again if it's time. A socket that closes keeps its last count.
+    fn refresh(&mut self) {
+        if self.read_at.elapsed() < SOCKET_READ_EVERY {
+            return;
+        }
+        self.read_at = Instant::now();
+        if let Some(now) = sockets::udp_drops(Path::new("/proc"), self.tgid) {
+            self.merge(now);
+        }
+    }
+
+    fn merge(&mut self, now: HashMap<u64, u64>) {
+        self.readable = true;
+        for (inode, drops) in now {
+            self.base.entry(inode).or_insert(0);
+            self.last.insert(inode, drops);
+        }
+    }
+
+    fn drops(&self) -> Option<u64> {
+        self.readable.then(|| {
+            self.last
+                .iter()
+                .map(|(i, d)| d.saturating_sub(self.base.get(i).copied().unwrap_or(0)))
+                .sum()
+        })
+    }
 }
 
 impl Tracker {
-    /// A match starts on `ifaces`.
-    pub fn start(&mut self, ifaces: &[Iface]) {
+    /// A match by process `tgid` starts on `ifaces`.
+    pub fn start(&mut self, tgid: u32, ifaces: &[Iface]) {
         self.base = Some(SysCounters::read());
+        self.game = Some(GameSockets::start(tgid));
         self.nic_base.clear();
         self.latest = None;
         self.rx_queue = None;
@@ -280,6 +348,9 @@ impl Tracker {
             .iter()
             .map(|(name, b)| nic_overruns(name).map_or(0, |n| n.saturating_sub(*b)))
             .sum();
+        if let Some(g) = self.game.as_mut() {
+            g.refresh();
+        }
         let main = Gaps::main_flow(ports);
         let napi_id = main.as_ref().map_or(0, |g| g.napi_id);
         if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
@@ -289,6 +360,7 @@ impl Tracker {
         self.latest = Some(Health {
             gaps: main.and_then(|g| g.summary()),
             socket_drops: sys.udp_rcvbuf,
+            game_socket_drops: self.game.as_ref().and_then(GameSockets::drops),
             backlog_drops: sys.backlog_drops,
             nic_drops,
             squeezed: sys.squeezed,
@@ -306,6 +378,7 @@ impl Tracker {
         self.base = None;
         self.nic_base.clear();
         self.rx_queue = None;
+        self.game = None;
         self.latest.take()
     }
 }
@@ -351,6 +424,27 @@ mod tests {
     }
 
     #[test]
+    fn game_socket_drops_count_from_the_start() {
+        let mut g = GameSockets {
+            tgid: 1,
+            base: HashMap::from([(10, 300), (11, 0)]),
+            last: HashMap::from([(10, 300), (11, 0)]),
+            read_at: Instant::now(),
+            readable: true,
+        };
+        assert_eq!(g.drops(), Some(0));
+        // socket 10 drops 5, socket 12 opens mid-match and drops 2
+        g.merge(HashMap::from([(10, 305), (12, 2)]));
+        // socket 11 closed: its count stays as last seen
+        assert_eq!(g.drops(), Some(7));
+        let unreadable = GameSockets {
+            readable: false,
+            ..g
+        };
+        assert_eq!(unreadable.drops(), None);
+    }
+
+    #[test]
     fn summaries_read_plainly() {
         let h = Health {
             gaps: Some(GapSummary {
@@ -376,6 +470,15 @@ mod tests {
             d.summary(),
             "packet gaps not measured; drops: 2 socket buffer, 0 backlog, 0 NIC; \
              receive processing ran out of budget 3x"
+        );
+        let g = Health {
+            socket_drops: 11401,
+            game_socket_drops: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            g.summary(),
+            "packet gaps not measured; drops: 11401 socket buffer (0 the game's), 0 backlog, 0 NIC"
         );
         assert_eq!(h.short(), "gaps 99% over 63 ms, longest 48 ms, no drops");
         let q = Health {

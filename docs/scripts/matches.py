@@ -20,7 +20,12 @@ import subprocess
 import sys
 
 TIERS = ["CASUAL", "COMPETITIVE", "INTENSE"]
-STAMP = re.compile(r"^(\d{4}-\d\d-\d\dT[\d:]+[+-]\d{4}|\d\d:\d\d:\d\d(?:\.\d+)?)")
+# short-iso journal, the default journal format ("Oct 28 10:02:38"), or the
+# daemon's own stderr ("10:02:38")
+STAMP = re.compile(
+    r"^(\d{4}-\d\d-\d\dT[\d:]+[+-]\d{4}|[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d"
+    r"|\d\d:\d\d:\d\d(?:\.\d+)?)"
+)
 STARTED = re.compile(r"bpfrag (\S+) started( in dry-run mode)?")
 DETECTED = re.compile(r"Match detected: (.+?) \(pid \d+\) at ~(\d+) pkt/s .* -> (\w+) \[(.*)\]$")
 RETIER = re.compile(r": traffic now ~\d+ pkt/s .*; (\w+) -> (\w+)$")
@@ -29,7 +34,9 @@ GAPS = re.compile(
     r"packet gaps half (≤\d+|over \d+) ms, 99% (≤\d+|over \d+) ms, "
     r"longest (\d+) ms, (\d+) stalls? \(100 ms\+\)"
 )
-DROPS = re.compile(r"drops: (\d+) socket buffer, (\d+) backlog, (\d+) NIC")
+DROPS = re.compile(
+    r"drops: (\d+) socket buffer(?: \((\d+) the game's\))?, (\d+) backlog, (\d+) NIC"
+)
 SQUEEZE = re.compile(r"ran out of budget (\d+)x")
 QUEUE = re.compile(r"arrives on ([^;]+)")
 BULK = re.compile(r"bulk: (.*?)( marked \w+| \(not marked\))$")
@@ -37,8 +44,8 @@ BULK = re.compile(r"bulk: (.*?)( marked \w+| \(not marked\))$")
 FIELDS = [
     "label", "started", "game", "mode", "version", "start_tier", "peak_tier",
     "duration_s", "end_reason", "start_pps", "gap_p50_ms", "gap_p99_ms",
-    "gap_longest_ms", "stalls", "socket_drops", "backlog_drops", "nic_drops",
-    "squeezed", "rx_queue", "bulk", "bulk_marked", "reason",
+    "gap_longest_ms", "stalls", "socket_drops", "game_socket_drops", "backlog_drops",
+    "nic_drops", "squeezed", "rx_queue", "bulk", "bulk_marked", "reason",
 ]
 
 
@@ -83,9 +90,10 @@ def parse(lines, label):
                 cur["gap_p50_ms"], cur["gap_p99_ms"] = ms(m.group(1)), ms(m.group(2))
                 cur["gap_longest_ms"], cur["stalls"] = m.group(3), m.group(4)
             d = DROPS.search(line)
-            cur["socket_drops"], cur["backlog_drops"], cur["nic_drops"] = (
-                d.groups() if d else (0, 0, 0)
-            )
+            # game_socket_drops is blank before 0.3.1, or if bpfrag couldn't
+            # read the game's sockets
+            (cur["socket_drops"], cur["game_socket_drops"], cur["backlog_drops"],
+             cur["nic_drops"]) = d.groups("") if d else (0, 0, 0, 0)
             q = SQUEEZE.search(line)
             cur["squeezed"] = q.group(1) if q else 0
             if q := QUEUE.search(line):

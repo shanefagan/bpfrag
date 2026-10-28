@@ -24,7 +24,7 @@ show what reaches the machine, not what the game does with it.
 | 99% ≤N ms | the gap 99% of packets beat | jitter anywhere on the path: Wi-Fi, queues, the internet |
 | longest N ms | the longest gap counted (pauses of 2 s or more aren't) | one-off hiccups, Wi-Fi power save |
 | stalls | the flow went quiet for 100 ms to 2 s, then came back at game rate | what a player feels as rubber-banding |
-| socket buffer drops | UDP receive buffer overflowed (`RcvbufErrors`) | socket buffers, a game that stopped reading |
+| socket buffer drops | a UDP receive buffer overflowed (`RcvbufErrors`), anywhere on the machine; "(N the game's)" is how many were the game's own sockets | socket buffers, a game that stopped reading |
 | backlog drops | per-CPU input queue overflowed | `netdev_max_backlog` (RPS or virtual devices only) |
 | NIC drops | the NIC's receive ring overflowed | coalescing, ring size, very high rates |
 | ran out of budget | receive processing deferred | `netdev_budget*`, heavy receive load |
@@ -39,8 +39,9 @@ Limits to keep in mind:
 - **Most jitter isn't on this machine.** The internet path and the game
   server dominate the spread. A tuning change shows up as a small shift in
   the 99% figure and the stall count, against a lot of match-to-match noise.
-- **Drop counters are system-wide.** Anything else receiving during the
-  match counts too.
+- **Drop counters are system-wide,** except "the game's" socket buffer
+  drops (0.3.1 and later), read from the game's own sockets. A torrent
+  client's UDP sockets overflowing shows in the total, not in the game's.
 - **Stalls changed meaning in 0.3.1.** Before, every gap of 100 ms to 2 s
   counted, including the one-a-second keepalives a game sends in a lobby
   or menu, so a session that included time between matches could show

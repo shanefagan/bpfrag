@@ -368,7 +368,7 @@ impl<'a> Tuner<'a> {
                 // take the health baselines before anything changes.
                 maps::clear_port_rx(&self.skel);
                 maps::track_ports(&self.skel, s.tgid, true);
-                self.health.start(&self.candidates(&s));
+                self.health.start(s.tgid, &self.candidates(&s));
                 self.apply_tier(&s);
             }
             Action::Retier { from, to } => {
