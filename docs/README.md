@@ -9,6 +9,9 @@ use it. These pages go deeper.
 - [measuring.md](measuring.md): how to tell whether a setting helps: what
   the health numbers mean, how to run a comparison that can be trusted, and
   `scripts/matches.py`, which turns the log into a CSV of matches.
+- [distros.md](distros.md): what Ubuntu, CachyOS, Bazzite and the kernel
+  ship by default, which of bpfrag's settings that leaves to do, and the
+  sources.
 - [findings.md](findings.md): results so far, open questions, bugs found,
   and overhead measurements.
 - [detection.md](detection.md): how a match, its tier, its interfaces and

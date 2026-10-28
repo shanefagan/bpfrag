@@ -118,12 +118,25 @@ Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 
 - **The receive queue** is where the game's packets come in, and which IRQ
   serves it.
 
-`--dry-run` measures the same way but changes nothing, which gives a
-baseline. Most of the spread in packet gaps comes from the internet and the
-game server, so one match proves little either way.
-**[docs/measuring.md](docs/measuring.md)** describes how to run a
-comparison you can trust, and `docs/scripts/matches.py` turns the log into
-a CSV of matches. Results go in [docs/findings.md](docs/findings.md).
+Most of the spread in packet gaps comes from the internet and the game
+server, so one match proves little either way. To find out what a setting
+does, let bpfrag run an experiment: it switches that setting off in a
+random half of your matches and labels each one.
+
+```toml
+[experiment]
+setting = "wifi_power_save"
+```
+
+`docs/scripts/matches.py --compare arm` then compares the two halves.
+**[docs/measuring.md](docs/measuring.md)** has the details, and results
+go in [docs/findings.md](docs/findings.md). `--dry-run` measures the same
+way but changes nothing, for a baseline.
+
+What a tier changes also depends on your distribution's defaults: `sudo
+bpfrag --check` lists every setting's value now and what each tier would
+set it to. [docs/distros.md](docs/distros.md) compares Ubuntu, CachyOS and
+Bazzite.
 
 ## Bulk transfers during a match
 
@@ -381,6 +394,7 @@ IP and MAC addresses are replaced, but read it through before posting.
 
 - [docs/knobs.md](docs/knobs.md): why each setting, with sources, and what to expect
 - [docs/measuring.md](docs/measuring.md): how to measure whether it helps
+- [docs/distros.md](docs/distros.md): distribution defaults, and what that leaves bpfrag to do
 - [docs/findings.md](docs/findings.md): results, open questions, bugs found, overhead
 - [docs/detection.md](docs/detection.md): how matches, tiers, interfaces and bulk transfers are detected
 - [docs/development.md](docs/development.md): code layout, tests, releases

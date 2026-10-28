@@ -57,6 +57,13 @@ LE, in both directions, so CAKE or a QoS router serves the game first.
 Streaming hosts, voice apps and VPN clients are never demoted, packets
 already marked are left alone, and nothing is marked outside a match or in
 a dry run.
+.PP
+With
+.B [experiment]
+set, one setting (for example
+.BR busy_polling )
+is switched off in a random share of matches, so its effect can be
+measured. Each match logs which it got, and its health line ends with it.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " \fIfile\fR"
@@ -119,8 +126,11 @@ Show the running instance's stats every
 Undo anything a crashed or killed instance left changed, then exit.
 .TP
 .B \-\-check
-Report what this kernel and these interfaces support, and which other
-tuners are active, then exit.
+Report what this kernel and these interfaces support, every setting's
+value now and what each tier would set it to, the kernel's tick rate and
+preemption model, the default qdisc, TCP congestion control and
+NetworkManager's Wi-Fi power save default, and which other tuners are
+active, then exit.
 .TP
 .BR \-\-classify " \fIpid\fR"
 Classify

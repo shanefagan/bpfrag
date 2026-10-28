@@ -47,6 +47,7 @@ src/net/genl.rs              generic netlink for both, no deps
 
 src/config/mod.rs            config file, command-line overrides, validation
 src/config/builtin.rs        built-in lists and tier profiles
+src/experiment.rs            A/B experiments: which setting a match goes without
 src/cli/check.rs             --check
 src/cli/selftest.rs          --selftest: BPF_PROG_TEST_RUN packet vectors
 src/cli/report.rs            --report: diagnostics for a bug report, addresses removed

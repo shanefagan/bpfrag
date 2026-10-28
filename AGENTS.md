@@ -155,6 +155,10 @@ push unsigned commits to `main`, and don't force-push it.
   to expect, when nothing will happen, and the counter that would show it.
   Mark hypotheses as hypotheses.
 - Measured results go in `docs/findings.md`, null results included.
+- Distribution defaults go in `docs/distros.md`, each with the package or
+  file it was read from. Don't fill a cell from memory.
+- A new setting also gets an `[experiment]` name (`src/experiment.rs`),
+  so it can be tested like the others.
 
 ## Bug reports
 

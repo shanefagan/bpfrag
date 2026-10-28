@@ -187,8 +187,9 @@ show no difference, it should go, since it costs power.
   buffer (`SK_RMEM_DEFAULT`, `include/net/sock.h`): 212992 bytes, about
   208 KiB, on x86-64.
 - `rmem_max` only caps what a program may request with `SO_RCVBUF`.
-  Recent kernels default it to 4 MiB (`net/core/sock.c`; 6.18 already
-  does); older ones used 208 KiB.
+  Linux 6.18 raised its default to 4 MiB (`net/core/sock.c`); before, it
+  was 208 KiB, which is what Ubuntu 24.04 still runs (see
+  [distros.md](distros.md)).
 - Each small UDP packet costs roughly 1 KiB of buffer accounting, so the
   default holds a couple of hundred game packets: one to two seconds at
   128 packets/s.

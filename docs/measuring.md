@@ -55,71 +55,112 @@ Limits to keep in mind:
 
 ## A comparison you can trust
 
-1. **One change at a time.** Pick one setting (say Wi-Fi power save) and
-   compare it on against off, with everything else the same. To turn one
-   knob off without stopping the rest, add it under `[tier.all]` in
-   `/etc/bpfrag/bpfrag.toml`, for example `wifi_powersave_off = false`.
-   The comparisons that matter most are in the next section.
-2. **Same game, same server region, same connection,** at similar times of
-   day. Note anything else running (downloads, streams, other devices on
-   the network).
-3. **Alternate,** don't batch: A, B, A, B... so a bad evening affects both
-   sides alike. A whole session of each risks comparing two different
-   evenings.
-4. **Enough matches.** Match-to-match spread is large. Ten or more of each
-   is a start, and more is better for small effects. A single great or
-   terrible match proves nothing.
-5. **Compare medians across matches,** not single matches: the median of
-   each side's 99% gap, longest gap and stall count. Look at how much the
-   two sides overlap, not only at their middles.
-6. **Write down the null results too.** "No difference over 20 matches" is
+The simplest fair comparison is an **experiment**: bpfrag switches one
+setting off in a random half of your matches and records which half each
+match was in. You play as usual.
+
+```toml
+# /etc/bpfrag/bpfrag.toml
+[experiment]
+setting = "busy_polling"
+```
+
+Then `sudo systemctl restart bpfrag`. Each match logs its arm when it
+starts (`Experiment: busy_polling off for this match`), `--monitor` shows
+it, and the health line at the end says it again. The setting names are
+the sections of [knobs.md](knobs.md): `dscp`, `wifi_power_save`,
+`coalescing`, `busy_polling`, `socket_buffers`, `backlog`, `budget`,
+`writeback`, `bulk` (needs `[bulk] enabled = true`), `all` (the "off"
+matches are only measured, like a dry run), or `sysctl:<name>` for a
+single sysctl. `keep = 0.3` would keep the setting in 30% of matches.
+
+Why random: picking which matches get which setting by hand, or running
+one evening of each, lets everything else that varies (time of day, the
+server, the map, your ISP's evening load) line up with one side. A coin
+flip per match spreads those evenly over both sides, so a difference that
+shows up is the setting's.
+
+Still worth doing:
+
+1. **One experiment at a time,** so every difference has one cause.
+2. **Same game and connection.** Note anything else running (downloads,
+   streams, other devices); keep that the same through the experiment, or
+   it becomes part of what you measure.
+3. **Enough matches.** Match-to-match spread is large. Ten or more on each
+   side is a start, more for small effects. A single great or terrible
+   match proves nothing.
+4. **Compare medians,** and look at how much the two sides overlap, not
+   only at their middles. `matches.py --compare arm` does this (below).
+5. **Write down the null results too.** "No difference over 20 matches" is
    what justifies removing a setting.
 
-Restart the service after editing the config: `sudo systemctl restart
-bpfrag`. For a dry-run baseline, put `BPFRAG_FLAGS="--dry-run"` in
-`/etc/default/bpfrag` and restart.
+Without an experiment you can still compare by hand: turn a knob off under
+`[tier.all]` (for example `wifi_powersave_off = false`), alternate A, B,
+A, B by session, and label each with `matches.py --label`. For a
+dry-run baseline, put `BPFRAG_FLAGS="--dry-run"` in `/etc/default/bpfrag`
+and restart.
 
 ## Turning the log into data
 
 `docs/scripts/matches.py` reads the journal and prints one CSV row per
-match: the game, whether bpfrag was tuning or only measuring, the tiers,
-and every number from the health line. Give each condition a label:
+match: the game, whether bpfrag was tuning or only measuring, the
+experiment arm, the tiers, and every number from the health line. It
+needs only Python 3, and also reads a saved log: `journalctl -u bpfrag |
+docs/scripts/matches.py -`.
+
+To compare an experiment's two arms directly:
 
 ```sh
-# a session with everything on
-docs/scripts/matches.py --since "2026-11-01 19:00" --label baseline-tuned > tuned.csv
-# a session with --dry-run (or with one knob off)
-docs/scripts/matches.py --since "2026-11-02 19:00" --label dryrun --no-header >> tuned.csv
+docs/scripts/matches.py --since "2026-11-01" --compare arm
 ```
 
-It needs only Python 3. It also reads a saved log: `journalctl -u bpfrag -o
-short-iso | docs/scripts/matches.py -`. Open the CSV in any spreadsheet and
-compare the `gap_p99_ms`, `gap_longest_ms` and `stalls` columns per label.
-A `gap_p99_ms` of 64 means "over 63 ms", the histogram's last bucket.
+```
+arm            matches    99% gap ms    longest ms        stalls    game drops
+off                 12            23          99.5           1.5             0
+on                  12            19          97.5             2             0
+
+99% gap ms: p = 0.005 (difference in medians)
+longest ms: p = 0.877 (difference in medians)
+...
+```
+
+(Illustrative numbers.) The p-value is from a permutation test: how
+often splitting the same matches into two random groups gives a
+difference at least this big. Small means the difference is unlikely to
+be chance. With fewer than about ten matches a side, or many identical
+values (stalls are often 0), treat it as a lead, not proof. Matches
+shorter than 5 minutes are left out (`--min-minutes`). `--compare label`
+and `--compare mode` (tuned against dry-run) work the same way.
+
+For a spreadsheet instead, leave out `--compare`; label sessions with
+`--label`. A `gap_p99_ms` of 64 means "over 63 ms", the histogram's last
+bucket.
 
 ## The comparisons worth running first
 
 Ordered by how likely each is to show something:
 
-1. **Bulk demotion during a download.** Start a big Steam download and keep
-   it running. Compare matches with `[bulk] enabled = true` against `false`.
-   This only shows an effect where something reads DSCP: CAKE (diffserv3,
-   diffserv4 or diffserv8) on this machine, or a router that adopts client
-   marks (dscpclassify). Check `tc -s qdisc` afterwards: CAKE's Bulk tin
-   should show the traffic.
-2. **Wi-Fi power save,** on Wi-Fi only. `wifi_powersave_off = false` against
-   the default. Watch the longest gap and stalls.
-3. **DSCP on a busy Wi-Fi network.** Other devices streaming or
-   downloading. `[tier.all] dscp = false` against the default.
-4. **Busy polling.** `sysctl = { "net.core.busy_read" = false,
-   "net.core.busy_poll" = false }` under `[tier.all]`. Note frame times and
-   CPU use too, since busy polling costs both.
-5. **Everything against `--dry-run`.** The overall picture, once the
-   individual pieces are understood.
+1. **Bulk demotion during a download** (`setting = "bulk"`, with
+   `[bulk] enabled = true`). Keep a big download or seed running through
+   the experiment. This only shows an effect where something reads DSCP:
+   CAKE (diffserv3, diffserv4 or diffserv8) on this machine, or a router
+   that adopts client marks (dscpclassify), and only when the line is
+   actually full. Check `tc -s qdisc` afterwards: CAKE's Bulk tin should
+   show the traffic.
+2. **Wi-Fi power save,** on Wi-Fi only (`wifi_power_save`). Watch the
+   longest gap and stalls.
+3. **DSCP on a busy Wi-Fi network** (`dscp`), with other devices
+   streaming or downloading.
+4. **Busy polling** (`busy_polling`). Note frame times and CPU use too,
+   since busy polling costs both.
+5. **Everything** (`all`): the overall picture, once the individual
+   pieces are understood.
 
 The buffer, backlog and budget settings only matter when their drop
 counters move. If they stay at 0 across many matches with the defaults,
-that's the finding.
+that's the finding. What a setting can do also depends on your
+distribution's defaults: `sudo bpfrag --check` shows which settings
+already hold their tier's value ([distros.md](distros.md)).
 
 ## When a counter moves
 
