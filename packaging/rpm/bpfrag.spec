@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.2.1
+Version:        0.3.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -111,6 +111,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.3.0-1
+- Bulk demotion during matches; docs on every setting
+
 * Tue Oct 27 2026 Shane Fagan <mail@shanefagan.com> - 0.2.1-1
 - tc programs no longer stop CAKE's IFB redirect (download shaping) during matches
 

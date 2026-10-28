@@ -1,3 +1,9 @@
+bpfrag (0.3.0-1) unstable; urgency=medium
+
+  * Bulk demotion during matches; docs on every setting
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 28 Oct 2026 00:31:31 +0000
+
 bpfrag (0.2.1-1) unstable; urgency=medium
 
   * tc programs no longer stop CAKE's IFB redirect (download shaping) during matches
