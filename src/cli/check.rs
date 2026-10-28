@@ -299,7 +299,7 @@ fn context() {
     }
 }
 
-/// This kernel's build config: /boot/config-<release> (Debian, Ubuntu,
+/// This kernel's build config: `/boot/config-<release>` (Debian, Ubuntu,
 /// Fedora) or /proc/config.gz (Arch, CachyOS).
 fn kernel_config(release: &str) -> Option<String> {
     if let Ok(t) = std::fs::read_to_string(format!("/boot/config-{release}")) {

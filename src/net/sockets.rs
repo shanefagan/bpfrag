@@ -3,8 +3,8 @@
 
 //! Receive-buffer drops on one process's own UDP sockets. The kernel keeps
 //! a drop count per socket (`sk_drops`), shown in the last column of
-//! /proc/<pid>/net/udp and udp6; the process's socket inodes come from its
-//! /proc/<pid>/fd links. Reading another user's fds needs CAP_SYS_PTRACE,
+//! `/proc/<pid>/net/udp` and `udp6`; the process's socket inodes come from its
+//! `/proc/<pid>/fd` links. Reading another user's fds needs CAP_SYS_PTRACE,
 //! which the unit has.
 
 use std::collections::HashMap;
@@ -41,7 +41,7 @@ pub fn udp_drops(proc_root: &Path, tgid: u32) -> Option<HashMap<u64, u64>> {
     Some(out)
 }
 
-/// "socket:[12345]" -> 12345.
+/// `socket:[12345]` -> 12345.
 fn socket_inode(link: &str) -> Option<u64> {
     link.strip_prefix("socket:[")?
         .strip_suffix(']')?
