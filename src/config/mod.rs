@@ -93,6 +93,8 @@ pub struct General {
     /// Sampling window in milliseconds.
     pub tick_ms: u64,
     pub bpftune: BpftuneMode,
+    /// Publish the read-only D-Bus interface (src/bus.rs).
+    pub dbus: bool,
 }
 
 impl Default for General {
@@ -102,6 +104,7 @@ impl Default for General {
             hook: None,
             tick_ms: 1000,
             bpftune: BpftuneMode::Auto,
+            dbus: true,
         }
     }
 }

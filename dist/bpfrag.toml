@@ -8,6 +8,8 @@
 # Sharing with bpftune. bpftune switches its own tuners off if anyone else
 # writes their sysctls, so by default bpfrag leaves those to it while it runs.
 # bpftune = "auto"     # "auto" | "yield" | "ignore"
+# Publish the read-only D-Bus interface (docs/dbus.md) on the system bus.
+# dbus = true
 
 [detect]
 # min_pps = 25           # smoothed pkt/s (tx+rx) before a process counts

@@ -10,6 +10,7 @@
 mod bpf;
 mod bpf_intf;
 mod bpf_skel;
+mod bus;
 mod cli;
 mod config;
 mod daemon;

@@ -22,6 +22,8 @@ cleanup() {
   pkill -f "^[^ ]*(fakeshooter|Discord|firefox|randomd|steam|obs) $W/" 2>/dev/null
   [ -n "${SRV:-}" ] && kill $SRV 2>/dev/null
   [ -n "${D:-}" ] && kill -INT $D 2>/dev/null && wait $D 2>/dev/null
+  [ -n "${MONP:-}" ] && kill $MONP 2>/dev/null
+  [ -n "${BUSD:-}" ] && kill $BUSD 2>/dev/null
   umount "$W/run8" 2>/dev/null
   ip netns del bpfrag-srv 2>/dev/null; ip link del bpfrag0 2>/dev/null
   ip link del bpfrag-ingress 2>/dev/null; ip link del bpfrag-egress 2>/dev/null
@@ -39,9 +41,12 @@ mkdir -p $W/steamapps/common/FakeShooter $W/apps
 ln -s "$(command -v python3)" $W/steamapps/common/FakeShooter/fakeshooter
 for n in Discord firefox randomd steam obs; do ln -s "$(command -v python3)" $W/apps/$n; done
 ln -s "$(command -v sleep)" $W/apps/bpftune
+# D-Bus stays off here: a test instance must never speak on the machine's
+# real system bus. Section 12 gives it a private one.
 cat > $W/cfg.toml <<EOT
 [general]
 run_dir = "$W/run"
+dbus = false
 [dscp]
 interfaces = ["bpfrag0"]
 [detect]
@@ -290,6 +295,78 @@ for keep in 0 1; do
 done
 same "after experiments"
 python3 "$HERE/../../docs/scripts/matches.py" - < $W/d11.log | grep -q ",busy_polling,on," && ok "matches.py reads the arm" || bad "matches.py: $(python3 "$HERE/../../docs/scripts/matches.py" - < $W/d11.log)"
+
+echo "== 12. D-Bus: read-only interface, readable by anyone"
+if command -v dbus-daemon >/dev/null && command -v dbus-monitor >/dev/null && command -v busctl >/dev/null; then
+  # A private bus with the system bus's default policy plus ours. The
+  # abstract socket needs no directory a non-root user can reach.
+  ADDR="unix:abstract=bpfrag-e2e-$$"
+  cat > $W/bus.conf <<EOT
+<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-BUS Bus Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
+<busconfig>
+  <type>system</type>
+  <listen>$ADDR</listen>
+  <auth>EXTERNAL</auth>
+  <policy context="default">
+    <allow user="*"/>
+    <deny own="*"/>
+    <deny send_type="method_call"/>
+    <allow send_type="signal"/>
+    <allow send_requested_reply="true" send_type="method_return"/>
+    <allow send_requested_reply="true" send_type="error"/>
+    <allow receive_type="method_call"/>
+    <allow receive_type="method_return"/>
+    <allow receive_type="error"/>
+    <allow receive_type="signal"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus"/>
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Introspectable"/>
+  </policy>
+  <policy user="root">
+    <allow send_destination="org.freedesktop.DBus" send_interface="org.freedesktop.DBus.Monitoring"/>
+  </policy>
+  <include>$HERE/../../dist/com.performativenonsense.Bpfrag1.conf</include>
+</busconfig>
+EOT
+  dbus-daemon --nofork --config-file=$W/bus.conf > $W/busd.log 2>&1 & BUSD=$!; sleep 0.5
+  OBJ="com.performativenonsense.Bpfrag1 /com/performativenonsense/Bpfrag1"
+  IFC=com.performativenonsense.Bpfrag1
+  # An unprivileged reader.
+  asuser() { setpriv --reuid=65534 --regid=65534 --clear-groups busctl --address=$ADDR "$@"; }
+  sed 's/^dbus = false$/dbus = true/' $W/cfg.toml > $W/cfg12.toml
+  DBUS_SYSTEM_BUS_ADDRESS=$ADDR "$B" -c $W/cfg12.toml > $W/d12.log 2>&1 & D=$!; sleep 1
+  grep -q "D-Bus: publishing com.performativenonsense.Bpfrag1" $W/d12.log && ok "name owned on the bus" || bad "not published: $(grep D-Bus $W/d12.log)"
+  [ "$(asuser get-property $OBJ $IFC InMatch 2>&1)" = "b false" ] && ok "another user reads InMatch=false before a match" || bad "idle read: $(asuser get-property $OBJ $IFC InMatch 2>&1)"
+  dbus-monitor --address $ADDR "type='signal',interface='$IFC'" "type='signal',member='PropertiesChanged'" > $W/mon.log 2>&1 & MONP=$!; sleep 0.5
+  echo 64 > $W/rate; game 64 180 $W/rate; sleep 6
+  INTRO=$(asuser introspect $OBJ 2>&1)
+  echo "$INTRO" | grep -q '^\.InMatch .* true' && echo "$INTRO" | grep -q '^\.Tier .*"competitive"' && ok "another user sees the match (InMatch, Tier)" || bad "introspect: $INTRO"
+  echo "$INTRO" | grep -q '^\.Reason .*"Steam app 4242"' && ok "Reason says why it's a game" || bad "Reason: $(echo "$INTRO" | grep Reason)"
+  asuser get-property $OBJ $IFC Applied 2>&1 | grep -q '"net.core.busy_poll" "50"' && ok "Applied lists the settings changed" || bad "Applied: $(asuser get-property $OBJ $IFC Applied 2>&1)"
+  asuser set-property $OBJ $IFC Tier s intense > $W/set.out 2>&1 && bad "another user could Set a property" || ok "another user can't Set (policy: $(head -c 60 $W/set.out))"
+  busctl --address=$ADDR set-property $OBJ $IFC Tier s intense > $W/set0.out 2>&1 && bad "root could Set a property" || ok "root can't Set either"
+  asuser call org.freedesktop.DBus /org/freedesktop/DBus org.freedesktop.DBus RequestName su $IFC 4 > $W/own.out 2>&1 && bad "another user could own the name: $(cat $W/own.out)" || ok "another user can't take the name"
+  echo 150 > $W/rate; sleep 10
+  kill $G; sleep 2
+  [ "$(asuser get-property $OBJ $IFC InMatch 2>&1)" = "b false" ] && ok "InMatch=false after the match" || bad "after: $(asuser get-property $OBJ $IFC InMatch 2>&1)"
+  grep -q "member=MatchStarted" $W/mon.log && ok "MatchStarted signal" || bad "no MatchStarted"
+  grep -A4 "member=TierChanged" $W/mon.log | grep -q 'string "intense"' && ok "TierChanged to intense" || bad "no TierChanged"
+  grep -A4 "member=MatchEnded" $W/mon.log | grep -q 'string "game exited"' && ok "MatchEnded says the game exited" || bad "MatchEnded: $(grep -A8 member=MatchEnded $W/mon.log)"
+  grep -A60 "member=MatchEnded" $W/mon.log | grep -q 'string "gap_p50_ms"' && ok "MatchEnded carries the match health" || bad "no health in MatchEnded"
+  grep -q "member=PropertiesChanged" $W/mon.log && ok "PropertiesChanged signals" || bad "no PropertiesChanged"
+  # Shutting down mid-match ends the match for listeners too.
+  game 64 180; sleep 6; kill -INT $D; wait $D; D=; sleep 0.5; kill $G
+  grep -A4 "member=MatchEnded" $W/mon.log | grep -q 'string "bpfrag stopped"' && ok "stopping bpfrag mid-match sends MatchEnded" || bad "no MatchEnded on shutdown"
+  kill $MONP; MONP=
+  # No bus at all: logged, and the daemon carries on.
+  DBUS_SYSTEM_BUS_ADDRESS="unix:abstract=bpfrag-e2e-none-$$" "$B" -c $W/cfg12.toml > $W/d12b.log 2>&1 & D=$!; sleep 1
+  game 64 180; sleep 6; kill $G; sleep 2; kill -INT $D; wait $D; D=
+  grep -q "D-Bus: system bus not available" $W/d12b.log && grep -q "Match detected" $W/d12b.log && ok "no bus: logged, matches still handled" || bad "no bus: $(head -5 $W/d12b.log)"
+  kill $BUSD; BUSD=
+  same "after D-Bus"
+else
+  echo "  skip D-Bus: needs dbus-daemon, dbus-monitor and busctl"
+fi
 
 echo; echo "passed $PASS, failed $FAIL"
 [ $FAIL = 0 ]

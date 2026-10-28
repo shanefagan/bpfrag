@@ -33,7 +33,8 @@ use crate::bpf::tc::{Role, TcSet};
 use crate::bpf::{self, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
-use crate::config::{Config, parse_dscp};
+use crate::bus::{self, Bus};
+use crate::config::{Config, Tier, parse_dscp};
 use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
@@ -140,8 +141,12 @@ pub struct Tuner<'a> {
     bulk: BulkDetector,
     procs: ProcfsLookup,
     knobs: Knobs,
-    /// When the current match started (None between matches).
+    /// When the current match started (None between matches), and the
+    /// same in Unix seconds for the D-Bus `MatchSince` property.
     session_start: Option<Instant>,
+    started_unix: u64,
+    /// The read-only D-Bus interface, unless `[general] dbus = false`.
+    bus: Option<Bus>,
     /// (pid, start time) of processes already reported as ignored.
     logged_ignores: HashSet<(u32, u64)>,
     /// The last "leaving these sysctls to bpftune" note, so it is logged
@@ -208,9 +213,12 @@ impl<'a> Tuner<'a> {
         let run_dir = PathBuf::from(&cfg.general.run_dir);
         // A dry run changes nothing, so it has nothing to switch off.
         let experiment = cfg.experiment_setting()?.filter(|_| !run.dry_run);
+        let bus = cfg.general.dbus.then(|| Bus::new(run.dry_run));
         Ok(Self {
             experiment,
             arm: None,
+            bus,
+            started_unix: 0,
             dry_run: run.dry_run,
             stats_every: run.stats_every,
             knobs: Knobs::new(&run_dir, run.dry_run),
@@ -391,7 +399,20 @@ impl<'a> Tuner<'a> {
                 maps::clear_port_rx(&self.skel);
                 maps::track_ports(&self.skel, s.tgid, true);
                 self.health.start(s.tgid, &self.candidates(&s));
+                self.started_unix = stats::now_unix();
                 self.apply_tier(&s);
+                // Properties first, so a listener that reads them when the
+                // signal arrives sees this match.
+                self.publish();
+                if let Some(b) = &self.bus {
+                    b.match_started(
+                        s.tgid,
+                        &s.name,
+                        &tier_name(s.tier),
+                        &s.reason,
+                        &self.arm_label(),
+                    );
+                }
             }
             Action::Retier { from, to } => {
                 if let Some(s) = self.detector.session().cloned() {
@@ -400,6 +421,10 @@ impl<'a> Tuner<'a> {
                         s.name, s.pps, s.tx_pps, s.rx_pps
                     );
                     self.apply_tier(&s);
+                    self.publish();
+                    if let Some(b) = &self.bus {
+                        b.tier_changed(s.tgid, &s.name, &tier_name(from), &tier_name(to));
+                    }
                 }
             }
             Action::End { session, reason } => {
@@ -421,11 +446,24 @@ impl<'a> Tuner<'a> {
                     health: health.clone(),
                 });
                 self.recent.truncate(5);
+                let arm = self.arm_label();
                 self.end_session(Some(session.tgid));
                 info!(
                     "Match ended after {} ({reason}); settings restored",
                     stats::fmt_dur(secs)
                 );
+                self.publish();
+                if let Some(b) = &self.bus {
+                    b.match_ended(
+                        session.tgid,
+                        &session.name,
+                        &reason,
+                        secs,
+                        &tier_name(session.peak_tier),
+                        &arm,
+                        health.as_ref(),
+                    );
+                }
                 if let Some(h) = health {
                     info!("{}: {}", session.name, h.summary());
                 }
@@ -509,8 +547,46 @@ impl<'a> Tuner<'a> {
         self.apply_tier(&s);
     }
 
-    /// The snapshot written to stats.json every tick, for `--monitor`,
-    /// `--waybar` and the `--stats` log line.
+    /// This match's experiment arm, or "" (for the D-Bus signals).
+    fn arm_label(&self) -> String {
+        self.arm
+            .as_ref()
+            .map(experiment::Arm::label)
+            .unwrap_or_default()
+    }
+
+    /// What the D-Bus properties should say now.
+    fn bus_state(&self) -> bus::State {
+        let Some(s) = self.detector.session() else {
+            return bus::State::default();
+        };
+        bus::State {
+            game_pid: s.tgid,
+            game: s.name.clone(),
+            reason: s.reason.clone(),
+            tier: tier_name(s.tier),
+            since: self.started_unix,
+            experiment: self.arm_label(),
+            applied: self
+                .knobs
+                .view()
+                .into_iter()
+                .map(|a| (a.knob, a.value, a.baseline))
+                .collect(),
+        }
+    }
+
+    /// Bring the D-Bus properties up to date (only changes are sent).
+    fn publish(&mut self) {
+        if self.bus.is_none() {
+            return;
+        }
+        let state = self.bus_state();
+        if let Some(b) = self.bus.as_mut() {
+            b.set(state);
+        }
+    }
+
     /// What happens to bulk packets, for the log and --monitor.
     fn bulk_marking(&self) -> String {
         if !self.cfg.bulk.enabled {
@@ -716,6 +792,10 @@ impl<'a> Tuner<'a> {
             if let Err(e) = rb.poll(wait) {
                 debug!("ringbuf poll: {e}");
             }
+            // Answer property reads (so they wait at most one wake-up).
+            if let Some(b) = self.bus.as_mut() {
+                b.pump();
+            }
             let exited: Vec<u32> = exits.borrow_mut().drain(..).collect();
             for tgid in exited {
                 if let Some(a) = self.detector.on_exit(tgid) {
@@ -745,6 +825,8 @@ impl<'a> Tuner<'a> {
             self.track_bulk(dt, &samples);
 
             self.track_session();
+            // Settings can move mid-match (a new network path).
+            self.publish();
             let m = self.get_metrics();
             if let Err(e) = stats::write(&self.run_dir, &m) {
                 debug!("stats write: {e:#}");
@@ -762,8 +844,25 @@ impl<'a> Tuner<'a> {
 
 impl Drop for Tuner<'_> {
     fn drop(&mut self) {
-        let tgid = self.detector.take_session().map(|s| s.tgid);
-        self.end_session(tgid);
+        let arm = self.arm_label();
+        let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
+        let session = self.detector.take_session();
+        self.end_session(session.as_ref().map(|s| s.tgid));
         stats::remove(&self.run_dir);
+        // Tell listeners the match is over for them too: its settings
+        // have just been restored.
+        if let Some(b) = self.bus.as_mut() {
+            b.set(bus::State::default());
+            if let Some(s) = &session {
+                let peak = tier_name(s.peak_tier);
+                b.match_ended(s.tgid, &s.name, "bpfrag stopped", secs, &peak, &arm, None);
+            }
+            b.flush();
+        }
     }
+}
+
+/// Tier names on the bus are lower case, like Waybar's `class`.
+fn tier_name(t: Tier) -> String {
+    t.name().to_lowercase()
 }

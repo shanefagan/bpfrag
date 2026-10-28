@@ -132,6 +132,13 @@ pub fn run(cfg: &Config) -> bool {
     };
     line(None, "writeback", format!("{now} ({during})"));
 
+    if cfg.general.dbus {
+        let (ok, detail) = crate::bus::check();
+        line(ok, "D-Bus", detail);
+    } else {
+        line(None, "D-Bus", "off ([general] dbus = false)");
+    }
+
     println!();
     let (skip, note) = coexist::skip_set(cfg);
     settings(cfg, &skip);

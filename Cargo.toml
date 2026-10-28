@@ -16,6 +16,7 @@ categories = ["command-line-utilities", "games"]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
+dbus = { version = "0.9", default-features = false }
 libbpf-rs = "0.27"
 libbpf-sys = "1.7"
 libc = "0.2"

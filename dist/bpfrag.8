@@ -64,6 +64,18 @@ set, one setting (for example
 .BR busy_polling )
 is switched off in a random share of matches, so its effect can be
 measured. Each match logs which it got, and its health line ends with it.
+.PP
+On the system bus,
+.B bpfrag
+publishes a read\-only interface,
+.BR com.performativenonsense.Bpfrag1 :
+properties describing the match in progress and signals when one starts,
+changes tier and ends. Any user can read it; nothing on the bus can change
+what bpfrag does. Set
+.B dbus = false
+under
+.B [general]
+to turn it off.
 .SH OPTIONS
 .TP
 .BR \-c ", " \-\-config " \fIfile\fR"
@@ -183,6 +195,9 @@ Extra command line flags for the systemd service
 .TP
 .I /run/bpfrag/journal.json
 Original values of everything changed during the current match.
+.TP
+.I /usr/share/dbus\-1/system.d/com.performativenonsense.Bpfrag1.conf
+D\-Bus policy: only root may own the name, anyone may read it.
 .SH EXIT STATUS
 0 on success, 1 on error.
 .B \-\-check
@@ -217,6 +232,7 @@ sudo bpfrag \-\-report > bpfrag\-report.md
 .RE
 .SH SEE ALSO
 .BR bpftune (8),
+.BR busctl (1),
 .BR ethtool (8),
 .BR iw (8),
 .BR tc\-bpf (8),
