@@ -1,3 +1,9 @@
+bpfrag (0.5.1-1) unstable; urgency=medium
+
+  * Released bulk flows stop being demoted at once; IPv6 receive checksum; D-Bus empty interface name
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 28 Oct 2026 22:25:53 +0000
+
 bpfrag (0.5.0-1) unstable; urgency=medium
 
   * Read-only D-Bus interface for following matches
