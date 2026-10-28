@@ -15,6 +15,21 @@ the two conditions, the number of matches on each side, and the medians.
 |---|---|---|---|---|---|---|---|
 | | | | | | | | |
 
+## Single matches
+
+Matches worth recording that aren't a comparison yet: they show what a
+setup looks like and set a baseline for one.
+
+**2026-10-28: Deadlock on Ethernet with an unmarked torrent download.**
+CachyOS, kernel 7.3, wired (`eno1`), bpfrag 0.3.0 tuning at INTENSE most of
+the match, bpftune running. ktorrent moved 4.8 GB during a 38-minute match
+(about 17 Mbit/s on average), with `[bulk]` off so it wasn't marked. Packet
+gaps: half ≤14 ms, 99% ≤18 ms, longest 95 ms, 0 stalls. Socket buffer
+drops: 2921, machine-wide; 0.3.0 couldn't say whose (probably ktorrent's
+uTP sockets). Not yet known: the line speed, and whether any QoS (CAKE,
+router SQM) was shaping. This is the "unmarked" side of question 1; the
+other side is the same download with `[bulk] enabled = true`.
+
 ## Open questions
 
 The questions the comparisons above should answer, in rough priority:
@@ -27,7 +42,8 @@ The questions the comparisons above should answer, in rough priority:
    Proton? If not, it goes: it costs power.
 4. **Do socket buffer, backlog or NIC drops ever happen during matches
    with the kernel defaults?** If not, the buffer, backlog and budget
-   settings can go.
+   settings can go. For socket buffers, look at the game's own count
+   (0.3.1 and later), not the machine-wide total.
 5. **Is CS4 or EF better for the game's packets** with common router QoS
    setups? CAKE diffserv4 treats both as Voice; on Wi-Fi, EF maps to the
    voice category, CS4 to video.
@@ -35,6 +51,29 @@ The questions the comparisons above should answer, in rough priority:
    effort on Wi-Fi and CS1 as background (see [knobs.md](knobs.md#bulk-demotion-dscp-le)).
 
 ## Bugs found and what they taught
+
+**0.3.0: lobby keepalives counted as stalls.** A Deadlock session that
+covered several matches, 2h28m in all, reported 1671 stalls and a longest
+gap of 1000 ms; a 38-minute session that ended with its match reported 0
+and 95 ms. Between matches Deadlock sends about one packet a second, and
+every one of those 1 s gaps fell in the stall range (100 ms to 2 s). Fixed
+in 0.3.1: a stall is the flow going quiet and coming back at game rate,
+and a quiet stretch of 2 s or more isn't counted. The e2e rig now plays a
+lobby at one packet a second between two real hiccups. Lesson: real
+sessions aren't one match; the metric has to survive the time between
+them.
+
+**0.3.0: Wi-Fi power save toggled mid-session on a wired desktop.** While
+Deadlock loaded or sat between matches for more than 30 s, the game's
+egress interface "expired", bpfrag fell back to tuning every interface
+and turned `wlan0` power save off, then back on when traffic resumed: 13
+changes in one session. Fixed in 0.3.1: silence never moves the path; an
+interface drops only when the game's packets go somewhere else.
+
+**0.3.0: socket buffer drops couldn't be attributed.** The same sessions
+showed 2921 and 11401 drops with a torrent client running. `RcvbufErrors`
+is machine-wide, so they couldn't be pinned on the game. 0.3.1 also reads
+the drop count of the game's own sockets.
 
 **0.2.1: bpfrag switched off desktop CAKE's download shaping during
 matches.** bpfrag's tc programs returned `TC_ACT_OK`, which for a tcx link
