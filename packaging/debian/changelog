@@ -1,3 +1,9 @@
+bpfrag (0.3.1-1) unstable; urgency=medium
+
+  * Stalls ignore lobbies; path holds through quiet spells; the game's own socket drops
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 28 Oct 2026 13:41:19 +0000
+
 bpfrag (0.3.0-1) unstable; urgency=medium
 
   * Bulk demotion during matches; docs on every setting
