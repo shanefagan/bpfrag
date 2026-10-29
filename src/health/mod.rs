@@ -182,6 +182,11 @@ pub struct Health {
     /// downloads, voice through the game's servers).
     #[serde(default)]
     pub game_tcp_bytes: u64,
+    /// Packets received by busy polling, anywhere on the machine. Some
+    /// when busy polling was on at some point in the match (or the count
+    /// moved anyway); None otherwise, or if the kernel doesn't report it.
+    #[serde(default)]
+    pub busy_polled: Option<u64>,
 }
 
 /// "412 MB", "1.3 GB".
@@ -225,6 +230,9 @@ impl Health {
         let mut s = format!("{gaps}; {}", self.drops_text());
         if self.squeezed > 0 {
             s += &format!("; receive processing ran out of budget {}x", self.squeezed);
+        }
+        if let Some(n) = self.busy_polled {
+            s += &format!("; busy-polled packets: {n}");
         }
         if let Some(q) = &self.rx_queue {
             s += &format!("; arrives on {}", q.describe());
@@ -273,6 +281,9 @@ pub struct Tracker {
     /// The game's UDP sockets: drops at the start (0 for sockets opened
     /// later) and at the latest reading, by inode.
     game: Option<GameSockets>,
+    /// Busy polling was on (`busy_poll` or `busy_read` above 0) at some
+    /// reading this match, whoever set it.
+    busy_on: bool,
 }
 
 /// Seconds between readings of the game's sockets (a Proton game can hold
@@ -336,6 +347,7 @@ impl Tracker {
         self.nic_base.clear();
         self.latest = None;
         self.rx_queue = None;
+        self.busy_on = false;
         self.watch(ifaces);
     }
 
@@ -364,6 +376,10 @@ impl Tracker {
         if let Some(g) = self.game.as_mut() {
             g.refresh();
         }
+        if !self.busy_on {
+            self.busy_on = busy_polling_on();
+        }
+        let busy_polled = sys.busy_polled.filter(|n| self.busy_on || *n > 0);
         let main = Gaps::main_flow(ports);
         let napi_id = main.as_ref().map_or(0, |g| g.napi_id);
         if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
@@ -378,6 +394,7 @@ impl Tracker {
             nic_drops,
             squeezed: sys.squeezed,
             rx_queue: self.rx_queue.clone(),
+            busy_polled,
             ..Default::default()
         });
     }
@@ -392,8 +409,19 @@ impl Tracker {
         self.nic_base.clear();
         self.rx_queue = None;
         self.game = None;
+        self.busy_on = false;
         self.latest.take()
     }
+}
+
+/// Is busy polling on right now, by either sysctl?
+fn busy_polling_on() -> bool {
+    ["busy_poll", "busy_read"].iter().any(|k| {
+        crate::util::read_trim(format!("/proc/sys/net/core/{k}"))
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .is_some_and(|v| v > 0)
+    })
 }
 
 #[cfg(test)]
@@ -455,6 +483,24 @@ mod tests {
             ..g
         };
         assert_eq!(unreadable.drops(), None);
+    }
+
+    #[test]
+    fn busy_polled_packets_show_when_counted() {
+        let h = Health {
+            squeezed: 2,
+            busy_polled: Some(0),
+            ..Default::default()
+        };
+        assert!(
+            h.summary().ends_with(
+                "no drops; receive processing ran out of budget 2x; busy-polled packets: 0"
+            ),
+            "{}",
+            h.summary()
+        );
+        let off = Health::default();
+        assert!(!off.summary().contains("busy"));
     }
 
     #[test]

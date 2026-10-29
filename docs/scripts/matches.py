@@ -44,13 +44,15 @@ SQUEEZE = re.compile(r"ran out of budget (\d+)x")
 QUEUE = re.compile(r"arrives on ([^;]+)")
 BULK = re.compile(r"bulk: (.*?)( marked \w+| \(not marked\))(?:;|$)")
 GAME_TCP = re.compile(r"the game's own TCP: ([^;]+)")
+BUSY = re.compile(r"busy-polled packets: (\d+)")
 EXPERIMENT = re.compile(r"; experiment: (\S+) (on|off)\b")
 
 FIELDS = [
     "label", "started", "game", "mode", "version", "start_tier", "peak_tier",
     "duration_s", "end_reason", "start_pps", "gap_p50_ms", "gap_p99_ms",
     "gap_longest_ms", "stalls", "socket_drops", "game_socket_drops", "backlog_drops",
-    "nic_drops", "squeezed", "rx_queue", "game_tcp", "bulk", "bulk_marked", "experiment", "arm", "reason",
+    "nic_drops", "squeezed", "busy_polled", "rx_queue", "game_tcp", "bulk", "bulk_marked",
+    "experiment", "arm", "reason",
 ]
 
 
@@ -101,6 +103,9 @@ def parse(lines, label):
              cur["nic_drops"]) = d.groups("") if d else (0, 0, 0, 0)
             q = SQUEEZE.search(line)
             cur["squeezed"] = q.group(1) if q else 0
+            # blank when busy polling was off all match, or in older versions
+            if p := BUSY.search(line):
+                cur["busy_polled"] = p.group(1)
             if q := QUEUE.search(line):
                 cur["rx_queue"] = q.group(1).strip()
             if g := GAME_TCP.search(line):
@@ -120,6 +125,7 @@ COMPARED = [
     ("gap_longest_ms", "longest ms"),
     ("stalls", "stalls"),
     ("game_socket_drops", "game drops"),
+    ("busy_polled", "busy-polled"),
 ]
 
 

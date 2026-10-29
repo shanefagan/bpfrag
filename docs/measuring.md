@@ -28,6 +28,7 @@ show what reaches the machine, not what the game does with it.
 | backlog drops | per-CPU input queue overflowed | `netdev_max_backlog` (RPS or virtual devices only) |
 | NIC drops | the NIC's receive ring overflowed | coalescing, ring size, very high rates |
 | ran out of budget | receive processing deferred | `netdev_budget*`, heavy receive load |
+| busy-polled packets | packets received by busy polling during the match, anywhere on the machine; shown when busy polling was on | `busy_poll`/`busy_read`, if they reach anything at all |
 | arrives on | the receive queue and IRQ | RSS, whether a download shares the queue |
 | bulk | what was demoted, and how much | `[bulk]` |
 
@@ -178,9 +179,10 @@ Ordered by how likely each is to show something:
    longest gap and stalls.
 3. **DSCP on a busy Wi-Fi network** (`dscp`), with other devices
    streaming or downloading.
-4. **Busy polling** (`busy_polling`). Check first that it happens at all
-   ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)):
-   it probably doesn't reach the game's socket. Note frame times and CPU
+4. **Busy polling** (`busy_polling`). Check first that it happens at all:
+   the "busy-polled packets" count in the "on" matches
+   ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)).
+   It probably doesn't reach the game's socket. Note frame times and CPU
    use too, since busy polling costs both.
 5. **Everything** (`all`): the overall picture, once the individual
    pieces are understood.

@@ -13,6 +13,13 @@
 //! - NIC overruns: the NIC's receive ring filled before the driver emptied
 //!   it (interrupt coalescing).
 //!
+//! Plus one that shows whether a setting did anything at all:
+//!
+//! - busy-polled packets (`BusyPollRxPackets`): packets a socket read or
+//!   epoll wait picked up by polling the NIC queue itself (`busy_read`,
+//!   `busy_poll`). Zero through a match with busy polling on means it
+//!   reached nothing.
+//!
 //! All are system-wide (NIC overruns per interface), so a busy download
 //! during a match counts too.
 
@@ -26,6 +33,8 @@ pub struct SysCounters {
     pub udp_rcvbuf: u64,
     pub backlog_drops: u64,
     pub squeezed: u64,
+    /// None if the kernel doesn't report it.
+    pub busy_polled: Option<u64>,
 }
 
 impl SysCounters {
@@ -42,10 +51,14 @@ impl SysCounters {
         let (backlog_drops, squeezed) = fs::read_to_string("/proc/net/softnet_stat")
             .map(|t| softnet(&t))
             .unwrap_or_default();
+        let busy_polled = fs::read_to_string("/proc/net/netstat")
+            .ok()
+            .and_then(|t| tcp_ext(&t, "BusyPollRxPackets"));
         Self {
             udp_rcvbuf: rcvbuf4 + rcvbuf6,
             backlog_drops,
             squeezed,
+            busy_polled,
         }
     }
 
@@ -56,6 +69,10 @@ impl SysCounters {
             udp_rcvbuf: self.udp_rcvbuf.saturating_sub(base.udp_rcvbuf),
             backlog_drops: self.backlog_drops.saturating_sub(base.backlog_drops),
             squeezed: self.squeezed.saturating_sub(base.squeezed),
+            busy_polled: self
+                .busy_polled
+                .zip(base.busy_polled)
+                .map(|(now, then)| now.saturating_sub(then)),
         }
     }
 }
@@ -72,6 +89,15 @@ fn udp_rcvbuf_v4(text: &str) -> Option<u64> {
         .1
         .parse()
         .ok()
+}
+
+/// A `TcpExt:` counter from /proc/net/netstat (names line, values line,
+/// like /proc/net/snmp; `MPTcpExt:` lines are another table).
+fn tcp_ext(text: &str, name: &str) -> Option<u64> {
+    let mut lines = text.lines().filter(|l| l.starts_with("TcpExt: "));
+    let names = lines.next()?.split_whitespace();
+    let values = lines.next()?.split_whitespace();
+    names.zip(values).find(|(n, _)| *n == name)?.1.parse().ok()
 }
 
 /// `Udp6RcvbufErrors` from /proc/net/snmp6 (one "name value" per line).
@@ -134,6 +160,19 @@ mod tests {
     }
 
     #[test]
+    fn parses_netstat() {
+        let netstat = "TcpExt: SyncookiesSent EmbryonicRsts BusyPollRxPackets TCPAutoCorking\n\
+                       TcpExt: 0 2 4711 9\n\
+                       IpExt: InNoRoutes InTruncatedPkts\n\
+                       IpExt: 0 0\n\
+                       MPTcpExt: MPCapableSYNRX BusyPollRxPackets\n\
+                       MPTcpExt: 0 99\n";
+        assert_eq!(tcp_ext(netstat, "BusyPollRxPackets"), Some(4711));
+        assert_eq!(tcp_ext(netstat, "NoSuchCounter"), None);
+        assert_eq!(tcp_ext("IpExt: A\nIpExt: 1\n", "A"), None);
+    }
+
+    #[test]
     fn sums_softnet_over_cpus() {
         let t = "0000bb69 00000002 0000000a 00000000\n000072ef 00000001 00000001 00000000\n";
         assert_eq!(softnet(t), (3, 11));
@@ -145,19 +184,27 @@ mod tests {
             udp_rcvbuf: 10,
             backlog_drops: 5,
             squeezed: 7,
+            busy_polled: Some(100),
         };
         let b = SysCounters {
             udp_rcvbuf: 12,
             backlog_drops: 4,
             squeezed: 9,
+            busy_polled: Some(130),
         };
         assert_eq!(
             b.since(&a),
             SysCounters {
                 udp_rcvbuf: 2,
                 backlog_drops: 0,
-                squeezed: 2
+                squeezed: 2,
+                busy_polled: Some(30),
             }
         );
+        let unknown = SysCounters {
+            busy_polled: None,
+            ..a
+        };
+        assert_eq!(b.since(&unknown).busy_polled, None);
     }
 }

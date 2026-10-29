@@ -192,10 +192,12 @@ translate Windows socket calls into their own I/O loop, so a Windows game's
 behaviour under Proton isn't obvious either. The spin time is counted as
 the game thread's CPU time, which a sched_ext scheduler sees.
 
-**See it:** the kernel counts packets received by busy polling:
-`nstat -az TcpExtBusyPollRxPackets` (`BusyPollRxPackets` in
-`/proc/net/netstat`). If it doesn't grow during matches, busy polling did
-nothing ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)).
+**See it:** the kernel counts packets received by busy polling
+(`BusyPollRxPackets` in `/proc/net/netstat`, `nstat -az
+TcpExtBusyPollRxPackets`), and the end-of-match line reports how much it
+grew during any match with busy polling on: "busy-polled packets: N". If
+it stays at 0, busy polling did nothing
+([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)).
 If it does, compare packet gaps and frame times with `[experiment] setting
 = "busy_polling"`.
 

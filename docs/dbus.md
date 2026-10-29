@@ -86,6 +86,7 @@ report, and the dict is empty when bpfrag stopped:
 | `nic_drops` | t | receive ring overflows on the game's interfaces |
 | `squeezed` | t | times receive processing ran out of budget |
 | `game_tcp_bytes` | t | TCP the game itself moved during the match (map or replay downloads, say) |
+| `busy_polled` | t | packets received by busy polling, machine-wide; only present when busy polling was on during the match (or the count moved) |
 
 ## Trying it
 

@@ -74,8 +74,12 @@ waits for packets, which is easiest to answer by counting. The kernel counts
 every packet received by busy polling: `BusyPollRxPackets` in
 `/proc/net/netstat` (`LINUX_MIB_BUSYPOLLRXPACKETS`, `net/core/dev.c`).
 
-**How:** read the counter before and after a few matches:
-`nstat -az TcpExtBusyPollRxPackets`.
+**How:** the end-of-match line reports it ("busy-polled packets: N")
+for every match in which busy polling was on (M1), and `matches.py` has
+it as the `busy_polled` column and in `--compare`. With `[experiment]
+setting = "busy_polling"`, the "on" matches answer this as they go.
+Without bpfrag's count: `nstat -az TcpExtBusyPollRxPackets` before and
+after a match.
 
 **Read it:** 0 across matches means busy polling does nothing for that
 game. Growth isn't proof it's the game's: sockets other programs open
@@ -83,7 +87,7 @@ during a match get `busy_read` too.
 
 **Decides:** 0 everywhere: remove busy polling (it costs power when it
 does work). Growth: keep it and run the A/B (`busy_polling`) to see
-whether it helps. Either way, worth adding to the health line (M1).
+whether it helps.
 
 ### 2. Do the socket buffer settings reach the game's socket?
 
@@ -520,7 +524,7 @@ it.
 
 | | Measurement | For |
 |---|---|---|
-| M1 | Busy-polled packets (`BusyPollRxPackets`) during the match, in the health line | 1 |
+| M1 | Busy-polled packets (`BusyPollRxPackets`) during the match, in the health line. Done: "busy-polled packets: N" | 1 |
 | M2 | The game's socket buffer sizes (`rb`, via sock_diag as `ss -m` does) | 2 |
 | M3 | Round-trip time to the gateway and a public anycast address, about once a second during a match. Arrival gaps measure jitter, not delay: a queue holding a steady 80 ms still delivers a steady 64 Hz stream, so only round-trip time shows it. Game servers and relays may not answer pings, which is why the gateway and a public address are the dependable targets; the server's own address needs M7 | 8, 10, 12, 18 |
 | M4 | Gaps between the game's outgoing packets (the egress marker sees them) to tell a game or host hiccup from a network one | all |

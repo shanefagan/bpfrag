@@ -291,8 +291,10 @@ for keep in 0 1; do
     grep -q "net.core.netdev_budget=" $W/d11.log && ok "off arm: the other settings still applied" || bad "off arm changed nothing else: $(grep profile: $W/d11.log)"
     echo "$MON" | grep -q "experiment: busy_polling off" && ok "--monitor shows the arm" || bad "monitor: $MON"
     grep -q "fakeshooter: packet gaps.*; experiment: busy_polling off" $W/d11.log && ok "match summary ends with the arm" || bad "summary: $(grep 'fakeshooter: packet' $W/d11.log)"
+    grep "fakeshooter: packet gaps" $W/d11.log | grep -q "busy-polled" && bad "busy-polled count shown with busy polling off: $(grep 'fakeshooter: packet' $W/d11.log)" || ok "off arm: no busy-polled count (busy polling never on)"
   else
     [ "$BP" = 50 ] && ok "on arm: busy_poll=50 as usual" || bad "on arm busy_poll=$BP"
+    grep -Eq "fakeshooter: packet gaps.*; busy-polled packets: [0-9]+;" $W/d11.log && ok "on arm: the summary counts busy-polled packets" || bad "busy-polled: $(grep 'fakeshooter: packet' $W/d11.log)"
   fi
 done
 same "after experiments"
