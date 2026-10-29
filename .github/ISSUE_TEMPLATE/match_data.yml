@@ -39,6 +39,7 @@ body:
         - A setup change (router QoS, CAKE, congestion control...)
         - Nothing in particular, just my matches
         - A game that talks TCP (tcp = "observe")
+        - A game tagged BPFRAG_OBSERVE=1
     validations:
       required: true
 
@@ -90,10 +91,11 @@ body:
   - type: textarea
     id: tcp
     attributes:
-      label: TCP game sessions
+      label: TCP game and observed sessions
       description: |
-        Only with `tcp = "observe"`: the lines from
-        `journalctl -u bpfrag | grep "TCP game"`.
+        With `tcp = "observe"` or a game tagged `BPFRAG_OBSERVE=1`: the
+        lines from `journalctl -u bpfrag | grep -E "TCP game|Observ"`, and
+        which game it was.
       render: text
 
   - type: textarea

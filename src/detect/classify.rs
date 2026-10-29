@@ -139,6 +139,24 @@ impl ProcInfo {
         None
     }
 
+    /// Tagged `BPFRAG_OBSERVE=1`: its traffic is logged.
+    pub fn observe_tagged(&self) -> bool {
+        self.env(super::tagged::VAR).and_then(truthy) == Some(true)
+    }
+
+    /// The program itself: the Windows .exe a Wine process runs, or the
+    /// process name. Tells a game apart from its launcher or helpers when
+    /// they share a display name.
+    pub fn program(&self) -> String {
+        self.wine_exe().unwrap_or_else(|| {
+            if self.comm.is_empty() {
+                self.exe_name().to_string()
+            } else {
+                self.comm.clone()
+            }
+        })
+    }
+
     fn wine_exe(&self) -> Option<String> {
         let a = self.args.iter().find(|a| is_exe(a))?;
         let base = a.rsplit(['/', '\\']).next()?;
@@ -226,7 +244,7 @@ pub struct Classifier {
 
 const MAX_LINEAGE: usize = 12;
 
-fn truthy(v: &str) -> Option<bool> {
+pub(super) fn truthy(v: &str) -> Option<bool> {
     match v.trim().to_ascii_lowercase().as_str() {
         "1" | "yes" | "true" | "on" => Some(true),
         "0" | "no" | "false" | "off" => Some(false),
@@ -395,6 +413,20 @@ impl ProcfsLookup {
 }
 
 impl ProcfsLookup {
+    /// "Some Game (SomeGame-Win64, pid 4242)", or "randomd (pid
+    /// 77)" when the program is what the process is called anyway.
+    pub fn label(&self, tgid: u32) -> String {
+        let Some(info) = self.classifier.read(tgid) else {
+            return format!("pid {tgid}");
+        };
+        let (name, prog) = (info.display_name(), info.program());
+        if prog.is_empty() || prog == name {
+            format!("{name} (pid {tgid})")
+        } else {
+            format!("{name} ({prog}, pid {tgid})")
+        }
+    }
+
     /// Display name, and the names lists are matched against (comm, exe
     /// name). None if the process is gone.
     pub fn names(&self, tgid: u32) -> Option<(String, Vec<String>)> {
@@ -676,6 +708,14 @@ mod tests {
             &["SteamAppId=730", "BPFRAG_GAME=0"],
         );
         fp.add(50, 1, "randomd", "/usr/bin/randomd", &["randomd"], &[]);
+        fp.add(
+            52,
+            1,
+            "MainThrd",
+            "/usr/bin/wine64-preloader",
+            &["Z:\\g\\SomeGame-Win64.exe"],
+            &["BPFRAG_OBSERVE=1"],
+        );
         // a native tool that merely mentions an .exe is not Wine
         fp.add(51, 1, "7z", "/usr/bin/7z", &["7z", "x", "setup.exe"], &[]);
         fp.add(
@@ -699,6 +739,16 @@ mod tests {
         assert_eq!(c.classify(50).0, Verdict::NotGame("no game signals".into()));
         assert_eq!(c.classify(51).0, Verdict::NotGame("no game signals".into()));
         assert!(c.classify(60).0.reason().contains("gamemode"));
+        assert!(!c.read(40).unwrap().observe_tagged());
+        let tagged = c.read(52).unwrap();
+        assert!(tagged.observe_tagged());
+        assert_eq!(tagged.program(), "SomeGame-Win64");
+        // the tag only asks for logging: the process is classified as usual
+        assert_eq!(
+            c.classify(52).0,
+            Verdict::Game("Wine/Proton process".into())
+        );
+        assert_eq!(c.read(50).unwrap().program(), "randomd");
         assert!(!c.classify(999).0.is_game());
         assert_eq!(start_time(&fp.dir, 20), Some(4242));
     }

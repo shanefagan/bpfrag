@@ -228,6 +228,9 @@ fn main() -> Result<()> {
             Verdict::Game(r) => println!("{pid} {name}: GAME ({r})"),
             v => println!("{pid} {name}: not a game ({})", v.reason()),
         }
+        if info.is_some_and(|i| i.observe_tagged()) {
+            println!("  tagged BPFRAG_OBSERVE=1: its UDP and TCP traffic is logged");
+        }
         return Ok(());
     }
 

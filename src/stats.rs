@@ -118,6 +118,9 @@ pub struct Metrics {
     /// Last few finished matches.
     #[serde(default)]
     pub recent: Vec<RecentMatch>,
+    /// Processes tagged BPFRAG_OBSERVE=1 whose traffic is being logged.
+    #[serde(default)]
+    pub observing: Vec<String>,
 }
 
 pub fn now_unix() -> u64 {
@@ -281,6 +284,12 @@ impl Metrics {
         )?;
         for n in &self.neighbours {
             writeln!(w, "Note: {n}")?;
+        }
+        if !self.observing.is_empty() {
+            writeln!(w, "\nObserving (BPFRAG_OBSERVE=1):")?;
+            for o in &self.observing {
+                writeln!(w, "  {o}")?;
+            }
         }
         if !self.recent.is_empty() {
             writeln!(w, "\nRecent matches:")?;

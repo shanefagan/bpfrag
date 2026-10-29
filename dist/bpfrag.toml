@@ -23,7 +23,9 @@
 # Games that talk TCP (World of Warcraft, older games) aren't detected as
 # matches. "observe" logs what their traffic looks like (rates, message
 # sizes, how steady), tuning nothing, to gather data on them. It counts
-# TCP for every process all the time, which costs a little CPU.
+# TCP for every process all the time, which costs a little CPU. To log
+# one game's UDP and TCP instead, tag it: BPFRAG_OBSERVE=1 %command% in
+# its Steam launch options (docs/detection.md).
 # tcp = "observe"
 
 [classify]

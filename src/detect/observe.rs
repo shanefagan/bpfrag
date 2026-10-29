@@ -4,10 +4,14 @@
 //! Watching a game's traffic without tuning anything, so there is data to
 //! decide whether, and how, to detect and tune games like it later.
 //!
-//! `[detect] tcp = "observe"` uses it for games that talk TCP (World of
-//! Warcraft, older games): a process counts when the classifier says it's a
-//! game (a launcher parent, a Steam app, a game path, the allow list) and
-//! it keeps talking TCP both ways for `SEEN_SECS`.
+//! - `[detect] tcp = "observe"`: games that talk TCP (World of Warcraft,
+//!   older games). A process counts when the classifier says it's a game (a
+//!   launcher parent, a Steam app, a game path, the allow list) and it keeps
+//!   talking TCP both ways for `SEEN_SECS`.
+//! - `BPFRAG_OBSERVE=1` in a process's environment ([`super::tagged`]):
+//!   its UDP and its TCP, whatever they look like, one way or both. A
+//!   session is reported once it has had traffic for `SEEN_SECS`, or when
+//!   it moved a lot in less (a map download, say).
 //!
 //! A session ends after `QUIET_SECS` without traffic, or when the process
 //! exits, with a summary: how long, its typical message rates each way,
@@ -30,13 +34,22 @@ const MAX_SECONDS: usize = 7200;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Proto {
+    Udp,
     Tcp,
 }
 
 impl Proto {
+    pub fn name(self) -> &'static str {
+        match self {
+            Proto::Udp => "UDP",
+            Proto::Tcp => "TCP",
+        }
+    }
+
     /// (send calls, receive calls, bytes sent, bytes received) so far.
     fn counts(self, s: &Sample) -> [u64; 4] {
         match self {
+            Proto::Udp => [s.tx_pkts, s.rx_pkts, s.tx_bytes, s.rx_bytes],
             Proto::Tcp => [s.tcp_tx_msgs, s.tcp_rx_msgs, s.tcp_tx_bytes, s.tcp_rx_bytes],
         }
     }
@@ -50,6 +63,9 @@ pub struct Rules {
     pub two_way: bool,
     /// ...and at least this many calls in total.
     pub min_calls: u64,
+    /// Also sum up a session that never reached `SEEN_SECS` if it moved
+    /// at least this many bytes.
+    pub report_bytes: Option<u64>,
 }
 
 impl Rules {
@@ -59,7 +75,19 @@ impl Rules {
         proto: Proto::Tcp,
         two_way: true,
         min_calls: 2,
+        report_bytes: None,
     };
+
+    /// `BPFRAG_OBSERVE=1`: everything the process sends or receives over
+    /// `proto`, steady or not, and short transfers of a megabyte or more.
+    pub fn tagged(proto: Proto) -> Rules {
+        Rules {
+            proto,
+            two_way: false,
+            min_calls: 1,
+            report_bytes: Some(1_000_000),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -160,6 +188,14 @@ impl Track {
             tx_bytes: 0,
             rx_bytes: 0,
         }
+    }
+
+    /// Worth a summary when its session ends.
+    fn reportable(&self, rules: &Rules) -> bool {
+        self.seen
+            || rules
+                .report_bytes
+                .is_some_and(|b| self.tx_bytes + self.rx_bytes >= b)
     }
 
     fn summary(&self) -> Summary {
@@ -288,7 +324,7 @@ impl Observer {
                 t.active_run = 0;
                 t.quiet_run += 1;
                 if t.quiet_run >= QUIET_SECS {
-                    if t.seen {
+                    if t.reportable(&self.rules) {
                         events.push(ObsEvent::Ended {
                             tgid: s.tgid,
                             summary: t.summary(),
@@ -311,7 +347,7 @@ impl Observer {
             .collect();
         for tgid in gone {
             if let Some(t) = self.tracks.remove(&tgid) {
-                if t.seen {
+                if t.reportable(&self.rules) {
                     events.push(ObsEvent::Ended {
                         tgid,
                         summary: t.summary(),
@@ -322,11 +358,29 @@ impl Observer {
         events
     }
 
+    pub fn proto(&self) -> Proto {
+        self.rules.proto
+    }
+
+    /// (pid, name) of the processes whose sessions have been reported
+    /// and are still going.
+    pub fn watching(&self) -> Vec<(u32, String)> {
+        let mut v: Vec<(u32, String)> = self
+            .tracks
+            .iter()
+            .filter(|(_, t)| t.seen)
+            .filter_map(|(tgid, t)| Some((*tgid, t.game.clone().flatten()?.0)))
+            .collect();
+        v.sort();
+        v
+    }
+
     /// Sum up whatever is being reported, on the way out.
     pub fn finish(&mut self) -> Vec<ObsEvent> {
+        let rules = self.rules;
         self.tracks
             .drain()
-            .filter(|(_, t)| t.seen)
+            .filter(|(_, t)| t.reportable(&rules))
             .map(|(tgid, t)| ObsEvent::Ended {
                 tgid,
                 summary: t.summary(),
@@ -474,5 +528,111 @@ mod tests {
             events.extend(obs.tick(1.0, &[s(i * 10)], &[7], |_| Some(("g".into(), "r".into()))));
         }
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn udp_rules_count_datagrams() {
+        let mut obs = Observer::new(Rules {
+            proto: Proto::Udp,
+            two_way: true,
+            min_calls: 2,
+            report_bytes: None,
+        });
+        let mut c = Sample {
+            tgid: 9,
+            ..Default::default()
+        };
+        let mut events = Vec::new();
+        for _ in 0..12 {
+            c.tx_pkts += 64;
+            c.rx_pkts += 64;
+            c.tx_bytes += 64 * 120;
+            c.rx_bytes += 64 * 300;
+            // TCP from the same process doesn't count here
+            c.tcp_tx_msgs += 5;
+            events.extend(obs.tick(1.0, &[c], &[], |_| Some(("g".into(), "r".into()))));
+        }
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ObsEvent::Seen { tx_per_s, .. } if *tx_per_s == 64.0)),
+            "{events:?}"
+        );
+        let end = obs.finish();
+        match &end[..] {
+            [ObsEvent::Ended { summary, .. }] => {
+                assert_eq!((summary.tx_size, summary.rx_size), (120.0, 300.0));
+                assert_eq!(summary.details().split(':').next(), Some("for 11s"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    #[test]
+    fn tagged_rules_take_one_way_traffic_and_short_downloads() {
+        let tagged = |proto| {
+            let mut obs = Observer::new(Rules::tagged(proto));
+            let mut c = Sample {
+                tgid: 5,
+                ..Default::default()
+            };
+            let mut events = Vec::new();
+            // a 4-second, 40 MB download over TCP, then quiet
+            for i in 0..40 {
+                if (1..5).contains(&i) {
+                    c.tcp_rx_msgs += 1000;
+                    c.tcp_rx_bytes += 10_000_000;
+                }
+                events.extend(obs.tick(1.0, &[c], &[], |_| {
+                    Some(("Trackmania".into(), "tagged".into()))
+                }));
+            }
+            events
+        };
+        let tcp = tagged(Proto::Tcp);
+        match &tcp[..] {
+            [ObsEvent::Ended { summary, .. }] => {
+                assert_eq!(summary.bytes, 30_000_000, "first second sets the baseline");
+                assert_eq!(summary.secs, 3);
+                assert_eq!(summary.tx_per_s, 0.0);
+            }
+            other => panic!("{other:?}"),
+        }
+        // the same process seen through UDP rules has nothing to say
+        assert!(tagged(Proto::Udp).is_empty());
+
+        // under the TCP-games rules a one-way download is never a session
+        let mut obs = Observer::new(Rules::TCP_GAMES);
+        let mut c = Sample {
+            tgid: 5,
+            ..Default::default()
+        };
+        let mut events = Vec::new();
+        for _ in 0..40 {
+            c.tcp_rx_msgs += 1000;
+            c.tcp_rx_bytes += 10_000_000;
+            events.extend(obs.tick(1.0, &[c], &[], |_| Some(("g".into(), "r".into()))));
+        }
+        events.extend(obs.finish());
+        assert!(events.is_empty(), "{events:?}");
+    }
+
+    #[test]
+    fn watching_lists_reported_sessions() {
+        let mut obs = Observer::new(Rules::tagged(Proto::Udp));
+        let mut c = Sample {
+            tgid: 5,
+            ..Default::default()
+        };
+        for i in 0..12 {
+            c.rx_pkts += 30;
+            c.rx_bytes += 30 * 200;
+            obs.tick(1.0, &[c], &[], |_| Some(("PoE2".into(), "tagged".into())));
+            if i < 10 {
+                assert!(obs.watching().is_empty());
+            }
+        }
+        assert_eq!(obs.watching(), vec![(5, "PoE2".to_string())]);
+        assert_eq!(obs.finish().len(), 1);
+        assert!(obs.watching().is_empty());
     }
 }

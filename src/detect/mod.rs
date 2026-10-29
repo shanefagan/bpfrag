@@ -7,6 +7,8 @@
 //! - this file: the [`Detector`], fed one window of counters per tick;
 //! - [`classify`]: "is this process a game?";
 //! - [`egress`]: which network links the game's packets actually use.
+//! - [`observe`] and [`tagged`]: logging traffic without tuning, for TCP
+//!   games (`tcp = "observe"`) and processes tagged `BPFRAG_OBSERVE=1`.
 //!
 //! The detector is the userspace port of the window/hysteresis logic from
 //! the original bpftune gaming tuner's BPF program, with two structural
@@ -27,6 +29,7 @@ pub mod bulk;
 pub mod classify;
 pub mod egress;
 pub mod observe;
+pub mod tagged;
 
 use std::collections::{HashMap, VecDeque};
 

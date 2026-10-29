@@ -19,7 +19,10 @@ steady 50 pkt/s two-way stream, so traffic alone can't decide. The classifier
 checks these signals, strongest first:
 
 1. `BPFRAG_GAME=1` / `0` in the environment. This is an explicit tag, e.g.
-   `BPFRAG_GAME=1 %command%` in Steam launch options.
+   `BPFRAG_GAME=1 %command%` in Steam launch options. (`BPFRAG_OBSERVE=1`
+   is a different tag: it asks for the game's traffic to be logged, and
+   doesn't change this decision; see
+   [below](#observing-one-game-bpfrag_observe1).)
 2. Allow and deny globs on the process name. The built-in deny list covers
    browsers, voice and chat clients, torrent clients, network daemons and the
    Steam client itself.
@@ -107,6 +110,46 @@ these games in any mode.
 During a UDP match, the game's own TCP traffic is always counted, and the
 match's health line says how much it moved when it's over 1 MB ("the
 game's own TCP: 120 MB"), so a map download during a match shows up.
+
+## Observing one game: `BPFRAG_OBSERVE=1`
+
+For a game whose traffic isn't known (UDP or TCP, steady or bursty), tag
+it in its environment rather than turning on `tcp = "observe"` for every
+process. In Steam, put this in the game's launch options:
+
+```
+BPFRAG_OBSERVE=1 %command%
+```
+
+(Lutris and Heroic have an environment variables setting per game; from a
+terminal, `BPFRAG_OBSERVE=1 ./game`.) bpfrag then logs the UDP and the
+TCP of every process with the tag, which is the game and everything it
+starts, since children inherit their parent's environment:
+
+```
+Observing Some Game (SomeGame-Win64, pid 4242): TCP at ~31 sends/s and ~33 receives/s [BPFRAG_OBSERVE=1]
+Observed Some Game (SomeGame-Win64, pid 4242): TCP for 52m10s: typically 31 sends/s and 33 receives/s, 60 and 240 bytes each, rate variation 0.38, 41 MB in all
+```
+
+(Illustrative numbers.) The first line comes once the process has had
+traffic for 10 seconds, one way or both; the second when it goes quiet
+for 30 seconds or exits, or a short transfer of a megabyte or more ends
+(a map download). The fields are the ones in "Games that talk TCP"
+above; for UDP a send or receive is one datagram. The name in brackets is
+the program itself, which tells the game apart from its launcher or
+helpers when they share the game's name.
+
+The tag only adds logging. Whether the process is a game, and whether
+its UDP traffic starts a match, is decided as usual: a tagged UDP game is
+still detected and tuned like any other. To log a game without ever
+tuning for it, tag it with `BPFRAG_GAME=0` as well.
+
+`bpfrag --classify PID` says whether a process carries the tag, and
+`bpfrag --monitor` lists the tagged processes being logged. bpfrag lists
+/proc every 5 seconds to find tagged processes (the BPF side can't see
+environments), so the first few seconds of a game's traffic can be
+missed. Reading other users' environments needs `CAP_SYS_PTRACE`, which
+the systemd unit gives bpfrag.
 
 ## Bulk transfers
 

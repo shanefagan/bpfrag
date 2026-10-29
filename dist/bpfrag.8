@@ -190,6 +190,15 @@ Set in a game's environment (for example in Steam launch options:
 A true value marks the process as a game; a false value, such as
 .BR 0 ,
 excludes it.
+.TP
+.B BPFRAG_OBSERVE
+Set in a game's environment
+.RB ( "BPFRAG_OBSERVE=1 %command%" ),
+a true value has the UDP and TCP traffic of the process, and of every
+process it starts, logged: message rates, sizes and how steady they are.
+It changes nothing else; add
+.B BPFRAG_GAME=0
+to log a game without ever tuning for it.
 .SH FILES
 .TP
 .I /etc/bpfrag/bpfrag.toml

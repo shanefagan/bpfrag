@@ -39,7 +39,8 @@ use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::Verdict;
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
-use crate::detect::observe::{ObsEvent, Observer, Rules};
+use crate::detect::observe::{ObsEvent, Observer, Proto, Rules};
+use crate::detect::tagged::{self, Tagged};
 use crate::detect::{Action, Detector, ProcessLookup, Sample, SessionInfo};
 use crate::experiment;
 use crate::health;
@@ -105,6 +106,8 @@ fn iface_names(ifaces: &[Iface]) -> Vec<String> {
 /// How long per-interface knobs wait for the marker to see which link the
 /// game uses before they go on every candidate.
 const EGRESS_GRACE: Duration = Duration::from_secs(5);
+/// How often /proc is listed for new processes tagged BPFRAG_OBSERVE=1.
+const TAG_SCAN_EVERY: Duration = Duration::from_secs(5);
 
 /// Interface names the current tier was applied to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -169,6 +172,11 @@ pub struct Tuner<'a> {
     tcp_games: Option<Observer>,
     /// The match's game's own TCP bytes: at its first tick, and now.
     game_tcp: (Option<u64>, u64),
+    /// Processes tagged BPFRAG_OBSERVE=1, when /proc was last listed for
+    /// new ones, and their UDP and TCP sessions.
+    tagged: Tagged,
+    tagged_scan: Option<Instant>,
+    observed: [Observer; 2],
     /// What `[experiment]` asks for (None in a dry run, which changes
     /// nothing to switch off).
     plan: ExperimentPlan,
@@ -239,6 +247,12 @@ impl<'a> Tuner<'a> {
         Ok(Self {
             tcp_games,
             game_tcp: (None, 0),
+            tagged: Tagged::default(),
+            tagged_scan: None,
+            observed: [
+                Observer::new(Rules::tagged(Proto::Udp)),
+                Observer::new(Rules::tagged(Proto::Tcp)),
+            ],
             experiment: None,
             experiment_period: String::new(),
             plan,
@@ -620,12 +634,79 @@ impl<'a> Tuner<'a> {
             return;
         };
         let procs = &mut self.procs;
-        let exclude: Vec<u32> = game.into_iter().collect();
+        // Tagged processes are logged in full by track_tagged.
+        let tagged = &self.tagged;
+        let exclude: Vec<u32> = game
+            .into_iter()
+            .chain(
+                samples
+                    .iter()
+                    .map(|s| s.tgid)
+                    .filter(|t| tagged.contains(*t)),
+            )
+            .collect();
         let events = obs.tick(dt, samples, &exclude, |tgid| match procs.verdict(tgid) {
             (Verdict::Game(reason), name) => Some((name, reason)),
             _ => None,
         });
         log_tcp_events(&events);
+    }
+
+    /// Processes tagged BPFRAG_OBSERVE=1: find new ones every few seconds,
+    /// have the BPF side count their TCP, and log their UDP and TCP.
+    fn track_tagged(&mut self, dt: f64, samples: &[Sample]) {
+        if self
+            .tagged_scan
+            .is_none_or(|t| t.elapsed() >= TAG_SCAN_EVERY)
+        {
+            self.tagged_scan = Some(Instant::now());
+            let ch = self.tagged.scan();
+            for &t in &ch.added {
+                debug!(
+                    "{}: pid {t} ({}) is tagged; its traffic will be logged",
+                    tagged::VAR,
+                    self.procs.label(t)
+                );
+                maps::observe(&self.skel, t, true);
+            }
+            for &t in &ch.gone {
+                maps::observe(&self.skel, t, false);
+            }
+            if !ch.added.is_empty() || !ch.gone.is_empty() {
+                maps::observe_active(&mut self.skel, !self.tagged.is_empty());
+            }
+        }
+        // Always ticked, even with nothing tagged: an exit ends a session.
+        let mine: Vec<Sample> = samples
+            .iter()
+            .filter(|s| self.tagged.contains(s.tgid))
+            .copied()
+            .collect();
+        let procs = &self.procs;
+        for obs in &mut self.observed {
+            let events = obs.tick(dt, &mine, &[], |tgid| {
+                Some((procs.label(tgid), String::new()))
+            });
+            log_observed(obs.proto(), &events);
+        }
+    }
+
+    /// "Some Game (pid 4242): TCP, UDP" for each tagged process
+    /// being logged, for --status.
+    fn observing(&self) -> Vec<String> {
+        let mut by_name: Vec<(String, Vec<&str>)> = Vec::new();
+        for obs in &self.observed {
+            for (_, name) in obs.watching() {
+                match by_name.iter_mut().find(|(n, _)| *n == name) {
+                    Some((_, protos)) => protos.push(obs.proto().name()),
+                    None => by_name.push((name, vec![obs.proto().name()])),
+                }
+            }
+        }
+        by_name
+            .into_iter()
+            .map(|(n, p)| format!("{n}: {}", p.join(", ")))
+            .collect()
     }
 
     /// Settle which setting is under test, logging it when that changes:
@@ -958,6 +1039,7 @@ impl<'a> Tuner<'a> {
             neighbours,
             top,
             recent: self.recent.iter().cloned().collect(),
+            observing: self.observing(),
         }
     }
 
@@ -1043,6 +1125,7 @@ impl<'a> Tuner<'a> {
             }
             self.track_bulk(dt, &samples);
             self.track_tcp(dt, &samples);
+            self.track_tagged(dt, &samples);
 
             self.track_session();
             // Settings can move mid-match (a new network path).
@@ -1071,6 +1154,9 @@ impl Drop for Tuner<'_> {
         stats::remove(&self.run_dir);
         if let Some(obs) = self.tcp_games.as_mut() {
             log_tcp_events(&obs.finish());
+        }
+        for obs in &mut self.observed {
+            log_observed(obs.proto(), &obs.finish());
         }
         // Tell listeners the match is over for them too: its settings
         // have just been restored.
@@ -1101,6 +1187,30 @@ fn log_tcp_events(events: &[ObsEvent]) {
             ObsEvent::Ended { summary, .. } => {
                 info!("TCP game session: {}", summary.describe())
             }
+        }
+    }
+}
+
+fn log_observed(proto: Proto, events: &[ObsEvent]) {
+    for e in events {
+        match e {
+            ObsEvent::Seen {
+                name,
+                tx_per_s,
+                rx_per_s,
+                ..
+            } => info!(
+                "Observing {name}: {} at ~{tx_per_s:.0} sends/s and ~{rx_per_s:.0} \
+                 receives/s [{}=1]",
+                proto.name(),
+                tagged::VAR
+            ),
+            ObsEvent::Ended { summary, .. } => info!(
+                "Observed {}: {} {}",
+                summary.name,
+                proto.name(),
+                summary.details()
+            ),
         }
     }
 }

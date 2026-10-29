@@ -124,6 +124,18 @@ pub fn count_tcp(skel: &mut BpfSkel, on: bool) {
     }
 }
 
+/// Count `tgid`'s TCP at any time (or stop): it's tagged BPFRAG_OBSERVE=1.
+pub fn observe(skel: &BpfSkel, tgid: u32, on: bool) {
+    set_flag(&skel.maps.observe_tgids, tgid, on, "observe");
+}
+
+/// Turn the lookups in `observe_tgids` on or off (off while it's empty).
+pub fn observe_active(skel: &mut BpfSkel, on: bool) {
+    if let Some(bss) = skel.maps.bss_data.as_deref_mut() {
+        bss.observe_on = on;
+    }
+}
+
 /// Forget every bulk process and flow (between matches).
 pub fn clear_bulk(skel: &mut BpfSkel) {
     bulk_active(skel, false);

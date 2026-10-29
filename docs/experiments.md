@@ -202,8 +202,13 @@ games don't have, which would need their own knobs.md sections first.
 line and a "TCP game session" summary for every game that talks TCP both
 ways for 10 seconds: typical send and receive rates, message sizes, how
 steady the rate is, how long, how much ([detection.md](detection.md#games-that-talk-tcp)).
-Several sessions of normal play, in towns, in raids, idle, is the data.
-Send it with the "Share match data" issue form.
+For one particular game, `BPFRAG_OBSERVE=1 %command%` in its launch
+options logs the same for its UDP and its TCP, one way or both, without
+counting every other process's TCP
+([detection.md](detection.md#observing-one-game-bpfrag_observe1)); that
+also answers whether a game is UDP or TCP in the first place (Path of
+Exile 2, say). Several sessions of normal play, in towns, in raids, idle,
+is the data. Send it with the "Share match data" issue form.
 
 **Decides:** steady and distinct: a TCP match detector, then
 experiments for any settings it gets. Indistinguishable from background

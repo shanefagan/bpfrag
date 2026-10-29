@@ -41,10 +41,13 @@ const volatile __u8 bulk_dscp = 1;		/* LE: RFC 8622 lower effort */
 /*
  * Runtime switches, written by userspace through the skeleton's mmapped
  * .bss (as sched_ext schedulers do): plain memory reads on the hot paths,
- * no map lookup. TCP is only counted while a match is on, and bulk flows
- * are only learned and looked up while some process is bulk.
+ * no map lookup. TCP is only counted while a match is on (or for every
+ * process with tcp = "observe"), a tagged process's TCP only while some
+ * process is tagged, and bulk flows are only learned and looked up while
+ * some process is bulk.
  */
 volatile bool count_tcp = false;
+volatile bool observe_on = false;
 volatile bool bulk_on = false;
 
 struct {
@@ -112,6 +115,14 @@ struct {
 	__type(key, __u32);
 	__type(value, struct port_rx);
 } port_rx SEC(".maps");
+
+/* processes tagged BPFRAG_OBSERVE=1: their TCP is counted at any time */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, MAX_OBSERVE);
+	__type(key, __u32);
+	__type(value, __u8);
+} observe_tgids SEC(".maps");
 
 /* processes userspace declared bulk for this match */
 struct {
@@ -207,16 +218,15 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	if (family != AF_INET && family != AF_INET6)
 		return;
 	proto = BPF_CORE_READ(sk, sk_protocol);
-	if (proto == IPPROTO_TCP) {
-		if (!count_tcp)
-			return; /* no match on, and not watching TCP games */
-	} else if (proto != IPPROTO_UDP) {
+	if (proto != IPPROTO_TCP && proto != IPPROTO_UDP)
 		return;
-	}
 
 	tgid = bpf_get_current_pid_tgid() >> 32;
 	if (!tgid)
 		return;
+	if (proto == IPPROTO_TCP && !count_tcp &&
+	    !(observe_on && bpf_map_lookup_elem(&observe_tgids, &tgid)))
+		return; /* no match on, not watching TCP games, not tagged */
 	if (bulk_on && bpf_map_lookup_elem(&bulk_tgids, &tgid))
 		learn_bulk_flow(sk, family, proto, tgid);
 

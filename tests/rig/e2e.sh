@@ -341,6 +341,27 @@ kill $TG $TN; sleep 2
 grep -q "TCP game session: fakemmo for [0-9]*s: typically 2[0-9] sends/s and 2[0-9] receives/s, 9[0-9] and 9[0-9] bytes each" $W/d11d.log && ok "its session is summed up when it exits" || bad "summary: $(grep -i 'tcp game' $W/d11d.log)"
 kill -INT $D; wait $D; D=
 
+echo "== 11e. BPFRAG_OBSERVE: a tagged process's UDP and TCP are logged"
+# randomd is no game by any signal and tcp is off: the tag alone gets its
+# traffic logged. /proc is listed every 5 s, and a session is reported
+# after 10 s of traffic.
+"$B" -c $W/cfg.toml > $W/d11e.log 2>&1 & D=$!; sleep 1
+BPFRAG_OBSERVE=1 $W/apps/randomd $W/tcpgame.py 20 & TT=$!
+BPFRAG_OBSERVE=1 $W/apps/randomd $W/client.py 30 120 & TU=$!
+BPFRAG_OBSERVE=0 $W/apps/randomd $W/tcpgame.py 20 & TN=$!
+sleep 22
+grep -q "Observing randomd (pid $TT): TCP at ~2[0-9] sends/s and ~2[0-9] receives/s \[BPFRAG_OBSERVE=1\]" $W/d11e.log && ok "a tagged process's TCP is logged with tcp off" || bad "tcp: $(grep -i observ $W/d11e.log)"
+grep -q "Observing randomd (pid $TU): UDP at ~[23][0-9] sends/s and ~[23][0-9] receives/s" $W/d11e.log && ok "a tagged process's UDP is logged" || bad "udp: $(grep -i observ $W/d11e.log)"
+grep -q "pid $TN" $W/d11e.log && bad "an untagged process was logged" || ok "BPFRAG_OBSERVE=0 isn't a tag"
+grep -q "Match detected" $W/d11e.log && bad "the tag started a match" || ok "the tag changes nothing else (no match for a non-game)"
+"$B" -c $W/cfg.toml --monitor 0 2>&1 | grep -A3 "Observing (BPFRAG_OBSERVE=1)" | grep -q "randomd (pid $TT): TCP" && ok "--monitor lists what is being observed" || bad "monitor: $("$B" -c $W/cfg.toml --monitor 0 2>&1 | grep -A3 -i observ)"
+"$B" -c $W/cfg.toml --classify $TT 2>&1 | grep -q "tagged BPFRAG_OBSERVE=1" && ok "--classify shows the tag" || bad "classify: $("$B" -c $W/cfg.toml --classify $TT 2>&1)"
+same "while tagged processes are observed"
+kill $TT $TU $TN; sleep 2
+grep -q "Observed randomd (pid $TT): TCP for [0-9]*s: typically 2[0-9] sends/s and 2[0-9] receives/s, 9[0-9] and 9[0-9] bytes each" $W/d11e.log && ok "its TCP session is summed up when it exits" || bad "tcp summary: $(grep -i observed $W/d11e.log)"
+grep -q "Observed randomd (pid $TU): UDP for [0-9]*s: typically [23][0-9] sends/s and [23][0-9] receives/s, 120 and 120 bytes each" $W/d11e.log && ok "its UDP session is summed up when it exits" || bad "udp summary: $(grep -i observed $W/d11e.log)"
+kill -INT $D; wait $D; D=
+
 echo "== 12. D-Bus: read-only interface, readable by anyone"
 if command -v dbus-daemon >/dev/null && command -v dbus-monitor >/dev/null && command -v busctl >/dev/null; then
   # A private bus with the system bus's default policy plus ours. The
