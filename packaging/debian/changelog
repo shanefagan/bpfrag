@@ -1,3 +1,9 @@
+bpfrag (0.7.0-1) unstable; urgency=medium
+
+  * Log a tagged game's UDP and TCP traffic (BPFRAG_OBSERVE=1)
+
+ -- Shane Fagan <mail@shanefagan.com>  Thu, 29 Oct 2026 11:08:56 +0000
+
 bpfrag (0.6.0-1) unstable; urgency=medium
 
   * Daily random experiments; observe games that talk TCP; issue form for match data
