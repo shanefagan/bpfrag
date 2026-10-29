@@ -86,6 +86,8 @@ pub struct General {
     /// Where the stats file and the restore journal live (tmpfs, so a
     /// reboot clears it together with the sysctls it describes).
     pub run_dir: String,
+    /// What has to survive a reboot: today's `[experiment]` pick.
+    pub state_dir: String,
     /// No longer used: on kernel 6.6+ there is only one counting hook.
     /// Accepted so older config files still load.
     #[serde(skip_serializing)]
@@ -101,6 +103,7 @@ impl Default for General {
     fn default() -> Self {
         Self {
             run_dir: "/run/bpfrag".into(),
+            state_dir: "/var/lib/bpfrag".into(),
             hook: None,
             tick_ms: 1000,
             bpftune: BpftuneMode::Auto,
@@ -267,10 +270,15 @@ pub struct Bulk {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Experiment {
-    /// The setting to test, by its docs/knobs.md name; "" for none.
+    /// The setting to test, by its docs/knobs.md name; "random" to pick one
+    /// from `pool` each `period`; "" for none.
     pub setting: String,
     /// Share of matches that keep the setting on (0 to 1).
     pub keep: f64,
+    /// With "random": the settings to pick from.
+    pub pool: Pool,
+    /// With "random": how long one pick lasts.
+    pub period: Period,
 }
 
 impl Default for Experiment {
@@ -278,8 +286,38 @@ impl Default for Experiment {
         Self {
             setting: String::new(),
             keep: 0.5,
+            pool: Pool::Named("auto".into()),
+            period: Period::Day,
         }
     }
+}
+
+/// `"auto"`, `"wired"`, `"wifi"`, or a list of setting names.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Pool {
+    Named(String),
+    List(Vec<String>),
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Period {
+    /// A day, starting at 05:00 local time so a late session stays whole.
+    #[default]
+    Day,
+    /// Until the next reboot.
+    Boot,
+}
+
+/// What `[experiment]` asks for, once checked.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExperimentPlan {
+    None,
+    /// One setting, by name.
+    Fixed(String, crate::experiment::Setting),
+    /// One setting picked from a pool every period.
+    Random,
 }
 
 impl Default for Bulk {
@@ -579,20 +617,40 @@ impl Config {
                 );
             }
         }
-        self.experiment_setting()?;
+        self.experiment_plan()?;
         Ok(())
     }
 
-    /// The `[experiment]` setting, checked: None if there's no experiment.
-    pub fn experiment_setting(&self) -> Result<Option<crate::experiment::Setting>> {
-        use crate::experiment::Setting;
+    /// The `[experiment]` section, checked.
+    pub fn experiment_plan(&self) -> Result<ExperimentPlan> {
+        use crate::experiment::{RANDOM, Setting};
         let e = &self.experiment;
-        let Some(s) = Setting::parse(&e.setting).context("experiment.setting")? else {
-            return Ok(None);
-        };
         if !(0.0..=1.0).contains(&e.keep) {
             bail!("experiment.keep must be between 0 and 1");
         }
+        if e.setting.trim() == RANDOM {
+            match &e.pool {
+                Pool::Named(n) if ["auto", "wired", "wifi"].contains(&n.as_str()) => {}
+                Pool::Named(n) => bail!(
+                    "experiment.pool {n:?}: \"auto\", \"wired\", \"wifi\" or a list of settings"
+                ),
+                Pool::List(l) if l.is_empty() => bail!("experiment.pool is empty"),
+                Pool::List(l) => {
+                    for n in l {
+                        match Setting::parse(n).context("experiment.pool")? {
+                            Some(Setting::All) | None => {
+                                bail!("experiment.pool: {n:?} can't be in a pool")
+                            }
+                            Some(_) => {}
+                        }
+                    }
+                }
+            }
+            return Ok(ExperimentPlan::Random);
+        }
+        let Some(s) = Setting::parse(&e.setting).context("experiment.setting")? else {
+            return Ok(ExperimentPlan::None);
+        };
         if !s.used_by(&self.profiles, self.bulk.enabled) {
             bail!(
                 "experiment.setting {:?}: no tier changes it, so both arms would be the same{}",
@@ -608,7 +666,7 @@ impl Config {
             // the marker does both, so switching it off stops bulk marking
             bail!("experiment.setting \"dscp\" needs bulk.enabled = false");
         }
-        Ok(Some(s))
+        Ok(ExperimentPlan::Fixed(e.setting.trim().to_string(), s))
     }
 }
 
@@ -800,8 +858,9 @@ mod tests {
         assert!(cfg.bulk.enabled);
         assert!(cfg.bulk.never_list().iter().any(|n| n == "rclone"));
         assert!(cfg.bulk.never_list().iter().any(|n| n == "obs"));
-        assert_eq!(cfg.experiment.setting, "busy_polling");
-        assert!(cfg.experiment_setting().unwrap().is_some());
+        assert_eq!(cfg.experiment.setting, "random");
+        assert_eq!(cfg.experiment_plan().unwrap(), ExperimentPlan::Random);
+        assert_eq!(cfg.experiment.pool, Pool::Named("wired".into()));
     }
 
     #[test]
@@ -839,6 +898,49 @@ mod tests {
                 .contains("bulk.enabled = false")
         );
         ok("[bulk]\nenabled = true\n[experiment]\nsetting = \"bulk\"\n").unwrap();
+    }
+
+    #[test]
+    fn random_experiments_take_a_pool_and_a_period() {
+        let plan = |t: &str| {
+            Config::from_toml(t)
+                .and_then(|c| c.experiment_plan())
+                .map_err(|e| format!("{e:#}"))
+        };
+        assert_eq!(
+            plan("[experiment]\nsetting = \"random\"\n").unwrap(),
+            ExperimentPlan::Random
+        );
+        let c = Config::from_toml(
+            "[experiment]\nsetting = \"random\"\npool = [\"backlog\", \"budget\"]\nperiod = \"boot\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            c.experiment.pool,
+            Pool::List(vec!["backlog".into(), "budget".into()])
+        );
+        assert_eq!(c.experiment.period, Period::Boot);
+        plan("[experiment]\nsetting = \"random\"\npool = \"wifi\"\n").unwrap();
+        assert!(
+            plan("[experiment]\nsetting = \"random\"\npool = \"cable\"\n")
+                .unwrap_err()
+                .contains("auto")
+        );
+        assert!(
+            plan("[experiment]\nsetting = \"random\"\npool = [\"all\"]\n")
+                .unwrap_err()
+                .contains("can't be in a pool")
+        );
+        assert!(
+            plan("[experiment]\nsetting = \"random\"\npool = [\"turbo\"]\n")
+                .unwrap_err()
+                .contains("unknown setting")
+        );
+        assert!(plan("[experiment]\nsetting = \"random\"\nperiod = \"week\"\n").is_err());
+        // the effective config writes it back out
+        let back = Config::from_toml(&c.to_toml().unwrap()).unwrap();
+        assert_eq!(back.experiment.pool, c.experiment.pool);
+        assert_eq!(back.experiment.period, Period::Boot);
     }
 
     #[test]

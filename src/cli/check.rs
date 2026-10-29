@@ -132,6 +132,20 @@ pub fn run(cfg: &Config) -> bool {
     };
     line(None, "writeback", format!("{now} ({during})"));
 
+    if let Ok(crate::config::ExperimentPlan::Random) = cfg.experiment_plan() {
+        let e = &cfg.experiment;
+        let today = crate::experiment::period_key(e.period);
+        let saved = crate::experiment::load_pick(std::path::Path::new(&cfg.general.state_dir))
+            .filter(|p| p.period == today)
+            .map_or("not picked yet".to_string(), |p| {
+                format!("now: {}", p.setting)
+            });
+        line(
+            None,
+            "experiment",
+            format!("random, one setting per {:?} ({saved})", e.period).to_lowercase(),
+        );
+    }
     if cfg.general.dbus {
         let (ok, detail) = crate::bus::check();
         line(ok, "D-Bus", detail);

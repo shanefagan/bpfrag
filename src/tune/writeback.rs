@@ -50,6 +50,29 @@ fn mem_available() -> u64 {
         .unwrap_or(0)
 }
 
+/// Would `wb` tighten either limit here? The same test `apply_writeback`
+/// makes: only ever lower the effective limit.
+pub fn would_tighten(wb: &Writeback) -> bool {
+    let avail = mem_available();
+    [
+        ("dirty", wb.dirty_mb),
+        ("dirty_background", wb.background_mb),
+    ]
+    .into_iter()
+    .any(|(which, mb)| {
+        let (bp, rp) = dirty_paths(which);
+        let (Some(bytes), Some(ratio)) = (read_u64(&bp), read_u64(&rp)) else {
+            return false;
+        };
+        let effective = if bytes > 0 {
+            bytes
+        } else {
+            ratio * avail / 100
+        };
+        bytes != mb * MIB && effective > mb * MIB
+    })
+}
+
 impl Knobs {
     pub(super) fn apply_writeback(
         &mut self,

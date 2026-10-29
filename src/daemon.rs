@@ -27,14 +27,14 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use libbpf_rs::skel::{OpenSkel, SkelBuilder};
 use libbpf_rs::{Link, OpenObject, RingBufferBuilder};
-use log::{debug, info};
+use log::{debug, info, warn};
 
 use crate::bpf::tc::{Role, TcSet};
 use crate::bpf::{self, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
 use crate::bus::{self, Bus};
-use crate::config::{Config, Profile, Tier, parse_dscp};
+use crate::config::{Config, ExperimentPlan, Period, Pool, Profile, Tier, parse_dscp};
 use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
@@ -46,7 +46,8 @@ use crate::stats::{
     self, AppliedMetric, BulkMetric, Counters, DscpMetrics, Metrics, RecentMatch, SessionMetrics,
     TopProc,
 };
-use crate::tune::{Knobs, coexist};
+use crate::tune::{Knobs, coexist, target_for, writeback_would_tighten};
+use crate::util::{norm_ws, read_trim, sysctl_path};
 
 /// The parts of the command line the daemon needs.
 pub struct RunOpts {
@@ -162,8 +163,13 @@ pub struct Tuner<'a> {
     egress: Egress,
     /// Finished matches, newest first.
     recent: VecDeque<RecentMatch>,
-    /// The `[experiment]` setting, if any (never in a dry run).
-    experiment: Option<experiment::Setting>,
+    /// What `[experiment]` asks for (None in a dry run, which changes
+    /// nothing to switch off).
+    plan: ExperimentPlan,
+    /// The setting under test now, by name; with "random", this period's
+    /// pick, and the period it's for.
+    experiment: Option<(String, experiment::Setting)>,
+    experiment_period: String,
     /// This match's draw.
     arm: Option<experiment::Arm>,
 }
@@ -212,10 +218,15 @@ impl<'a> Tuner<'a> {
 
         let run_dir = PathBuf::from(&cfg.general.run_dir);
         // A dry run changes nothing, so it has nothing to switch off.
-        let experiment = cfg.experiment_setting()?.filter(|_| !run.dry_run);
+        let plan = match cfg.experiment_plan()? {
+            _ if run.dry_run => ExperimentPlan::None,
+            p => p,
+        };
         let bus = cfg.general.dbus.then(|| Bus::new(run.dry_run));
         Ok(Self {
-            experiment,
+            experiment: None,
+            experiment_period: String::new(),
+            plan,
             arm: None,
             bus,
             started_unix: 0,
@@ -384,9 +395,12 @@ impl<'a> Tuner<'a> {
                     s.name, s.tgid, s.pps, s.tx_pps, s.rx_pps, s.tier, s.reason
                 );
                 self.session_start = Some(Instant::now());
-                self.arm = self.experiment.as_ref().map(|e| {
-                    experiment::draw(&self.cfg.experiment.setting, e, self.cfg.experiment.keep)
-                });
+                // A new day may mean a new setting under test.
+                self.refresh_experiment();
+                self.arm = self
+                    .experiment
+                    .as_ref()
+                    .map(|(name, e)| experiment::draw(name, e, self.cfg.experiment.keep));
                 if let Some(a) = &self.arm {
                     info!(
                         "Experiment: {} for this match (chosen at random)",
@@ -569,6 +583,148 @@ impl<'a> Tuner<'a> {
             (marker, Vec::new())
         } else {
             (marker, ifaces)
+        }
+    }
+
+    /// Settle which setting is under test, logging it when that changes:
+    /// a fixed one once, a "random" one once per period (a day from 05:00,
+    /// or a boot), picked from the pool and saved so a restart keeps it.
+    fn refresh_experiment(&mut self) {
+        let off_share = (1.0 - self.cfg.experiment.keep) * 100.0;
+        match self.plan.clone() {
+            ExperimentPlan::None => self.experiment = None,
+            ExperimentPlan::Fixed(name, s) => {
+                if self.experiment.is_none() {
+                    info!(
+                        "Experiment: {name} is switched off in {off_share:.0}% of matches, chosen at random"
+                    );
+                    self.experiment = Some((name, s));
+                }
+            }
+            ExperimentPlan::Random => {
+                let e = &self.cfg.experiment;
+                let period = experiment::period_key(e.period);
+                if period == self.experiment_period {
+                    return;
+                }
+                self.experiment_period = period.clone();
+                let link = match net::primary_default_route() {
+                    Some(i) if net::is_wireless(&i.name) => experiment::Link::Wifi,
+                    _ => experiment::Link::Wired,
+                };
+                let names = experiment::pool_names(&e.pool, link);
+                let (cands, in_place) = experiment::candidates(
+                    &names,
+                    &self.cfg.profiles,
+                    self.cfg.bulk.enabled,
+                    |s| self.would_change(s),
+                );
+                let pool = match (&e.pool, link) {
+                    (Pool::List(_), _) => "the configured pool".to_string(),
+                    (Pool::Named(n), _) if n != "auto" => format!("the {n} pool"),
+                    (_, experiment::Link::Wired) => "the wired pool".into(),
+                    (_, experiment::Link::Wifi) => "the Wi-Fi pool".into(),
+                };
+                let when = match e.period {
+                    Period::Day => "today",
+                    Period::Boot => "this boot",
+                };
+                let state = PathBuf::from(&self.cfg.general.state_dir);
+                let saved = experiment::load_pick(&state);
+                let names: Vec<String> = cands.iter().map(|(n, _)| n.clone()).collect();
+                let Some((name, fresh)) =
+                    experiment::pick_for(&period, saved.as_ref(), &names, experiment::random_index)
+                else {
+                    info!(
+                        "Experiment: nothing in {pool} would change anything here{}; none {when}",
+                        if in_place.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" ({} already in place)", in_place.join(", "))
+                        }
+                    );
+                    self.experiment = None;
+                    return;
+                };
+                let setting = cands
+                    .iter()
+                    .find(|(n, _)| *n == name)
+                    .map(|(_, s)| s.clone());
+                let Some(setting) = setting else {
+                    return;
+                };
+                if fresh {
+                    let pick = experiment::Pick {
+                        period,
+                        setting: name.clone(),
+                    };
+                    if let Err(e) = experiment::save_pick(&state, &pick) {
+                        warn!(
+                            "Experiment: can't save {when}'s pick in {}: {e}; a restart will pick again",
+                            state.display()
+                        );
+                    }
+                    let left_out = if in_place.is_empty() {
+                        String::new()
+                    } else {
+                        format!("; left out as already in place: {}", in_place.join(", "))
+                    };
+                    info!(
+                        "Experiment for {when}: {name}, switched off in {off_share:.0}% of matches \
+                         (picked at random from {pool}: {}{left_out})",
+                        names.join(", ")
+                    );
+                } else {
+                    info!(
+                        "Experiment for {when}: {name}, switched off in {off_share:.0}% of matches \
+                         (picked earlier {when})"
+                    );
+                }
+                self.experiment = Some((name, setting));
+            }
+        }
+    }
+
+    /// Would switching `s` off make a difference on this machine? Settings
+    /// already at their tier values (by the distribution, by hand, or by
+    /// bpftune, which bpfrag leaves its sysctls to) would leave both arms
+    /// the same, so they're left out of a random pick.
+    fn would_change(&self, s: &experiment::Setting) -> bool {
+        use experiment::Setting;
+        let (skip, _) = coexist::skip_set(&self.cfg);
+        let sysctl_changes = |k: &str| {
+            if skip.contains(k) {
+                return false;
+            }
+            let Some(cur) = sysctl_path(k).and_then(|p| read_trim(p).ok()) else {
+                return false;
+            };
+            let cur = norm_ws(&cur);
+            self.cfg
+                .profiles
+                .iter()
+                .filter_map(|p| p.sysctl.get(k))
+                .any(|v| target_for(v, &cur).is_some_and(|t| t != cur))
+        };
+        match s {
+            Setting::Sysctls(keys) => keys.iter().any(|k| sysctl_changes(k)),
+            Setting::Sysctl(k) => sysctl_changes(k),
+            Setting::Writeback => self
+                .cfg
+                .profiles
+                .iter()
+                .filter_map(|p| p.writeback)
+                .any(|w| writeback_would_tighten(&w)),
+            Setting::WifiPowerSave => net::default_route_ifaces().iter().any(|i| {
+                net::is_wireless(&i.name)
+                    && net::nl80211::get_power_save(i.ifindex).unwrap_or(false)
+            }),
+            Setting::Coalescing => net::default_route_ifaces().iter().any(|i| {
+                i.physical
+                    && !net::is_wireless(&i.name)
+                    && net::ethtool::get_coalesce(&i.name).is_ok()
+            }),
+            Setting::Dscp | Setting::Bulk | Setting::All => true,
         }
     }
 
@@ -798,12 +954,8 @@ impl<'a> Tuner<'a> {
             }
         );
 
-        if self.experiment.is_some() {
-            info!(
-                "Experiment: {} is switched off in {:.0}% of matches, chosen at random",
-                self.cfg.experiment.setting.trim(),
-                (1.0 - self.cfg.experiment.keep) * 100.0
-            );
+        if self.plan != ExperimentPlan::None {
+            self.refresh_experiment();
         } else if self.dry_run && !self.cfg.experiment.setting.trim().is_empty() {
             info!("Experiment: not run in a dry run (nothing is changed to switch off)");
         }

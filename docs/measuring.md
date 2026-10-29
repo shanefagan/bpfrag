@@ -64,20 +64,41 @@ The simplest fair comparison is an **experiment**: bpfrag switches one
 setting off in a random half of your matches and records which half each
 match was in. You play as usual.
 
+The set-and-forget way is to let bpfrag pick the setting too:
+
 ```toml
 # /etc/bpfrag/bpfrag.toml
 [experiment]
-setting = "busy_polling"
+setting = "random"
+pool = "wired"     # "wired", "wifi", "auto" (by the default route), or a list
+period = "day"     # one setting per day, from 05:00; or "boot"
 ```
 
-Then `sudo systemctl restart bpfrag`. Each match logs its arm when it
-starts (`Experiment: busy_polling off for this match`), `--monitor` shows
-it, and the health line at the end says it again. The setting names are
-the sections of [knobs.md](knobs.md): `dscp`, `wifi_power_save`,
-`coalescing`, `busy_polling`, `socket_buffers`, `backlog`, `budget`,
-`writeback`, `bulk` (needs `[bulk] enabled = true`), `all` (the "off"
-matches are only measured, like a dry run), or `sysctl:<name>` for a
-single sysctl. `keep = 0.3` would keep the setting in 30% of matches.
+Then `sudo systemctl restart bpfrag`. Once a day bpfrag picks one setting
+from the pool and logs it (`Experiment for today: busy_polling, switched
+off in 50% of matches (picked at random from the wired pool: ...)`); the
+pick is kept in `/var/lib/bpfrag`, so restarts and reboots during the day
+don't change it. The day starts at 05:00, so an evening that runs past
+midnight stays one experiment. Settings this machine already has (because
+the distribution ships them, or bpftune holds them) are left out, since
+both halves would be the same. The wired pool leaves out Wi-Fi power save;
+the Wi-Fi pool leaves out NIC coalescing. `sudo bpfrag --check` shows
+today's pick.
+
+Testing one setting at a time is the point: switching everything off at
+once (`setting = "all"`) can show whether bpfrag helps as a whole, but not
+which setting did it.
+
+To test one setting yourself, name it: `setting = "busy_polling"`. The
+names are the sections of [knobs.md](knobs.md): `dscp`,
+`wifi_power_save`, `coalescing`, `busy_polling`, `socket_buffers`,
+`backlog`, `budget`, `writeback`, `bulk` (needs `[bulk] enabled = true`),
+`all`, or `sysctl:<name>` for a single sysctl.
+
+Either way, each match logs its arm when it starts (`Experiment:
+busy_polling off for this match`), `--monitor` shows it, and the health
+line at the end says it again. `keep = 0.3` would keep the setting in 30%
+of matches.
 
 Why random: picking which matches get which setting by hand, or running
 one evening of each, lets everything else that varies (time of day, the
@@ -113,7 +134,8 @@ experiment arm, the tiers, and every number from the health line. It
 needs only Python 3, and also reads a saved log: `journalctl -u bpfrag |
 docs/scripts/matches.py -`.
 
-To compare an experiment's two arms directly:
+To compare an experiment's two arms directly (with `random`, each setting
+tested is compared on its own):
 
 ```sh
 docs/scripts/matches.py --since "2026-11-01" --compare arm

@@ -158,7 +158,8 @@ push unsigned commits to `main`, and don't force-push it.
 - Distribution defaults go in `docs/distros.md`, each with the package or
   file it was read from. Don't fill a cell from memory.
 - A new setting also gets an `[experiment]` name (`src/experiment.rs`),
-  so it can be tested like the others.
+  so it can be tested like the others, and goes in the wired and/or Wi-Fi
+  pool for `setting = "random"`.
 
 ## Bug reports
 

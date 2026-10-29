@@ -46,6 +46,7 @@ ln -s "$(command -v sleep)" $W/apps/bpftune
 cat > $W/cfg.toml <<EOT
 [general]
 run_dir = "$W/run"
+state_dir = "$W/state"
 dbus = false
 [dscp]
 interfaces = ["bpfrag0"]
@@ -305,6 +306,25 @@ kill $G; sleep 2; kill -INT $D; wait $D; D=
 grep -q "Experiment: all off for this match" $W/d11b.log && ok "all-off arm drawn and logged" || bad "arm: $(grep -i experiment $W/d11b.log)"
 grep -Eq "already tuned|no game traffic seen" $W/d11b.log && bad "misleading log lines: $(grep -E 'already tuned|no game traffic seen' $W/d11b.log)" || ok "no 'already tuned' or path messages when nothing is applied"
 grep -q "fakeshooter: packet gaps half.*experiment: all off" $W/d11b.log && ok "the all-off match is still measured" || bad "summary: $(grep 'fakeshooter: packet' $W/d11b.log)"
+
+echo "== 11c. a random experiment: one setting per day, kept across restarts"
+# A one-setting pool makes the pick predictable; keep = 0 makes every
+# match its "off" match.
+{ cat $W/cfg.toml; printf '[experiment]\nsetting = "random"\npool = ["backlog"]\nkeep = 0\n'; } > $W/cfg11c.toml
+"$B" -c $W/cfg11c.toml > $W/d11c.log 2>&1 & D=$!; sleep 1
+grep -q "Experiment for today: backlog, switched off in 100% of matches (picked at random from the configured pool: backlog)" $W/d11c.log && ok "today's setting picked at start" || bad "pick: $(grep -i experiment $W/d11c.log)"
+grep -q '"setting":"backlog"' $W/state/experiment.json 2>/dev/null && ok "the pick is saved in the state directory" || bad "state: $(cat $W/state/experiment.json 2>&1)"
+kill -INT $D; wait $D
+"$B" -c $W/cfg11c.toml > $W/d11c2.log 2>&1 & D=$!; sleep 1
+grep -q "Experiment for today: backlog, .*(picked earlier today)" $W/d11c2.log && ok "a restart keeps today's pick" || bad "restart: $(grep -i experiment $W/d11c2.log)"
+BL=$(sysctl -n net.core.netdev_max_backlog)
+game 64 180; sleep 6
+grep -q "Experiment: backlog off for this match" $W/d11c2.log && ok "matches draw arms for today's setting" || bad "arm: $(grep -i 'experiment' $W/d11c2.log)"
+[ "$(sysctl -n net.core.netdev_max_backlog)" = "$BL" ] && ok "off arm: backlog left alone" || bad "backlog changed to $(sysctl -n net.core.netdev_max_backlog)"
+[ "$(sysctl -n net.core.busy_poll)" = 50 ] && ok "off arm: the other settings still applied" || bad "busy_poll $(sysctl -n net.core.busy_poll)"
+kill $G; sleep 2; kill -INT $D; wait $D; D=
+"$B" -c $W/cfg11c.toml --check 2>/dev/null | grep -q "experiment .*random, one setting per day (now: backlog)" && ok "--check shows today's pick" || bad "check: $("$B" -c $W/cfg11c.toml --check 2>&1 | grep -i experiment)"
+same "after random experiment"
 
 echo "== 12. D-Bus: read-only interface, readable by anyone"
 if command -v dbus-daemon >/dev/null && command -v dbus-monitor >/dev/null && command -v busctl >/dev/null; then

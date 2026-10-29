@@ -23,6 +23,8 @@ ProtectHome=read-only
 PrivateTmp=yes
 RuntimeDirectory=bpfrag
 RuntimeDirectoryPreserve=yes
+# Today's [experiment] pick, kept across reboots.
+StateDirectory=bpfrag
 
 [Install]
 WantedBy=multi-user.target

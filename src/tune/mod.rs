@@ -24,6 +24,7 @@ pub mod coexist;
 pub mod journal;
 mod sysctl;
 pub use sysctl::target_for;
+pub use writeback::would_tighten as writeback_would_tighten;
 mod wifi;
 mod writeback;
 

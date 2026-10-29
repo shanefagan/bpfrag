@@ -119,16 +119,19 @@ Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 
   serves it.
 
 Most of the spread in packet gaps comes from the internet and the game
-server, so one match proves little either way. To find out what a setting
-does, let bpfrag run an experiment: it switches that setting off in a
-random half of your matches and labels each one.
+server, so one match proves little either way. To find out what each
+setting does, let bpfrag run an experiment: each day it picks one setting
+to test, then switches it off in a random half of your matches and labels
+each one.
 
 ```toml
 [experiment]
-setting = "wifi_power_save"
+setting = "random"
+pool = "wired"    # or "wifi", or "auto" (by your default route)
 ```
 
-`docs/scripts/matches.py --compare arm` then compares the two halves.
+`docs/scripts/matches.py --compare arm` then compares the two halves of
+each day's experiment.
 **[docs/measuring.md](docs/measuring.md)** has the details, and results
 go in [docs/findings.md](docs/findings.md). `--dry-run` measures the same
 way but changes nothing, for a baseline.

@@ -196,7 +196,21 @@ def main():
             cmd += ["--until", a.until]
         lines = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.splitlines()
     if a.compare:
-        compare(parse(lines, a.label), a.compare, a.min_minutes)
+        rows = parse(lines, a.label)
+        if a.compare == "arm":
+            # Arms only compare within one experiment: a "random" experiment
+            # tests a different setting each day.
+            by_exp = {}
+            for r in rows:
+                if r.get("experiment"):
+                    by_exp.setdefault(r["experiment"], []).append(r)
+            if not by_exp:
+                print("no matches from an experiment")
+            for i, (exp, rs) in enumerate(sorted(by_exp.items())):
+                print(("\n" if i else "") + f"== experiment: {exp}")
+                compare(rs, "arm", a.min_minutes)
+            return
+        compare(rows, a.compare, a.min_minutes)
         return
     w = csv.DictWriter(sys.stdout, FIELDS, extrasaction="ignore")
     if not a.no_header:

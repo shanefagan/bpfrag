@@ -64,6 +64,12 @@ set, one setting (for example
 .BR busy_polling )
 is switched off in a random share of matches, so its effect can be
 measured. Each match logs which it got, and its health line ends with it.
+With
+.BR "setting = \(dqrandom\(dq" ,
+bpfrag picks the setting itself, once a day (from 05:00) or once a boot,
+from a pool for wired or Wi\-Fi connections, leaving out settings the
+machine already has; the pick is kept in
+.IR /var/lib/bpfrag .
 .PP
 On the system bus,
 .B bpfrag

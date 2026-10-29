@@ -116,6 +116,25 @@ pub fn driver(ifname: &str) -> String {
 }
 
 /// Is this a Wi-Fi interface? (cfg80211 devices have one of these.)
+/// The interface of the preferred default route: the lowest-metric IPv4
+/// one, else any default route's. What `pool = "auto"` goes by.
+pub fn primary_default_route() -> Option<Iface> {
+    let best = fs::read_to_string("/proc/net/route").ok().and_then(|t| {
+        t.lines()
+            .skip(1)
+            .filter_map(|line| {
+                let f: Vec<&str> = line.split_whitespace().collect();
+                (f.len() > 7 && f[1] == "00000000" && f[7] == "00000000")
+                    .then(|| (f[6].parse::<u64>().unwrap_or(u64::MAX), f[0].to_string()))
+            })
+            .min()
+    });
+    match best {
+        Some((_, name)) => iface_by_name(&name),
+        None => default_route_ifaces().into_iter().next(),
+    }
+}
+
 pub fn is_wireless(ifname: &str) -> bool {
     Path::new(&format!("/sys/class/net/{ifname}/wireless")).exists()
         || Path::new(&format!("/sys/class/net/{ifname}/phy80211")).exists()
