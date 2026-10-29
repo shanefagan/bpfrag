@@ -296,6 +296,16 @@ done
 same "after experiments"
 python3 "$HERE/../../docs/scripts/matches.py" - < $W/d11.log | grep -q ",busy_polling,on," && ok "matches.py reads the arm" || bad "matches.py: $(python3 "$HERE/../../docs/scripts/matches.py" - < $W/d11.log)"
 
+echo "== 11b. the experiment's all-off arm changes nothing and still measures"
+{ cat $W/cfg.toml; printf '[experiment]\nsetting = "all"\nkeep = 0\n' ; } > $W/cfg11b.toml
+"$B" -c $W/cfg11b.toml > $W/d11b.log 2>&1 & D=$!; sleep 1
+game 64 180; sleep 9
+same "during an all-off match"
+kill $G; sleep 2; kill -INT $D; wait $D; D=
+grep -q "Experiment: all off for this match" $W/d11b.log && ok "all-off arm drawn and logged" || bad "arm: $(grep -i experiment $W/d11b.log)"
+grep -Eq "already tuned|no game traffic seen" $W/d11b.log && bad "misleading log lines: $(grep -E 'already tuned|no game traffic seen' $W/d11b.log)" || ok "no 'already tuned' or path messages when nothing is applied"
+grep -q "fakeshooter: packet gaps half.*experiment: all off" $W/d11b.log && ok "the all-off match is still measured" || bad "summary: $(grep 'fakeshooter: packet' $W/d11b.log)"
+
 echo "== 12. D-Bus: read-only interface, readable by anyone"
 if command -v dbus-daemon >/dev/null && command -v dbus-monitor >/dev/null && command -v busctl >/dev/null; then
   # A private bus with the system bus's default policy plus ours. The

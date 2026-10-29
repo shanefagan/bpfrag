@@ -127,6 +127,16 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// "26 Mbit/s", or "under 1 Mbit/s" (a torrent client counts as bulk
+/// whatever it moves, so it can show up nearly idle).
+pub fn fmt_mbps(mbps: f64) -> String {
+    if mbps < 1.0 {
+        "under 1 Mbit/s".into()
+    } else {
+        format!("{mbps:.0} Mbit/s")
+    }
+}
+
 pub fn fmt_dur(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs / 60) % 60, secs % 60);
     if h > 0 {
@@ -226,7 +236,7 @@ impl Metrics {
             let list: Vec<String> = s
                 .bulk
                 .iter()
-                .map(|b| format!("{} {:.0} Mbit/s", b.name, b.mbps))
+                .map(|b| format!("{} {}", b.name, fmt_mbps(b.mbps)))
                 .collect();
             writeln!(w, "  bulk: {} ({})", list.join(", "), s.bulk_marking)?;
         }
@@ -413,5 +423,17 @@ pub fn monitor(run_dir: &Path, interval: f64, shutdown: Arc<AtomicBool>) -> Resu
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rates_read_plainly() {
+        assert_eq!(fmt_mbps(26.4), "26 Mbit/s");
+        assert_eq!(fmt_mbps(1.0), "1 Mbit/s");
+        assert_eq!(fmt_mbps(0.2), "under 1 Mbit/s");
     }
 }

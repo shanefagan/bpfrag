@@ -34,7 +34,7 @@ use crate::bpf::{self, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
 use crate::bus::{self, Bus};
-use crate::config::{Config, Tier, parse_dscp};
+use crate::config::{Config, Profile, Tier, parse_dscp};
 use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
@@ -302,11 +302,8 @@ impl<'a> Tuner<'a> {
     /// DSCP marker. Also used to re-apply after a tier or path change;
     /// `Knobs::apply` reverts whatever the new profile no longer wants.
     fn apply_tier(&mut self, s: &SessionInfo) {
-        let mut profile = self.cfg.profile(s.tier).clone();
-        if let Some(a) = &self.arm {
-            a.apply(&mut profile);
-        }
-        let (marker, ifaces) = self.targets(s);
+        let profile = self.profile_now(s.tier);
+        let (marker, ifaces) = self.targets_for(s, &profile);
         self.applied_paths = Paths::new(&marker, &ifaces);
         self.last_path_check = Instant::now();
 
@@ -341,7 +338,11 @@ impl<'a> Tuner<'a> {
         } else {
             self.marker.detach_all(&self.skel);
         }
-        if changes.is_empty() {
+        if changes.is_empty() && profile_is_empty(&profile) {
+            // The experiment's "all off" arm: the start of the match already
+            // said so, and repeating it on every tier change is noise.
+            debug!("{} profile: every setting is off for this match", s.tier);
+        } else if changes.is_empty() {
             info!("{} profile: nothing to change (already tuned)", s.tier);
         } else {
             info!("{} profile: {}", s.tier, changes.join(", "));
@@ -508,7 +509,8 @@ impl<'a> Tuner<'a> {
         self.last_path_check = Instant::now();
         self.egress
             .update(&maps::game_packets(&self.skel), self.last_path_check);
-        let (marker, knobs) = self.targets(&s);
+        let profile = self.profile_now(s.tier);
+        let (marker, knobs) = self.targets_for(&s, &profile);
         self.health
             .watch(if knobs.is_empty() { &marker } else { &knobs });
         let now = Paths::new(&marker, &knobs);
@@ -545,6 +547,29 @@ impl<'a> Tuner<'a> {
             );
         }
         self.apply_tier(&s);
+    }
+
+    /// The profile this match uses for `tier`: the configured one, minus
+    /// whatever this match's experiment arm switches off.
+    fn profile_now(&self, tier: Tier) -> Profile {
+        let mut p = self.cfg.profile(tier).clone();
+        if let Some(a) = &self.arm {
+            a.apply(&mut p);
+        }
+        p
+    }
+
+    /// Like `targets()`, but with no interfaces for per-interface settings
+    /// when the profile has none (an experiment's "off" arm): nothing then
+    /// follows the game's path, and without the DSCP marker nothing counts
+    /// which interface its packets leave on either.
+    fn targets_for(&self, s: &SessionInfo, p: &Profile) -> (Vec<Iface>, Vec<Iface>) {
+        let (marker, ifaces) = self.targets(s);
+        if p.coalesce_usecs.is_none() && !p.wifi_powersave_off {
+            (marker, Vec::new())
+        } else {
+            (marker, ifaces)
+        }
     }
 
     /// This match's experiment arm, or "" (for the D-Bus signals).
@@ -621,9 +646,9 @@ impl<'a> Tuner<'a> {
             match e {
                 BulkEvent::Started(p) => {
                     info!(
-                        "Bulk transfer during the match: {} at {:.0} Mbit/s ({})",
+                        "Bulk transfer during the match: {} at {} ({})",
                         p.name,
-                        p.mbps,
+                        stats::fmt_mbps(p.mbps),
                         self.bulk_marking()
                     );
                     if mark {
@@ -862,7 +887,36 @@ impl Drop for Tuner<'_> {
     }
 }
 
+/// No setting at all: what an experiment's "all off" arm leaves.
+fn profile_is_empty(p: &Profile) -> bool {
+    p.sysctl.is_empty()
+        && !p.dscp
+        && p.coalesce_usecs.is_none()
+        && !p.wifi_powersave_off
+        && p.writeback.is_none()
+}
+
 /// Tier names on the bus are lower case, like Waybar's `class`.
 fn tier_name(t: Tier) -> String {
     t.name().to_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::builtin_profiles;
+    use crate::experiment::Setting;
+
+    #[test]
+    fn only_the_all_off_arm_leaves_an_empty_profile() {
+        for p in builtin_profiles() {
+            assert!(!profile_is_empty(&p), "{}", p.tier);
+            let mut off = p.clone();
+            Setting::All.strip(&mut off);
+            assert!(profile_is_empty(&off));
+            let mut one = p.clone();
+            Setting::Dscp.strip(&mut one);
+            assert!(!profile_is_empty(&one));
+        }
+    }
 }
