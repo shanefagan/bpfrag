@@ -4,7 +4,8 @@ What has been observed, measured or found wrong, newest first, with
 enough detail to check it. [knobs.md](knobs.md) has the reasoning behind
 each setting; this page is the evidence. Add results with the protocol in
 [measuring.md](measuring.md), and record "no difference" results too:
-they're what justifies dropping a setting.
+they're what justifies dropping a setting. Results from other people come
+in through the "Share match data" issue form.
 
 ## Match comparisons
 

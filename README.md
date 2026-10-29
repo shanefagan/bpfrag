@@ -131,7 +131,9 @@ pool = "wired"    # or "wifi", or "auto" (by your default route)
 ```
 
 `docs/scripts/matches.py --compare arm` then compares the two halves of
-each day's experiment.
+each day's experiment. To share your results, open a
+[Share match data](https://github.com/shanefagan/bpfrag/issues/new?template=match_data.yml)
+issue with the CSV that `matches.py` writes.
 **[docs/measuring.md](docs/measuring.md)** has the details, and results
 go in [docs/findings.md](docs/findings.md). `--dry-run` measures the same
 way but changes nothing, for a baseline.

@@ -1,0 +1,120 @@
+name: Share match data
+description: Results from your matches (an experiment, a dry-run baseline, or a game that talks TCP), for docs/findings.md.
+labels: [data]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks: real matches are the only way to tell which settings help.
+        docs/measuring.md explains how to collect them; the short version:
+
+        ```sh
+        docs/scripts/matches.py --since "2026-11-01" > matches.csv
+        ```
+
+        That's one row per match: the game, the experiment arm, and the
+        numbers from the health line. It has no IP addresses or host names,
+        but it does name the games you played, and when.
+
+  - type: textarea
+    id: matches
+    attributes:
+      label: Matches
+      description: >-
+        The CSV from matches.py: paste it, or drag matches.csv into this
+        box. Null results ("no difference") are as useful as differences.
+      render: text
+    validations:
+      required: true
+
+  - type: dropdown
+    id: what
+    attributes:
+      label: What was being compared
+      multiple: true
+      options:
+        - '[experiment] setting = "random"'
+        - "[experiment] with one setting named"
+        - Tuned against --dry-run
+        - A setup change (router QoS, CAKE, congestion control...)
+        - Nothing in particular, just my matches
+        - A game that talks TCP (tcp = "observe")
+    validations:
+      required: true
+
+  - type: input
+    id: system
+    attributes:
+      label: Distribution and kernel
+      placeholder: CachyOS, 7.3.0-2-cachyos
+    validations:
+      required: true
+
+  - type: dropdown
+    id: link
+    attributes:
+      label: Connection
+      multiple: true
+      options:
+        - Ethernet
+        - Wi-Fi
+        - VPN or tunnel
+    validations:
+      required: true
+
+  - type: input
+    id: line
+    attributes:
+      label: Internet line
+      description: Download and upload speed, roughly, and the kind of line.
+      placeholder: 950 down / 100 up, fibre
+
+  - type: dropdown
+    id: qos
+    attributes:
+      label: Queue management on the way out
+      description: Anything that shapes traffic or reads DSCP marks.
+      options:
+        - None that I know of
+        - Router QoS / SQM / Smart Queues
+        - CAKE on this PC
+        - Not sure
+
+  - type: textarea
+    id: background
+    attributes:
+      label: Running alongside the matches
+      description: Downloads, seeding, streams, other people on the network.
+      placeholder: ktorrent seeding most of the time, up to 20 Mbit/s
+
+  - type: textarea
+    id: tcp
+    attributes:
+      label: TCP game sessions
+      description: |
+        Only with `tcp = "observe"`: the lines from
+        `journalctl -u bpfrag | grep "TCP game"`.
+      render: text
+
+  - type: textarea
+    id: check
+    attributes:
+      label: sudo bpfrag --check
+      description: >-
+        Optional, but it shows which settings bpfrag actually changes on
+        your machine.
+      render: text
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: How the matches felt, anything unusual.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before posting
+      options:
+        - label: I looked through what I'm posting and I'm happy for it to be public.
+          required: true

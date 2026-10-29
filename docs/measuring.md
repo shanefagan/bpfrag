@@ -191,6 +191,15 @@ that's the finding. What a setting can do also depends on your
 distribution's defaults: `sudo bpfrag --check` shows which settings
 already hold their tier's value ([distros.md](distros.md)).
 
+## Sharing your results
+
+Open a [Share match data](https://github.com/shanefagan/bpfrag/issues/new?template=match_data.yml)
+issue and paste the CSV from `matches.py`, with a few lines about the
+setup: distribution, connection, line speed, any queue management, and
+what was running alongside. The CSV has no addresses or host names, but
+it does name the games and the times. Results go into
+[findings.md](findings.md), "no difference" included.
+
 ## When a counter moves
 
 - **Socket buffer drops:** check whether the game hitched at that moment.
