@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
-# Server for the e2e rig, on IPv4 10.99.0.2 and IPv6 fd00:99::2:
+# Server for the e2e rig, on IPv4 10.99.0.2 (and 10.99.0.3, a second
+# server for a game to move to) and IPv6 fd00:99::2:
 # - UDP 27015 echoes every datagram (the fake game's server);
 # - TCP 27016 is a bulk peer: a client sends "u" and then uploads (we read
 #   and drop it), or "d MBPS" and we send it MBPS megabits per second, or
@@ -44,7 +45,8 @@ def tcp_listener(lst):
         threading.Thread(target=bulk_peer, args=(conn,), daemon=True).start()
 
 socks = []
-for fam, addr in ((socket.AF_INET, "10.99.0.2"), (socket.AF_INET6, "fd00:99::2")):
+for fam, addr in ((socket.AF_INET, "10.99.0.2"), (socket.AF_INET, "10.99.0.3"),
+                  (socket.AF_INET6, "fd00:99::2")):
     try:
         s = socket.socket(fam, socket.SOCK_DGRAM)
         s.bind((addr, 27015))

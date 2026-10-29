@@ -15,6 +15,7 @@
  *   raw_tp/sched_process_exit                         game exit -> revert now
  *   tc egress (tcx link)                              DSCP marking
  *   tc ingress (tcx link)                             arrival gaps per game port,
+ *                                                     arrivals per game peer,
  *                                                     bulk flows demoted
  *
  * The tc programs only observe or rewrite, and always return TCX_NEXT so
@@ -123,6 +124,14 @@ struct {
 	__type(key, __u32);
 	__type(value, __u8);
 } observe_tgids SEC(".maps");
+
+/* (game port, remote address and port) -> arrivals (cleared per match) */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, MAX_PEERS);
+	__type(key, struct flow_key);
+	__type(value, struct peer_rx);
+} game_peers SEC(".maps");
 
 /* processes userspace declared bulk for this match */
 struct {
@@ -614,6 +623,25 @@ static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 	pr->resume_n = 0;
 }
 
+/* Count an arrival on a game port by who sent it. */
+static __always_inline void record_peer(struct flow_key *k, __u32 len)
+{
+	struct peer_rx *p = bpf_map_lookup_elem(&game_peers, k);
+	__u64 now = bpf_ktime_get_ns();
+
+	if (!p) {
+		struct peer_rx zero = { .first_ns = now };
+
+		bpf_map_update_elem(&game_peers, k, &zero, BPF_NOEXIST);
+		p = bpf_map_lookup_elem(&game_peers, k);
+		if (!p)
+			return;
+	}
+	__sync_fetch_and_add(&p->pkts, 1);
+	__sync_fetch_and_add(&p->bytes, len);
+	p->last_ns = now;
+}
+
 /*
  * Ingress: time arrivals on the game's ports, and demote incoming packets of
  * bulk flows. This runs before classic tc filters, so a desktop CAKE setup's
@@ -657,6 +685,12 @@ int bpfrag_rx(struct __sk_buff *skb)
 			return TCX_NEXT;
 		if (proto == IPPROTO_UDP && game_owns(bpf_ntohs(pt->dest))) {
 			record_arrival(bpf_ntohs(pt->dest), skb->napi_id);
+			k.family = AF_INET;
+			k.proto = proto;
+			k.lport = bpf_ntohs(pt->dest);
+			k.rport = bpf_ntohs(pt->source);
+			k.raddr[0] = ip->saddr;
+			record_peer(&k, skb->len);
 			return TCX_NEXT;
 		}
 		old_tos = ip->tos;
@@ -686,6 +720,12 @@ int bpfrag_rx(struct __sk_buff *skb)
 			return TCX_NEXT;
 		if (proto == IPPROTO_UDP && game_owns(bpf_ntohs(pt->dest))) {
 			record_arrival(bpf_ntohs(pt->dest), skb->napi_id);
+			k.family = AF_INET6;
+			k.proto = proto;
+			k.lport = bpf_ntohs(pt->dest);
+			k.rport = bpf_ntohs(pt->source);
+			__builtin_memcpy(k.raddr, ip6->saddr, 16);
+			record_peer(&k, skb->len);
 			return TCX_NEXT;
 		}
 		b0 = ip6->vtc_flow[0];

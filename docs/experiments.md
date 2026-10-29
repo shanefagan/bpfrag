@@ -46,6 +46,7 @@ There are four kinds:
 | 19 | [Would `tcp_notsent_lowat` help? (expected: no)](#19-tcp_notsent_lowat) | not planned | none |
 | 20 | [What does a TCP game's traffic look like?](#20-tcp-games) | observe (runs today) | MMO players |
 | 21 | [Do thin-stream timeouts help a game that talks TCP?](#21-thin-stream-tcp-timeouts) | Check, then Setup | TCP games on Wi-Fi |
+| 22 | [Where does one game end when the next starts straight away?](#22-back-to-back-games) | timelines (run today) | Deadlock Street Brawl, any queue-straight-in game |
 
 Entries 18 and 19, and parts of 5, 7, 9, 12 and M3, came from an outside
 review (October 2026); each was checked against kernel sources before
@@ -267,6 +268,44 @@ on, whether the longest freezes get shorter.
 **Decides:** timeouts happen and it shortens them: a setting for TCP
 games, with a knobs.md section and an `[experiment]` name. Timeouts never
 happen on a kind of link: leave it off there.
+
+### 22. Back-to-back games
+
+**Question:** when a game goes from one match straight into the next
+without going quiet (Deadlock's Street Brawl), what in its traffic marks
+the boundary, reliably enough for the detector to split matches there?
+
+**Why:** today such a run of games is one match: one health line, one
+experiment draw, numbers that mix five or six games
+([findings.md](findings.md#back-to-back-games)). Candidates, none checked
+yet:
+
+- **A new server.** A new match is usually a new game server, so the
+  remote address or port the game receives from changes. Deadlock reaches
+  its servers through Valve's relays, so the address it sees may stay the
+  same; the port may not.
+- **The end-of-game pattern.** In Deadlock the send rate jumps to match
+  the receive rate (about 105 packets a second each way, against 32 or 64
+  sent during play) for a few seconds at the end of each game. Other
+  games may do something similar while they show a scoreboard and load
+  the next map; that would only be worth a rule if it holds across games.
+- **A change of local socket** (port): some games open a new one per
+  match.
+
+**How:** `[capture] timeline = true` and a session of back-to-back games,
+noting roughly when each one ended. The end-of-match line and the log
+already show server changes ("the game's server changed 5 times";
+[detection.md](detection.md)); the timeline has the per-second rates,
+the server and the events to line up against the real boundaries.
+
+**Read it:** for each real boundary, whether the server changed, whether
+the end-of-game pattern was there, and whether either also happens in
+the middle of a game (a false split is worse than none).
+
+**Decides:** a signal that marks every boundary and nothing else: split
+matches on it (a new match with its own experiment draw, the settings
+staying applied). Several partial ones: combine them, or leave splitting
+off and keep counting server changes.
 
 ### 18. Byte Queue Limits
 
@@ -530,7 +569,7 @@ it.
 | M4 | Gaps between the game's outgoing packets (the egress marker sees them) to tell a game or host hiccup from a network one | all |
 | M5 | Timestamps of the last stalls in each match, to line them up with tier changes, scans and other events | 4, 7 |
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
-| M7 | The game's peer address (or its network) per match | 17 |
+| M7 | The game's peer address (or its network) per match. Partly done: the server is followed and named by a letter per address within a match ("server A:27031"), without the address itself; comparing servers across matches would need a stable name for one | 17, 22 |
 | M8 | Sub-millisecond arrival timing | 5, 13 |
 | M9 | The game's own TCP retransmissions and timeouts (the `tcp_retransmit_skb` tracepoint carries the socket, so it can be tied to the game's connection) | 21 |
 

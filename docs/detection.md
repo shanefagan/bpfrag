@@ -72,6 +72,29 @@ each match is its own match: its own health line, its own experiment
 draw, its own row in `matches.py`. A dip while you're dead or waiting to
 respawn stays well above that (Deadlock still gets 70+ packets a second).
 
+That needs the game to go quiet between matches, and some don't:
+Deadlock's Street Brawl goes from one game straight into the next, with
+traffic never under about 75 packets a second, so five or six games end
+up as one long match ([findings.md](findings.md#back-to-back-games)).
+bpfrag doesn't split those yet. It follows which server the game
+receives from, though (the remote address and port sending the most to
+the game's ports, at 10 packets a second or more), logs it, and logs
+when another one takes over for three seconds:
+
+```
+Deadlock: receiving from server A:27031 on local port 51234 (~64 pkt/s)
+Deadlock: server changed from A:27031 (now ~0 pkt/s) to B:27044 on local port 51234 (~62 pkt/s)
+```
+
+Servers are named by a letter per address, in the order they turn up,
+plus the port; addresses themselves are only logged at debug level
+(`-v`), since a game that talks peer to peer would put other players'
+home addresses in the log. The end-of-match line counts the changes
+("the game's server changed 5 times"). Whether a server change, or
+something else in the traffic, marks a new game reliably enough to split
+on is what `[capture] timeline` is for
+([measuring.md](measuring.md#match-timelines)).
+
 Rejections by the deny list (or `BPFRAG_GAME=0`) are only logged at debug
 level (`-v`). A steady UDP process with no game signals at all is logged
 once at info, since it may be a native game that needs `--allow`.

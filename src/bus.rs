@@ -172,6 +172,11 @@ pub fn health_dict(h: Option<&Health>) -> PropMap {
     if let Some(n) = h.busy_polled {
         put(&mut m, "busy_polled", Box::new(n));
     }
+    put(
+        &mut m,
+        "server_changes",
+        Box::new(u64::from(h.server_changes)),
+    );
     m
 }
 
@@ -801,6 +806,7 @@ mod tests {
         };
         let d = health_dict(Some(&h));
         assert_eq!(d["busy_polled"].0.as_u64(), Some(0));
+        assert_eq!(d["server_changes"].0.as_u64(), Some(0));
         assert!(!health_dict(Some(&Health::default())).contains_key("busy_polled"));
         assert_eq!(d["gap_p99_ms"].0.as_u64(), Some(31));
         assert_eq!(d["gap_max_ms"].0.as_f64(), Some(84.5));

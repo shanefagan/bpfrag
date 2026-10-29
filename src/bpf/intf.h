@@ -14,6 +14,7 @@ enum consts {
 	MAX_WATCH = 64,		/* processes we want exit events for */
 	MAX_OBSERVE = 256,	/* processes tagged BPFRAG_OBSERVE=1 */
 	MAX_PORTS = 1024,	/* game UDP ports being DSCP marked */
+	MAX_PEERS = 512,	/* (game port, remote address) pairs counted per match */
 	MAX_IFACES = 64,
 	MAX_BULK_FLOWS = 16384,	/* sockets of bulk processes being demoted */
 	GAP_BUCKETS = 64,	/* 1 ms each; the last one is ">= 63 ms" */
@@ -99,6 +100,19 @@ struct flow_key {
 
 struct bulk_flow {
 	__u32 tgid;	/* owner, so its flows can be dropped when it stops being bulk */
+};
+
+/*
+ * Packets arriving on a game port from one remote address and port (a
+ * server, a relay, a peer), keyed by a flow_key with the local address
+ * left zero. Which one carries the match shows when the game moves to a
+ * new server.
+ */
+struct peer_rx {
+	__u64 pkts;
+	__u64 bytes;
+	__u64 first_ns;
+	__u64 last_ns;
 };
 
 enum event_kind {

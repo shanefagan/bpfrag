@@ -10,8 +10,8 @@
 //! is still valid, and that non-game, stale-owner and fragment packets are
 //! left untouched; then that a bulk process's TCP and UDP flows are demoted
 //! to the bulk class, unless the app marked them itself. For the arrival
-//! meter, that packets to the game's port are counted and timed and nothing
-//! else is.
+//! meter, that packets to the game's port are counted, timed and counted
+//! per sender, and nothing else is.
 
 use std::mem::MaybeUninit;
 
@@ -433,7 +433,26 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
             want - 1
         ));
     }
-    Ok(format!("{want} packets, {gaps} gaps"))
+    // Who sent them: three from 10.99.0.1, one from fd00:99::1, both from
+    // OTHER_PORT; the ignored packets count for nobody.
+    let mut peers: Vec<(String, u16, u16, u64)> = crate::bpf::maps::read_game_peers(skel)
+        .into_iter()
+        .map(|(p, r)| (p.addr.to_string(), p.port, p.lport, r.pkts))
+        .collect();
+    peers.sort();
+    let expect = vec![
+        ("10.99.0.1".to_string(), OTHER_PORT, GAME_PORT, 3),
+        ("fd00:99::1".to_string(), OTHER_PORT, GAME_PORT, 1),
+    ];
+    if peers != expect {
+        return Err(format!(
+            "arrivals per sender {peers:?}, expected {expect:?}"
+        ));
+    }
+    Ok(format!(
+        "{want} packets, {gaps} gaps, {} senders",
+        peers.len()
+    ))
 }
 
 fn run_case(skel: &BpfSkel, c: &Case) -> Result<(), String> {

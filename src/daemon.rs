@@ -43,7 +43,7 @@ use crate::detect::observe::{ObsEvent, Observer, Proto, Rules};
 use crate::detect::tagged::{self, Tagged};
 use crate::detect::{Action, Detector, ProcessLookup, Sample, SessionInfo};
 use crate::experiment;
-use crate::health;
+use crate::health::{self, peers::ServerEvent, timeline::Timeline};
 use crate::net::{self, Iface};
 use crate::stats::{
     self, AppliedMetric, BulkMetric, Counters, DscpMetrics, Metrics, RecentMatch, SessionMetrics,
@@ -186,6 +186,8 @@ pub struct Tuner<'a> {
     experiment_period: String,
     /// This match's draw.
     arm: Option<experiment::Arm>,
+    /// `[capture] timeline`: this match's per-second record.
+    timeline: Option<Timeline>,
 }
 
 impl<'a> Tuner<'a> {
@@ -257,6 +259,7 @@ impl<'a> Tuner<'a> {
             experiment_period: String::new(),
             plan,
             arm: None,
+            timeline: None,
             bus,
             started_unix: 0,
             dry_run: run.dry_run,
@@ -447,6 +450,7 @@ impl<'a> Tuner<'a> {
                 maps::track_ports(&self.skel, s.tgid, true);
                 self.health.start(s.tgid, &self.candidates(&s));
                 self.started_unix = stats::now_unix();
+                self.start_timeline(&s);
                 self.apply_tier(&s);
                 // Properties first, so a listener that reads them when the
                 // signal arrives sees this match.
@@ -467,6 +471,9 @@ impl<'a> Tuner<'a> {
                         "{}: traffic now ~{:.0} pkt/s (tx {:.0}, rx {:.0}); {from} -> {to}",
                         s.name, s.pps, s.tx_pps, s.rx_pps
                     );
+                    if let Some(t) = self.timeline.as_mut() {
+                        t.event(format!("{from} -> {to}"));
+                    }
                     self.apply_tier(&s);
                     self.publish();
                     if let Some(b) = &self.bus {
@@ -477,6 +484,7 @@ impl<'a> Tuner<'a> {
             Action::End { session, reason } => {
                 let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
                 self.health.update(&maps::read_port_rx(&self.skel));
+                let timeline = self.finish_timeline(&format!("match ended ({reason})"));
                 let mut health = self.health.finish();
                 if let Some(h) = health.as_mut() {
                     h.bulk = self.bulk.moved();
@@ -518,6 +526,9 @@ impl<'a> Tuner<'a> {
                 if let Some(h) = health {
                     info!("{}: {}", session.name, h.summary());
                 }
+                if let Some(p) = timeline {
+                    info!("{}: timeline written to {}", session.name, p.display());
+                }
             }
             Action::Ignored {
                 tgid,
@@ -548,11 +559,32 @@ impl<'a> Tuner<'a> {
     /// Per-tick upkeep while a match runs: refresh its health, and every
     /// 2 s follow the game if its traffic moves to another interface
     /// (docking, Wi-Fi to Ethernet, a VPN coming up).
-    fn track_session(&mut self) {
+    fn track_session(&mut self, dt: f64, samples: &[Sample]) {
         let Some(s) = self.detector.session().cloned() else {
             return;
         };
-        self.health.update(&maps::read_port_rx(&self.skel));
+        let ports = maps::read_port_rx(&self.skel);
+        self.health.update(&ports);
+        let peers: Vec<_> = maps::read_game_peers(&self.skel)
+            .into_iter()
+            .map(|(p, r)| (p, r.pkts))
+            .collect();
+        for e in self.health.servers(dt, &peers) {
+            self.log_server(&s.name, &e);
+        }
+        if let Some(t) = self.timeline.as_mut() {
+            let row = health::timeline::Row {
+                tier: s.tier.name(),
+                sample: samples.iter().find(|x| x.tgid == s.tgid),
+                ports: &ports,
+                server: self.health.server(),
+                peers: self.health.active_peers(),
+            };
+            if let Err(e) = t.row(&row) {
+                warn!("Capture: can't write {}: {e}", t.path().display());
+                self.timeline = None;
+            }
+        }
         if self.last_path_check.elapsed() < Duration::from_secs(2) {
             return;
         }
@@ -851,6 +883,97 @@ impl<'a> Tuner<'a> {
         }
     }
 
+    /// `[capture] timeline`: open this match's file.
+    fn start_timeline(&mut self, s: &SessionInfo) {
+        self.timeline = None;
+        if !self.cfg.capture.timeline {
+            return;
+        }
+        let dir = Path::new(&self.cfg.general.state_dir).join("captures");
+        let about = format!(
+            "bpfrag {}{}; {} (pid {}) [{}]; experiment: {}",
+            env!("CARGO_PKG_VERSION"),
+            if self.dry_run { " (dry run)" } else { "" },
+            s.name,
+            s.tgid,
+            s.reason,
+            self.arm
+                .as_ref()
+                .map_or_else(|| "none".to_string(), experiment::Arm::label),
+        );
+        match Timeline::create(
+            &dir,
+            self.cfg.capture.keep,
+            self.started_unix,
+            &s.name,
+            &about,
+        ) {
+            Ok(mut t) => {
+                t.event(format!("match detected ({})", s.tier));
+                self.timeline = Some(t);
+            }
+            Err(e) => warn!("Capture: can't start a timeline in {}: {e}", dir.display()),
+        }
+    }
+
+    /// Close this match's timeline with a last row for `event`; its path
+    /// if it was written.
+    fn finish_timeline(&mut self, event: &str) -> Option<PathBuf> {
+        let mut t = self.timeline.take()?;
+        t.event(event);
+        let ports = maps::read_port_rx(&self.skel);
+        let row = health::timeline::Row {
+            tier: "",
+            ports: &ports,
+            server: self.health.server(),
+            peers: self.health.active_peers(),
+            ..Default::default()
+        };
+        let path = t.path().to_path_buf();
+        match t.row(&row).and_then(|()| t.finish()) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                warn!("Capture: can't write {}: {e}", path.display());
+                None
+            }
+        }
+    }
+
+    /// The game's server: the first, and each change, at info; addresses
+    /// only at debug (see `health::peers`).
+    fn log_server(&mut self, game: &str, e: &ServerEvent) {
+        match e {
+            ServerEvent::First { peer, label, pps } => {
+                info!(
+                    "{game}: receiving from server {label} on local port {} (~{pps:.0} pkt/s)",
+                    peer.lport
+                );
+                debug!("{game}: server {label} is {}", peer.addr);
+                if let Some(t) = self.timeline.as_mut() {
+                    t.event(format!("server {label}"));
+                }
+            }
+            ServerEvent::Changed {
+                from_label,
+                from_pps,
+                to,
+                to_label,
+                pps,
+                ..
+            } => {
+                info!(
+                    "{game}: server changed from {from_label} (now ~{from_pps:.0} pkt/s) to \
+                     {to_label} on local port {} (~{pps:.0} pkt/s)",
+                    to.lport
+                );
+                debug!("{game}: server {to_label} is {}", to.addr);
+                if let Some(t) = self.timeline.as_mut() {
+                    t.event(format!("server {from_label} -> {to_label}"));
+                }
+            }
+        }
+    }
+
     /// This match's experiment arm, or "" (for the D-Bus signals).
     fn arm_label(&self) -> String {
         self.arm
@@ -1127,7 +1250,7 @@ impl<'a> Tuner<'a> {
             self.track_tcp(dt, &samples);
             self.track_tagged(dt, &samples);
 
-            self.track_session();
+            self.track_session(dt, &samples);
             // Settings can move mid-match (a new network path).
             self.publish();
             let m = self.get_metrics();
@@ -1150,6 +1273,11 @@ impl Drop for Tuner<'_> {
         let arm = self.arm_label();
         let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
         let session = self.detector.take_session();
+        if let Some(s) = &session {
+            if let Some(p) = self.finish_timeline("bpfrag stopped") {
+                info!("{}: timeline written to {}", s.name, p.display());
+            }
+        }
         self.end_session(session.as_ref().map(|s| s.tgid));
         stats::remove(&self.run_dir);
         if let Some(obs) = self.tcp_games.as_mut() {

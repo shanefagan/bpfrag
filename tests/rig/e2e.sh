@@ -60,6 +60,7 @@ ip link add bpfrag0 type veth peer name bpfrag1
 ip link set bpfrag1 netns bpfrag-srv
 ip addr add 10.99.0.1/24 dev bpfrag0; ip link set bpfrag0 up
 ip -n bpfrag-srv addr add 10.99.0.2/24 dev bpfrag1; ip -n bpfrag-srv link set bpfrag1 up
+ip -n bpfrag-srv addr add 10.99.0.3/24 dev bpfrag1   # a second game server
 HAVE_V6=; if [ -e /proc/net/if_inet6 ]; then
   HAVE_V6=1
   ip -6 addr add fd00:99::1/64 dev bpfrag0 nodad
@@ -363,6 +364,33 @@ kill $TT $TU $TN; sleep 2
 grep -q "Observed randomd (pid $TT): TCP for [0-9]*s: typically 2[0-9] sends/s and 2[0-9] receives/s, 9[0-9] and 9[0-9] bytes each" $W/d11e.log && ok "its TCP session is summed up when it exits" || bad "tcp summary: $(grep -i observed $W/d11e.log)"
 grep -q "Observed randomd (pid $TU): UDP for [0-9]*s: typically [23][0-9] sends/s and [23][0-9] receives/s, 120 and 120 bytes each" $W/d11e.log && ok "its UDP session is summed up when it exits" || bad "udp summary: $(grep -i observed $W/d11e.log)"
 kill -INT $D; wait $D; D=
+
+echo "== 11f. the game's server: followed, changes logged, a timeline written"
+{ cat $W/cfg.toml; printf '[capture]\ntimeline = true\nkeep = 3\n'; } > $W/cfg11f.toml
+"$B" -c $W/cfg11f.toml > $W/d11f.log 2>&1 & D=$!; sleep 1
+# The same socket moves to a second server after 10 s without a pause,
+# like back-to-back games.
+export DEST2=10.99.0.3 SWITCH_AFTER=10; game 64 180; unset DEST2 SWITCH_AFTER
+sleep 18
+grep -Eq "fakeshooter: receiving from server A:27015 on local port [0-9]+ \(~[0-9]+ pkt/s\)" $W/d11f.log && ok "the first server is logged" || bad "first: $(grep -i server $W/d11f.log)"
+grep -Eq "fakeshooter: server changed from A:27015 \(now ~[0-9]+ pkt/s\) to B:27015 on local port [0-9]+" $W/d11f.log && ok "the move to a new server is logged" || bad "change: $(grep -i server $W/d11f.log)"
+grep -q "10\.99\.0\.[23]" $W/d11f.log && bad "server addresses logged at info: $(grep '10\.99' $W/d11f.log)" || ok "no server addresses at info"
+grep -q "Match ended" $W/d11f.log && bad "the match ended at the server change" || ok "still one match (no quiet spell to end it)"
+kill $G; sleep 2; kill -INT $D; wait $D; D=
+grep -q "fakeshooter: packet gaps.*; the game's server changed once" $W/d11f.log && ok "the summary counts the server change" || bad "summary: $(grep 'fakeshooter: packet' $W/d11f.log)"
+CSV=$(ls $W/state/captures/*_fakeshooter.csv 2>/dev/null | head -1)
+if [ -n "$CSV" ]; then
+  ok "a timeline was written ($(basename "$CSV"))"
+  grep -q "fakeshooter: timeline written to $CSV" $W/d11f.log && ok "its path is logged" || bad "path: $(grep timeline $W/d11f.log)"
+  head -1 "$CSV" | grep -q "^# bpfrag .*fakeshooter (pid $G) \[Steam app 4242\]; experiment: none" && ok "timeline header names the game" || bad "header: $(head -1 "$CSV")"
+  sed -n 2p "$CSV" | grep -q "^t,unix,tier,udp_tx_pps,udp_rx_pps," && ok "timeline columns" || bad "columns: $(sed -n 2p "$CSV")"
+  [ "$(grep -vc '^#' "$CSV")" -ge 15 ] && ok "about a row a second" || bad "rows: $(grep -vc '^#' "$CSV")"
+  awk -F, 'NR > 2 && $10 == "B:27015" && $4 >= 50' "$CSV" | grep -q . && ok "rows name the new server, with the game's rates" || bad "rows: $(tail -3 "$CSV")"
+  grep -q "server A:27015 -> B:27015" "$CSV" && grep -q "match ended (game exited)" "$CSV" && ok "server change and match end are events" || bad "events: $(cut -d, -f18- "$CSV" | sort -u)"
+  grep -q "10\.99\." "$CSV" && bad "addresses in the timeline" || ok "no addresses in the timeline"
+else
+  bad "no timeline in $W/state/captures: $(ls -la $W/state/captures 2>&1)"
+fi
 
 echo "== 12. D-Bus: read-only interface, readable by anyone"
 if command -v dbus-daemon >/dev/null && command -v dbus-monitor >/dev/null && command -v busctl >/dev/null; then

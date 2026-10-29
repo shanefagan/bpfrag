@@ -305,6 +305,27 @@ impl Default for Experiment {
     }
 }
 
+/// `[capture]`: extra per-match data, for working out what a game's
+/// traffic does.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Capture {
+    /// Write a per-second timeline of each match, as CSV, to
+    /// `<state_dir>/captures`.
+    pub timeline: bool,
+    /// Timelines kept; the oldest go first.
+    pub keep: usize,
+}
+
+impl Default for Capture {
+    fn default() -> Self {
+        Self {
+            timeline: false,
+            keep: 50,
+        }
+    }
+}
+
 /// `"auto"`, `"wired"`, `"wifi"`, or a list of setting names.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -508,6 +529,7 @@ struct ConfigFile {
     dscp: Dscp,
     bulk: Bulk,
     experiment: Experiment,
+    capture: Capture,
     tier: TiersFile,
 }
 
@@ -519,6 +541,7 @@ pub struct Config {
     pub dscp: Dscp,
     pub bulk: Bulk,
     pub experiment: Experiment,
+    pub capture: Capture,
     /// Indexed by `Tier as usize`; use `profile()`.
     pub profiles: [Profile; 3],
 }
@@ -532,6 +555,7 @@ impl Default for Config {
             dscp: Dscp::default(),
             bulk: Bulk::default(),
             experiment: Experiment::default(),
+            capture: Capture::default(),
             profiles: builtin_profiles(),
         }
     }
@@ -559,6 +583,7 @@ impl Config {
             dscp: file.dscp,
             bulk: file.bulk,
             experiment: file.experiment,
+            capture: file.capture,
             profiles,
         };
         cfg.validate()?;
@@ -631,6 +656,9 @@ impl Config {
             }
         }
         self.experiment_plan()?;
+        if self.capture.keep == 0 {
+            bail!("capture.keep must be >= 1");
+        }
         Ok(())
     }
 
@@ -703,6 +731,7 @@ impl Config {
             dscp: &'a Dscp,
             bulk: &'a Bulk,
             experiment: &'a Experiment,
+            capture: &'a Capture,
             tier: BTreeMap<String, TierOut>,
         }
         let tier = self
@@ -732,6 +761,7 @@ impl Config {
             dscp: &self.dscp,
             bulk: &self.bulk,
             experiment: &self.experiment,
+            capture: &self.capture,
             tier,
         })?)
     }

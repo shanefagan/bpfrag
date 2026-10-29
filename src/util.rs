@@ -44,6 +44,25 @@ pub fn first_match<'a>(patterns: &'a [String], names: &[&str]) -> Option<&'a str
     })
 }
 
+/// "2026-10-29_19-28-31" in local time for a Unix time (for file names).
+pub fn local_stamp(unix: i64) -> String {
+    let t = unix as libc::time_t;
+    // SAFETY: localtime_r only writes the tm we hand it.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if unsafe { libc::localtime_r(&t, &mut tm) }.is_null() {
+        return unix.to_string();
+    }
+    format!(
+        "{:04}-{:02}-{:02}_{:02}-{:02}-{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec
+    )
+}
+
 pub fn read_trim(path: impl AsRef<Path>) -> io::Result<String> {
     Ok(fs::read_to_string(path)?.trim().to_string())
 }

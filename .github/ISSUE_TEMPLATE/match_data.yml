@@ -99,6 +99,15 @@ body:
       render: text
 
   - type: textarea
+    id: timelines
+    attributes:
+      label: Match timelines
+      description: |
+        With `[capture] timeline = true`: drag CSV files from
+        `/var/lib/bpfrag/captures` in here (they hold no addresses). If you
+        played games back to back, say roughly when each one ended.
+
+  - type: textarea
     id: check
     attributes:
       label: sudo bpfrag --check

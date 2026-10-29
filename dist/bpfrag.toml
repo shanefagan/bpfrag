@@ -69,6 +69,13 @@
 # period = "day"         # with random: "day" (from 05:00) or "boot"
 # keep = 0.5             # share of matches that keep it on
 
+[capture]
+# timeline = true        # a per-second CSV of each match in
+#                        # <state_dir>/captures: the game's rates, its
+#                        # server, packet gaps, tier changes (about 300 KB
+#                        # an hour); see docs/measuring.md
+# keep = 50              # timelines kept, oldest removed first
+
 # Tiers: [tier.all] applies to every tier, then [tier.casual],
 # [tier.competitive], [tier.intense]. `knob = false` turns a knob off.
 # sysctl values prefixed with ">=" are raise-only.

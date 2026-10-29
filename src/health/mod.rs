@@ -23,6 +23,8 @@
 //! machine, so expect tuning to move the drop counters more than the gaps.
 
 pub mod counters;
+pub mod peers;
+pub mod timeline;
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -35,9 +37,10 @@ use crate::net::Iface;
 use crate::net::netdev::{self, RxQueue};
 use crate::net::sockets;
 use counters::{SysCounters, nic_overruns};
+use peers::{Peer, ServerEvent, Servers};
 
 /// Histogram buckets: 1 ms each, the last one "that long or longer".
-const BUCKETS: usize = bpf_intf::GAP_BUCKETS as usize;
+pub(crate) const BUCKETS: usize = bpf_intf::GAP_BUCKETS as usize;
 
 /// Arrival gaps on one game port, as the meter recorded them.
 #[derive(Clone, Debug, PartialEq)]
@@ -187,6 +190,10 @@ pub struct Health {
     /// moved anyway); None otherwise, or if the kernel doesn't report it.
     #[serde(default)]
     pub busy_polled: Option<u64>,
+    /// Times the game moved to another server (`peers`) without going
+    /// quiet: back-to-back games the detector saw as one match.
+    #[serde(default)]
+    pub server_changes: u32,
 }
 
 /// "412 MB", "1.3 GB".
@@ -237,6 +244,11 @@ impl Health {
         if let Some(q) = &self.rx_queue {
             s += &format!("; arrives on {}", q.describe());
         }
+        match self.server_changes {
+            0 => {}
+            1 => s += "; the game's server changed once",
+            n => s += &format!("; the game's server changed {n} times"),
+        }
         if self.game_tcp_bytes >= 1_000_000 {
             s += &format!("; the game's own TCP: {}", size(self.game_tcp_bytes));
         }
@@ -284,6 +296,8 @@ pub struct Tracker {
     /// Busy polling was on (`busy_poll` or `busy_read` above 0) at some
     /// reading this match, whoever set it.
     busy_on: bool,
+    /// Who the game receives from.
+    servers: Servers,
 }
 
 /// Seconds between readings of the game's sockets (a Proton game can hold
@@ -348,6 +362,7 @@ impl Tracker {
         self.latest = None;
         self.rx_queue = None;
         self.busy_on = false;
+        self.servers = Servers::default();
         self.watch(ifaces);
     }
 
@@ -395,8 +410,31 @@ impl Tracker {
             squeezed: sys.squeezed,
             rx_queue: self.rx_queue.clone(),
             busy_polled,
+            server_changes: self.servers.changes(),
             ..Default::default()
         });
+    }
+
+    /// One reading of packets per peer (`game_peers`), `dt` seconds after
+    /// the last: follows the game's server.
+    pub fn servers(&mut self, dt: f64, peers: &[(Peer, u64)]) -> Vec<ServerEvent> {
+        let events = self.servers.update(dt, peers);
+        if let Some(h) = self.latest.as_mut() {
+            h.server_changes = self.servers.changes();
+        }
+        events
+    }
+
+    /// "A:27031" and its packets a second, the game's current server.
+    pub fn server(&self) -> Option<(String, f64)> {
+        self.servers
+            .main()
+            .map(|(p, pps)| (self.servers.label(&p), pps))
+    }
+
+    /// Peers that sent the game anything in the last reading.
+    pub fn active_peers(&self) -> usize {
+        self.servers.active()
     }
 
     pub fn latest(&self) -> Option<&Health> {
@@ -410,7 +448,12 @@ impl Tracker {
         self.rx_queue = None;
         self.game = None;
         self.busy_on = false;
-        self.latest.take()
+        let changes = self.servers.changes();
+        self.servers = Servers::default();
+        self.latest.take().map(|mut h| {
+            h.server_changes = changes;
+            h
+        })
     }
 }
 
@@ -483,6 +526,24 @@ mod tests {
             ..g
         };
         assert_eq!(unreadable.drops(), None);
+    }
+
+    #[test]
+    fn server_changes_show_when_there_were_any() {
+        let one = Health {
+            server_changes: 1,
+            ..Default::default()
+        };
+        assert!(one.summary().ends_with("; the game's server changed once"));
+        let five = Health {
+            server_changes: 5,
+            ..Default::default()
+        };
+        assert!(
+            five.summary()
+                .ends_with("; the game's server changed 5 times")
+        );
+        assert!(!Health::default().summary().contains("server"));
     }
 
     #[test]

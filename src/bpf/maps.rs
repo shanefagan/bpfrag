@@ -14,6 +14,7 @@ use super::from_bytes;
 use crate::bpf_intf;
 use crate::bpf_skel::BpfSkel;
 use crate::detect::Sample;
+use crate::health::peers::Peer;
 
 /// Cumulative UDP and TCP counters for every process the BPF side has seen,
 /// summed over CPUs. A process's entry disappears when it exits.
@@ -190,13 +191,27 @@ pub fn read_port_rx(skel: &BpfSkel) -> Vec<(u16, bpf_intf::port_rx)> {
         .collect()
 }
 
-/// Forget all arrival statistics (between matches).
+/// Forget all arrival statistics, per port and per peer (between
+/// matches).
 pub fn clear_port_rx(skel: &BpfSkel) {
-    let map = &skel.maps.port_rx;
-    let keys: Vec<Vec<u8>> = map.keys().collect();
-    for k in keys {
-        let _ = map.delete(&k);
+    for map in [&skel.maps.port_rx, &skel.maps.game_peers] {
+        let keys: Vec<Vec<u8>> = map.keys().collect();
+        for k in keys {
+            let _ = map.delete(&k);
+        }
     }
+}
+
+/// Arrivals on the game's ports per remote address and port.
+pub fn read_game_peers(skel: &BpfSkel) -> Vec<(Peer, bpf_intf::peer_rx)> {
+    let map = &skel.maps.game_peers;
+    map.keys()
+        .filter_map(|key| {
+            let v = map.lookup(&key, MapFlags::ANY).ok().flatten()?;
+            let k: bpf_intf::flow_key = from_bytes(&key);
+            Some((Peer::from_key(&k)?, from_bytes(&v)))
+        })
+        .collect()
 }
 
 /// A handle on the exit-event ring buffer, for `RingBufferBuilder`.

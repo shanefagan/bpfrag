@@ -37,6 +37,28 @@ the 100 Mbit/s upload (seeding with no upload limit), where a queue can
 form, and read the game's ping or net graph alongside bpfrag's numbers:
 the arrival meter only sees incoming packets.
 
+### Back-to-back games
+
+**2026-10-29: five or six Deadlock Street Brawl games became one match.**
+bpfrag 0.7.2, wired. Played one after another without closing the game,
+they were logged as one match of 1h49m. Between games the traffic never
+dropped under about 75 packets a second, so the quiet check (10 packets a
+second or fewer for 15 seconds) never fired, and the game only exited at
+the end. The games are still visible in the tier-change lines: each seems
+to end with a few seconds of equal traffic both ways, about 105 packets a
+second each way (tx 99 to 110, rx 101 to 111), where play has the game
+sending 32 or 64. That pattern turned up six times, the last 6 seconds
+before the game exited, giving games of 13 to 22 minutes, which fits
+Street Brawl. The same pattern appears twice in a 54-minute "match" on
+2026-10-28, which was probably several games too. What would mark the
+boundary reliably is [experiment 22](experiments.md#22-back-to-back-games).
+
+The same session had busy polling on throughout (`[experiment]`
+`busy_polling`, "on" arm): 160,405 busy-polled packets, about 24 a
+second, machine-wide. So busy polling does run on this machine during
+matches, but the count can't say whose packets they were
+([experiment 1](experiments.md#1-does-busy-polling-reach-the-game)).
+
 ## Games observed
 
 Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`

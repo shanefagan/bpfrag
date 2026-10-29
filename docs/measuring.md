@@ -162,7 +162,46 @@ and `--compare mode` (tuned against dry-run) work the same way.
 
 For a spreadsheet instead, leave out `--compare`; label sessions with
 `--label`. A `gap_p99_ms` of 64 means "over 63 ms", the histogram's last
-bucket.
+bucket. A `server_changes` above 0 means the row is several games the
+detector saw as one ([detection.md](detection.md)): its numbers mix them,
+so leave it out of comparisons, or count it once per game by hand.
+
+## Match timelines
+
+The end-of-match line sums a whole match up. To see what happens inside
+one (where one game ends and the next begins, when the server sends at
+half its usual rate, what the traffic does around a stall), turn on
+timelines:
+
+```toml
+[capture]
+timeline = true
+keep = 50        # the newest 50 are kept
+```
+
+Each match then gets a CSV file in `/var/lib/bpfrag/captures`, named by
+its start time and the game, logged at the end of the match ("timeline
+written to ..."). It's about 300 KB an hour, written out every 30 seconds
+rather than a row at a time. The first line is a `#`
+comment with the bpfrag version, the game and the experiment arm, then a
+row a second:
+
+| Column | Meaning |
+|---|---|
+| `t`, `unix` | seconds since the match started; the time |
+| `tier` | the tier in effect |
+| `udp_tx_pps`, `udp_rx_pps` | the game's UDP datagrams a second, all its sockets |
+| `udp_tx_bytes_s`, `udp_rx_bytes_s` | the same in bytes |
+| `tcp_tx_bytes_s`, `tcp_rx_bytes_s` | the game's own TCP |
+| `server`, `server_pps` | the server it receives from (a letter per address, and the port) and its packets a second |
+| `peers` | addresses and ports that sent the game anything that second (relay pings included) |
+| `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps on the main port that second; 64 is over 63 ms |
+| `stalls` | stalls that finished that second |
+| `events` | match start and end, tier changes, server changes |
+
+There are no addresses in it, so it can be attached to a "Share match
+data" issue as it is. Any spreadsheet or `pandas.read_csv(path,
+comment="#")` reads it.
 
 ## The comparisons worth running first
 
