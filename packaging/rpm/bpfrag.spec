@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.5.1
+Version:        0.6.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -118,6 +118,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Thu Oct 29 2026 Shane Fagan <mail@shanefagan.com> - 0.6.0-1
+- Daily random experiments; observe games that talk TCP; issue form for match data
+
 * Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.5.1-1
 - Released bulk flows stop being demoted at once; IPv6 receive checksum; D-Bus empty interface name
 
