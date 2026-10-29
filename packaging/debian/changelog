@@ -1,3 +1,9 @@
+bpfrag (0.7.2-1) unstable; urgency=medium
+
+  * Count busy-polled packets per match
+
+ -- Shane Fagan <mail@shanefagan.com>  Thu, 29 Oct 2026 14:52:08 +0000
+
 bpfrag (0.7.1-1) unstable; urgency=medium
 
   * Docs: Path of Exile 2 traffic findings; thin-stream TCP timeouts experiment
