@@ -44,6 +44,7 @@ There are four kinds:
 | 17 | [How much do time of day and the server matter?](#17-time-of-day-and-server) | analysis, needs M7 | any |
 | 18 | [Is BQL letting this machine queue much in the NIC?](#18-byte-queue-limits) | Check | wired, uploading from this PC |
 | 19 | [Would `tcp_notsent_lowat` help? (expected: no)](#19-tcp_notsent_lowat) | not planned | none |
+| 20 | [What does a TCP game's traffic look like?](#20-tcp-games) | observe (runs today) | MMO players |
 
 Entries 18 and 19, and parts of 5, 7, 9, 12 and M3, came from an outside
 review (October 2026); each was checked against kernel sources before
@@ -184,6 +185,29 @@ timestamps; compare with stall times (M5).
 **Decides:** if yes, a setting to hold off background scans during a
 match (via NetworkManager, or wpa_supplicant's `bgscan` over D-Bus)
 becomes worth building. That needs care: roaming relies on scans.
+
+### 20. TCP games
+
+**Question:** what does a game that talks TCP look like on the wire, and
+is it regular enough to detect and tune like a UDP match?
+
+**Why:** World of Warcraft and other MMOs, and many older games, use TCP,
+so bpfrag never sees them as matches. Whether their traffic is steady
+enough to tell from a browser or a download, which tiers would fit, and
+whether any setting helps them, is unknown; TCP also brings its own
+settings (Nagle, delayed acknowledgements, retransmission timers) that UDP
+games don't have, which would need their own knobs.md sections first.
+
+**How:** `[detect] tcp = "observe"`. bpfrag then logs a "TCP game seen"
+line and a "TCP game session" summary for every game that talks TCP both
+ways for 10 seconds: typical send and receive rates, message sizes, how
+steady the rate is, how long, how much ([detection.md](detection.md#games-that-talk-tcp)).
+Several sessions of normal play, in towns, in raids, idle, is the data.
+Send it with the "Share match data" issue form.
+
+**Decides:** steady and distinct: a TCP match detector, then
+experiments for any settings it gets. Indistinguishable from background
+TCP: leave TCP games alone, and say so.
 
 ### 18. Byte Queue Limits
 

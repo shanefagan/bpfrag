@@ -34,11 +34,13 @@ use crate::bpf::{self, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
 use crate::bus::{self, Bus};
-use crate::config::{Config, ExperimentPlan, Period, Pool, Profile, Tier, parse_dscp};
+use crate::config::{Config, ExperimentPlan, Period, Pool, Profile, TcpMode, Tier, parse_dscp};
 use crate::detect::bulk::{BulkDetector, BulkEvent};
+use crate::detect::classify::Verdict;
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
-use crate::detect::{Action, Detector, Sample, SessionInfo};
+use crate::detect::tcp_games::{TcpEvent, TcpObserver};
+use crate::detect::{Action, Detector, ProcessLookup, Sample, SessionInfo};
 use crate::experiment;
 use crate::health;
 use crate::net::{self, Iface};
@@ -163,6 +165,10 @@ pub struct Tuner<'a> {
     egress: Egress,
     /// Finished matches, newest first.
     recent: VecDeque<RecentMatch>,
+    /// `[detect] tcp = "observe"`: games that talk TCP, logged only.
+    tcp_games: Option<TcpObserver>,
+    /// The match's game's own TCP bytes: at its first tick, and now.
+    game_tcp: (Option<u64>, u64),
     /// What `[experiment]` asks for (None in a dry run, which changes
     /// nothing to switch off).
     plan: ExperimentPlan,
@@ -202,7 +208,13 @@ impl<'a> Tuner<'a> {
         rodata.set_priority = cfg.dscp.set_priority;
         rodata.bulk_dscp = parse_dscp(&cfg.bulk.class)?;
 
-        let skel = open.load().context("loading BPF programs")?;
+        let mut skel = open.load().context("loading BPF programs")?;
+        // Watching TCP games needs TCP counted all the time, not only
+        // during a match.
+        let tcp_games = (cfg.detect.tcp == TcpMode::Observe).then(TcpObserver::default);
+        if tcp_games.is_some() {
+            maps::count_tcp(&mut skel, true);
+        }
 
         let mut links = Vec::new();
         {
@@ -224,6 +236,8 @@ impl<'a> Tuner<'a> {
         };
         let bus = cfg.general.dbus.then(|| Bus::new(run.dry_run));
         Ok(Self {
+            tcp_games,
+            game_tcp: (None, 0),
             experiment: None,
             experiment_period: String::new(),
             plan,
@@ -374,7 +388,10 @@ impl<'a> Tuner<'a> {
         self.egress.reset();
         self.bulk.reset();
         maps::clear_bulk(&mut self.skel);
-        maps::count_tcp(&mut self.skel, false);
+        if self.tcp_games.is_none() {
+            maps::count_tcp(&mut self.skel, false);
+        }
+        self.game_tcp = (None, 0);
         let (done, kept) = self.knobs.restore_all();
         if !done.is_empty() {
             debug!("restored: {}", done.join(", "));
@@ -450,6 +467,10 @@ impl<'a> Tuner<'a> {
                     h.bulk = self.bulk.moved();
                     h.bulk_class = self.bulk_marks().then(|| self.cfg.bulk.class.clone());
                     h.experiment = self.arm.as_ref().map(experiment::Arm::label);
+                    h.game_tcp_bytes = self
+                        .game_tcp
+                        .1
+                        .saturating_sub(self.game_tcp.0.unwrap_or(self.game_tcp.1));
                 }
                 self.recent.push_front(RecentMatch {
                     name: session.name.clone(),
@@ -584,6 +605,26 @@ impl<'a> Tuner<'a> {
         } else {
             (marker, ifaces)
         }
+    }
+
+    /// The match's game's own TCP (map or replay downloads, say), and with
+    /// `tcp = "observe"`, games that talk only TCP.
+    fn track_tcp(&mut self, dt: f64, samples: &[Sample]) {
+        let game = self.detector.session().map(|s| s.tgid);
+        if let Some(s) = game.and_then(|g| samples.iter().find(|s| s.tgid == g)) {
+            let now = s.tcp_tx_bytes + s.tcp_rx_bytes;
+            self.game_tcp = (Some(self.game_tcp.0.unwrap_or(now)), now);
+        }
+        let Some(obs) = self.tcp_games.as_mut() else {
+            return;
+        };
+        let procs = &mut self.procs;
+        let exclude: Vec<u32> = game.into_iter().collect();
+        let events = obs.tick(dt, samples, &exclude, |tgid| match procs.verdict(tgid) {
+            (Verdict::Game(reason), name) => Some((name, reason)),
+            _ => None,
+        });
+        log_tcp_events(&events);
     }
 
     /// Settle which setting is under test, logging it when that changes:
@@ -1000,6 +1041,7 @@ impl<'a> Tuner<'a> {
                 self.handle(a);
             }
             self.track_bulk(dt, &samples);
+            self.track_tcp(dt, &samples);
 
             self.track_session();
             // Settings can move mid-match (a new network path).
@@ -1026,6 +1068,9 @@ impl Drop for Tuner<'_> {
         let session = self.detector.take_session();
         self.end_session(session.as_ref().map(|s| s.tgid));
         stats::remove(&self.run_dir);
+        if let Some(obs) = self.tcp_games.as_mut() {
+            log_tcp_events(&obs.finish());
+        }
         // Tell listeners the match is over for them too: its settings
         // have just been restored.
         if let Some(b) = self.bus.as_mut() {
@@ -1035,6 +1080,26 @@ impl Drop for Tuner<'_> {
                 b.match_ended(s.tgid, &s.name, "bpfrag stopped", secs, &peak, &arm, None);
             }
             b.flush();
+        }
+    }
+}
+
+fn log_tcp_events(events: &[TcpEvent]) {
+    for e in events {
+        match e {
+            TcpEvent::Seen {
+                tgid,
+                name,
+                reason,
+                tx_per_s,
+                rx_per_s,
+            } => info!(
+                "TCP game seen: {name} (pid {tgid}) at ~{tx_per_s:.0} sends/s and \
+                 ~{rx_per_s:.0} receives/s [{reason}]; observing only, nothing is tuned"
+            ),
+            TcpEvent::Ended { summary, .. } => {
+                info!("TCP game session: {}", summary.describe())
+            }
         }
     }
 }

@@ -36,6 +36,8 @@ pub fn read_proc_stats(skel: &BpfSkel) -> Vec<Sample> {
             s.rx_bytes += ps.rx_bytes;
             s.tcp_tx_bytes += ps.tcp_tx_bytes;
             s.tcp_rx_bytes += ps.tcp_rx_bytes;
+            s.tcp_tx_msgs += ps.tcp_tx_msgs;
+            s.tcp_rx_msgs += ps.tcp_rx_msgs;
             if ps.ifindex != 0 {
                 s.ifindex = ps.ifindex;
             }

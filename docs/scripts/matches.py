@@ -43,13 +43,14 @@ DROPS = re.compile(
 SQUEEZE = re.compile(r"ran out of budget (\d+)x")
 QUEUE = re.compile(r"arrives on ([^;]+)")
 BULK = re.compile(r"bulk: (.*?)( marked \w+| \(not marked\))(?:;|$)")
+GAME_TCP = re.compile(r"the game's own TCP: ([^;]+)")
 EXPERIMENT = re.compile(r"; experiment: (\S+) (on|off)\b")
 
 FIELDS = [
     "label", "started", "game", "mode", "version", "start_tier", "peak_tier",
     "duration_s", "end_reason", "start_pps", "gap_p50_ms", "gap_p99_ms",
     "gap_longest_ms", "stalls", "socket_drops", "game_socket_drops", "backlog_drops",
-    "nic_drops", "squeezed", "rx_queue", "bulk", "bulk_marked", "experiment", "arm", "reason",
+    "nic_drops", "squeezed", "rx_queue", "game_tcp", "bulk", "bulk_marked", "experiment", "arm", "reason",
 ]
 
 
@@ -102,6 +103,8 @@ def parse(lines, label):
             cur["squeezed"] = q.group(1) if q else 0
             if q := QUEUE.search(line):
                 cur["rx_queue"] = q.group(1).strip()
+            if g := GAME_TCP.search(line):
+                cur["game_tcp"] = g.group(1).strip()
             if b := BULK.search(line):
                 cur["bulk"] = b.group(1)
                 cur["bulk_marked"] = b.group(2).replace(" marked ", "").strip(" ()")

@@ -146,6 +146,13 @@ pub fn run(cfg: &Config) -> bool {
             format!("random, one setting per {:?} ({saved})", e.period).to_lowercase(),
         );
     }
+    if cfg.detect.tcp == crate::config::TcpMode::Observe {
+        line(
+            None,
+            "TCP games",
+            "observed and logged, never tuned (TCP is counted all the time)",
+        );
+    }
     if cfg.general.dbus {
         let (ok, detail) = crate::bus::check();
         line(ok, "D-Bus", detail);

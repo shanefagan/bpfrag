@@ -209,7 +209,7 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	proto = BPF_CORE_READ(sk, sk_protocol);
 	if (proto == IPPROTO_TCP) {
 		if (!count_tcp)
-			return; /* no match on: nothing needs it */
+			return; /* no match on, and not watching TCP games */
 	} else if (proto != IPPROTO_UDP) {
 		return;
 	}
@@ -232,10 +232,13 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 
 	/* per-CPU value: plain increments are safe */
 	if (proto == IPPROTO_TCP) {
-		if (tx)
+		if (tx) {
+			st->tcp_tx_msgs++;
 			st->tcp_tx_bytes += ret;
-		else
+		} else {
+			st->tcp_rx_msgs++;
 			st->tcp_rx_bytes += ret;
+		}
 		return;
 	}
 	if (!tx) {

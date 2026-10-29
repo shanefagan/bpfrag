@@ -20,6 +20,11 @@
 # margin = 15
 # linger_secs = 15       # quiet time before the match is over
 # pin_tier = "competitive"   # ignore the tick rate, always use this tier
+# Games that talk TCP (World of Warcraft, older games) aren't detected as
+# matches. "observe" logs what their traffic looks like (rates, message
+# sizes, how steady), tuning nothing, to gather data on them. It counts
+# TCP for every process all the time, which costs a little CPU.
+# tcp = "observe"
 
 [classify]
 # Native games launched outside Steam/Lutris/Heroic etc. can also be tagged

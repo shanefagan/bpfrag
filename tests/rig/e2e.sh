@@ -19,7 +19,7 @@ snap() { for k in $KEYS; do echo "$k = $(sysctl -n $k 2>&1 | tr '\t' ' ')"; done
 same() { snap > $W/now; if diff -q $W/base $W/now >/dev/null; then ok "$1: settings identical to baseline"; else bad "$1"; diff $W/base $W/now; fi; }
 
 cleanup() {
-  pkill -f "^[^ ]*(fakeshooter|Discord|firefox|randomd|steam|obs) $W/" 2>/dev/null
+  pkill -f "^[^ ]*(fakeshooter|fakemmo|Discord|firefox|randomd|steam|obs) $W/" 2>/dev/null
   [ -n "${SRV:-}" ] && kill $SRV 2>/dev/null
   [ -n "${D:-}" ] && kill -INT $D 2>/dev/null && wait $D 2>/dev/null
   [ -n "${MONP:-}" ] && kill $MONP 2>/dev/null
@@ -36,9 +36,10 @@ cleanup() {
 trap cleanup EXIT
 
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
-cp "$HERE/client.py" "$HERE/server.py" "$HERE/bulk.py" $W/
-mkdir -p $W/steamapps/common/FakeShooter $W/apps
+cp "$HERE/client.py" "$HERE/server.py" "$HERE/bulk.py" "$HERE/tcpgame.py" $W/
+mkdir -p $W/steamapps/common/FakeShooter $W/steamapps/common/FakeMMO $W/apps
 ln -s "$(command -v python3)" $W/steamapps/common/FakeShooter/fakeshooter
+ln -s "$(command -v python3)" $W/steamapps/common/FakeMMO/fakemmo
 for n in Discord firefox randomd steam obs; do ln -s "$(command -v python3)" $W/apps/$n; done
 ln -s "$(command -v sleep)" $W/apps/bpftune
 # D-Bus stays off here: a test instance must never speak on the machine's
@@ -325,6 +326,20 @@ grep -q "Experiment: backlog off for this match" $W/d11c2.log && ok "matches dra
 kill $G; sleep 2; kill -INT $D; wait $D; D=
 "$B" -c $W/cfg11c.toml --check 2>/dev/null | grep -q "experiment .*random, one setting per day (now: backlog)" && ok "--check shows today's pick" || bad "check: $("$B" -c $W/cfg11c.toml --check 2>&1 | grep -i experiment)"
 same "after random experiment"
+
+echo "== 11d. games that talk TCP: observed, never tuned"
+{ sed 's/^\[detect\]$/[detect]\ntcp = "observe"/' $W/cfg.toml; } > $W/cfg11d.toml
+"$B" -c $W/cfg11d.toml > $W/d11d.log 2>&1 & D=$!; sleep 1
+SteamAppId=4243 $W/steamapps/common/FakeMMO/fakemmo $W/tcpgame.py 20 & TG=$!
+$W/apps/randomd $W/tcpgame.py 20 & TN=$!
+sleep 14
+grep -q "TCP game seen: fakemmo (pid $TG) at ~2[0-9] sends/s and ~2[0-9] receives/s \[Steam app 4243\]; observing only" $W/d11d.log && ok "a TCP game is seen at its message rate" || bad "seen: $(grep -i 'tcp game' $W/d11d.log)"
+grep -q "TCP game seen: randomd" $W/d11d.log && bad "a non-game was reported" || ok "TCP from a non-game process isn't reported"
+grep -q "Match detected" $W/d11d.log && bad "a TCP game started a match" || ok "nothing tuned for it"
+same "while a TCP game is observed"
+kill $TG $TN; sleep 2
+grep -q "TCP game session: fakemmo for [0-9]*s: typically 2[0-9] sends/s and 2[0-9] receives/s, 9[0-9] and 9[0-9] bytes each" $W/d11d.log && ok "its session is summed up when it exits" || bad "summary: $(grep -i 'tcp game' $W/d11d.log)"
+kill -INT $D; wait $D; D=
 
 echo "== 12. D-Bus: read-only interface, readable by anyone"
 if command -v dbus-daemon >/dev/null && command -v dbus-monitor >/dev/null && command -v busctl >/dev/null; then

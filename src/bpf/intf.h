@@ -46,6 +46,10 @@ struct proc_stats {
 	__u32 _pad;
 	__u64 tcp_tx_bytes;
 	__u64 tcp_rx_bytes;
+	/* TCP sendmsg/recvmsg calls: a TCP game's message rate, roughly (one
+	 * call can carry several segments, or a read several messages) */
+	__u64 tcp_tx_msgs;
+	__u64 tcp_rx_msgs;
 };
 
 /* Local UDP port owned by a game process, learned in the send hook. */

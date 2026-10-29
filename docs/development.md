@@ -73,9 +73,9 @@ AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
 ## Testing
 
 ```sh
-cargo test                     # detectors, classifier, config, journal, health, report, D-Bus, packaging (95 tests)
+cargo test                     # detectors, classifier, config, journal, health, report, D-Bus, packaging (101 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (29 checks)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (96 checks)
+sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (101 checks)
 ```
 
 `--selftest` loads the BPF object on your running kernel and pushes

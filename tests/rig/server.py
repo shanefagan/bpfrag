@@ -2,7 +2,8 @@
 # Server for the e2e rig, on IPv4 10.99.0.2 and IPv6 fd00:99::2:
 # - UDP 27015 echoes every datagram (the fake game's server);
 # - TCP 27016 is a bulk peer: a client sends "u" and then uploads (we read
-#   and drop it), or "d MBPS" and we send it MBPS megabits per second.
+#   and drop it), or "d MBPS" and we send it MBPS megabits per second, or
+#   "e" and we echo everything back (a game that talks TCP).
 import select, socket, threading, time
 
 def bulk_peer(conn):
@@ -14,6 +15,16 @@ def bulk_peer(conn):
             while conn.recv(65536):
                 pass
             return
+        if cmd[0] == "e":
+            conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            try:
+                while True:
+                    d = conn.recv(4096)
+                    if not d:
+                        return
+                    conn.sendall(d)
+            except OSError:
+                return
         per_sec = float(cmd[1]) * 1e6 / 8
         chunk = b"y" * 16384
         nxt = time.monotonic()

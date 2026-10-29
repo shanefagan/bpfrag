@@ -93,7 +93,9 @@ game library path, Wine/Proton, a launcher ancestor, gamemode or MangoHud,
 and allow and deny lists, so a Discord call or a browser's QUIC traffic
 doesn't count. The tier follows the packet rate (about twice the server's
 tick rate), with hysteresis. A match ends the moment the game exits, or
-after 15 quiet seconds.
+after 15 quiet seconds. Games that talk only TCP (World of Warcraft, older
+games) aren't tuned yet; `[detect] tcp = "observe"` logs what their
+traffic looks like, to gather the data for that.
 
 `sudo bpfrag --dry-run -v` with `bpfrag --monitor 1` in another terminal
 shows the detector's view. [docs/detection.md](docs/detection.md) has the

@@ -178,6 +178,10 @@ pub struct Health {
     /// The `[experiment]` arm this match got, e.g. "busy_polling off".
     #[serde(default)]
     pub experiment: Option<String>,
+    /// TCP the game itself moved during the match (map or replay
+    /// downloads, voice through the game's servers).
+    #[serde(default)]
+    pub game_tcp_bytes: u64,
 }
 
 /// "412 MB", "1.3 GB".
@@ -224,6 +228,9 @@ impl Health {
         }
         if let Some(q) = &self.rx_queue {
             s += &format!("; arrives on {}", q.describe());
+        }
+        if self.game_tcp_bytes >= 1_000_000 {
+            s += &format!("; the game's own TCP: {}", size(self.game_tcp_bytes));
         }
         if !self.bulk.is_empty() {
             let list: Vec<String> = self
@@ -448,6 +455,25 @@ mod tests {
             ..g
         };
         assert_eq!(unreadable.drops(), None);
+    }
+
+    #[test]
+    fn the_games_own_tcp_shows_when_it_matters() {
+        let h = Health {
+            game_tcp_bytes: 120_000_000,
+            ..Default::default()
+        };
+        assert!(
+            h.summary()
+                .ends_with("no drops; the game's own TCP: 120 MB"),
+            "{}",
+            h.summary()
+        );
+        let small = Health {
+            game_tcp_bytes: 40_000,
+            ..Default::default()
+        };
+        assert!(!small.summary().contains("TCP"));
     }
 
     #[test]

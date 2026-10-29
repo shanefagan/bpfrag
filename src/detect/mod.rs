@@ -26,6 +26,7 @@
 pub mod bulk;
 pub mod classify;
 pub mod egress;
+pub mod tcp_games;
 
 use std::collections::{HashMap, VecDeque};
 
@@ -55,6 +56,9 @@ pub struct Sample {
     /// TCP bytes, for spotting bulk transfers.
     pub tcp_tx_bytes: u64,
     pub tcp_rx_bytes: u64,
+    /// TCP send/receive calls, for watching TCP games.
+    pub tcp_tx_msgs: u64,
+    pub tcp_rx_msgs: u64,
 }
 
 impl Sample {

@@ -78,6 +78,36 @@ If you want to see the detector's view of your system, run
 monitor lists the busiest UDP processes, their rates and the verdict for each.
 
 
+## Games that talk TCP
+
+Match detection looks for a steady two-way UDP stream, which is how most
+competitive games talk. Some games use TCP instead (World of Warcraft and
+other MMOs, many older games), and UDP games also use TCP on the side (a
+map or replay download). bpfrag doesn't tune for TCP games yet: what
+their traffic looks like across games isn't known well enough to detect
+them reliably.
+
+`[detect] tcp = "observe"` gathers that data. With it, bpfrag counts TCP
+send and receive calls per process all the time (which costs a little CPU
+on every TCP send and receive), and for any process the classifier calls
+a game (a launcher parent, a Steam app, a game path, the allow list) that
+keeps talking TCP both ways for 10 seconds, it logs:
+
+```
+TCP game seen: Wow.exe (pid 4242) at ~18 sends/s and ~25 receives/s [launched by lutris]; observing only, nothing is tuned
+TCP game session: Wow.exe for 1h12m03s: typically 18 sends/s and 25 receives/s, 64 and 210 bytes each, rate variation 0.41, 38 MB in all
+```
+
+The session ends after 30 quiet seconds or when the game exits. Rates are
+of send and receive calls, not packets. "Rate variation" is the mean
+deviation of the per-second rate over its mean: near 0 for a game that
+ticks like a metronome, far above 1 for a download. Nothing is changed for
+these games in any mode.
+
+During a UDP match, the game's own TCP traffic is always counted, and the
+match's health line says how much it moved when it's over 1 MB ("the
+game's own TCP: 120 MB"), so a map download during a match shows up.
+
 ## Bulk transfers
 
 While a match is on, a second detector (`src/detect/bulk.rs`) follows
