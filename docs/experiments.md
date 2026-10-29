@@ -1,7 +1,7 @@
 # Experiments to run
 
-A backlog: things worth testing, why, and what each would take. None has
-been run yet. When one is, its result goes in [findings.md](findings.md)
+A backlog: things worth testing, why, and what each would take. Most
+haven't been run yet. When one is, its result goes in [findings.md](findings.md)
 (null results too) and its entry here gets a link to it.
 
 Each entry says:
@@ -45,6 +45,7 @@ There are four kinds:
 | 18 | [Is BQL letting this machine queue much in the NIC?](#18-byte-queue-limits) | Check | wired, uploading from this PC |
 | 19 | [Would `tcp_notsent_lowat` help? (expected: no)](#19-tcp_notsent_lowat) | not planned | none |
 | 20 | [What does a TCP game's traffic look like?](#20-tcp-games) | observe (runs today) | MMO players |
+| 21 | [Do thin-stream timeouts help a game that talks TCP?](#21-thin-stream-tcp-timeouts) | Check, then Setup | TCP games on Wi-Fi |
 
 Entries 18 and 19, and parts of 5, 7, 9, 12 and M3, came from an outside
 review (October 2026); each was checked against kernel sources before
@@ -210,9 +211,58 @@ also answers whether a game is UDP or TCP in the first place (Path of
 Exile 2, say). Several sessions of normal play, in towns, in raids, idle,
 is the data. Send it with the "Share match data" issue form.
 
+**Results so far:** Path of Exile 2 talks TCP, about 30 small messages a
+second each way ([findings.md](findings.md#games-observed)).
+
 **Decides:** steady and distinct: a TCP match detector, then
 experiments for any settings it gets. Indistinguishable from background
 TCP: leave TCP games alone, and say so.
+
+### 21. Thin-stream TCP timeouts
+
+**Question:** does `net.ipv4.tcp_thin_linear_timeouts = 1` shorten the
+worst freezes of a game that talks TCP?
+
+**Why:** a game sending about 30 small messages a second, like Path of
+Exile 2 ([findings.md](findings.md#games-observed)), rarely has 4 or more
+packets in flight: a thin stream
+([`Documentation/networking/tcp-thin.rst`](https://docs.kernel.org/networking/tcp-thin.html)).
+It can't collect the three duplicate acknowledgements fast retransmit
+needs, so a lost packet waits for the tail loss probe (RACK-TLP, on by
+default: `tcp_early_retrans = 3`, RFC 8985) or for the retransmission
+timeout, at least 200 ms (`tcp_rto_min_us`). If the retransmission is
+lost too, the timeout doubles each time. With `tcp_thin_linear_timeouts`
+on, an established thin connection keeps the same timeout for up to six
+retransmissions before backing off (`TCP_THIN_LINEAR_RETRIES`,
+`tcp_retransmit_timer()` in `net/ipv4/tcp_timer.c`). The kernel reads the
+sysctl when the timer fires, so turning it on during a match reaches a
+connection the game already has. Its old companion `tcp_thin_dupack` is
+gone: the sysctl was removed, and the `TCP_THIN_DUPACK` socket option is
+accepted and ignored (`net/ipv4/tcp.c`); RACK covers what it did.
+
+Over TCP, a lost packet holds up everything behind it until it's
+resent, and a lockstep game waits for it, so these are freezes a player
+feels. But the setting only changes what happens once a retransmission
+is itself lost (the first timeout is the same), and only for what this
+machine sends, the game's inputs: the server's retransmissions are up to
+its own kernel. Hypothesis: it helps on lossy Wi-Fi or a phone hotspot
+and changes nothing on a clean wired line, where back-to-back losses are
+rare.
+
+**How:** check first whether timeouts happen at all during play:
+`nstat -az TcpExtTCPTimeouts TcpRetransSegs` before and after a session
+(machine-wide, so quiet the rest of the machine), or `ss -ti` on the
+game's connection (`retrans:` and `backoff:`). If they do, compare
+sessions with the sysctl set by hand, reading the game's own latency
+display. For bpfrag to set it per match, it first needs a tier for TCP
+games (entry 20), which makes this A/B+.
+
+**Read it:** retransmission timeouts per hour of play; with the setting
+on, whether the longest freezes get shorter.
+
+**Decides:** timeouts happen and it shortens them: a setting for TCP
+games, with a knobs.md section and an `[experiment]` name. Timeouts never
+happen on a kind of link: leave it off there.
 
 ### 18. Byte Queue Limits
 
@@ -478,6 +528,7 @@ it.
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
 | M7 | The game's peer address (or its network) per match | 17 |
 | M8 | Sub-millisecond arrival timing | 5, 13 |
+| M9 | The game's own TCP retransmissions and timeouts (the `tcp_retransmit_skb` tracepoint carries the socket, so it can be tied to the game's connection) | 21 |
 
 ## Out of scope
 

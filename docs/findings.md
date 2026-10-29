@@ -37,6 +37,33 @@ the 100 Mbit/s upload (seeding with no upload limit), where a queue can
 form, and read the game's ping or net graph alongside bpfrag's numbers:
 the arrival meter only sees incoming packets.
 
+## Games observed
+
+Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`
+([detection.md](detection.md#observing-one-game-bpfrag_observe1)): what
+their traffic looks like, before deciding whether and how to detect and
+tune them ([experiments.md](experiments.md#20-tcp-games)).
+
+**2026-10-29: Path of Exile 2 talks TCP.** CachyOS, wired, bpfrag 0.7.0,
+the game started from Steam (Proton) with `BPFRAG_OBSERVE=1 %command%`,
+about a minute and a half in the game, probably logging in and in town.
+The game process had one TCP session and no UDP session (one is reported
+after 10 seconds of traffic, or a megabyte):
+
+```
+Observed Path of Exile 2 (PathOfExileSteam, pid 1329391): TCP for 1m34s: typically 27 sends/s and 30 receives/s, 14 and 68 bytes each, rate variation 0.27, <1 MB in all
+```
+
+About 30 small messages a second each way, roughly 0.4 KB/s up and 2 KB/s
+down, so the packets are mostly headers. The rate was fairly steady from
+second to second (a download is far above 1 on that measure); the first
+10 seconds were slower, about 14 sends a second. At that rate the
+connection rarely has 4 or more packets in flight, which the kernel calls
+a thin stream ([experiments.md](experiments.md#21-thin-stream-tcp-timeouts)).
+Nothing was tuned: match detection only looks at UDP. Not known yet:
+whether the rate changes in maps and fights, and whether this looks
+different enough from other TCP (a browser, a chat client) to detect.
+
 ## Open questions
 
 The questions the comparisons above should answer, in rough priority.
