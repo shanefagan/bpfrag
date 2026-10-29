@@ -39,7 +39,7 @@ use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::Verdict;
 use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
-use crate::detect::tcp_games::{TcpEvent, TcpObserver};
+use crate::detect::observe::{ObsEvent, Observer, Rules};
 use crate::detect::{Action, Detector, ProcessLookup, Sample, SessionInfo};
 use crate::experiment;
 use crate::health;
@@ -166,7 +166,7 @@ pub struct Tuner<'a> {
     /// Finished matches, newest first.
     recent: VecDeque<RecentMatch>,
     /// `[detect] tcp = "observe"`: games that talk TCP, logged only.
-    tcp_games: Option<TcpObserver>,
+    tcp_games: Option<Observer>,
     /// The match's game's own TCP bytes: at its first tick, and now.
     game_tcp: (Option<u64>, u64),
     /// What `[experiment]` asks for (None in a dry run, which changes
@@ -211,7 +211,8 @@ impl<'a> Tuner<'a> {
         let mut skel = open.load().context("loading BPF programs")?;
         // Watching TCP games needs TCP counted all the time, not only
         // during a match.
-        let tcp_games = (cfg.detect.tcp == TcpMode::Observe).then(TcpObserver::default);
+        let tcp_games =
+            (cfg.detect.tcp == TcpMode::Observe).then(|| Observer::new(Rules::TCP_GAMES));
         if tcp_games.is_some() {
             maps::count_tcp(&mut skel, true);
         }
@@ -1084,10 +1085,10 @@ impl Drop for Tuner<'_> {
     }
 }
 
-fn log_tcp_events(events: &[TcpEvent]) {
+fn log_tcp_events(events: &[ObsEvent]) {
     for e in events {
         match e {
-            TcpEvent::Seen {
+            ObsEvent::Seen {
                 tgid,
                 name,
                 reason,
@@ -1097,7 +1098,7 @@ fn log_tcp_events(events: &[TcpEvent]) {
                 "TCP game seen: {name} (pid {tgid}) at ~{tx_per_s:.0} sends/s and \
                  ~{rx_per_s:.0} receives/s [{reason}]; observing only, nothing is tuned"
             ),
-            TcpEvent::Ended { summary, .. } => {
+            ObsEvent::Ended { summary, .. } => {
                 info!("TCP game session: {}", summary.describe())
             }
         }

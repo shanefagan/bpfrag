@@ -26,7 +26,7 @@
 pub mod bulk;
 pub mod classify;
 pub mod egress;
-pub mod tcp_games;
+pub mod observe;
 
 use std::collections::{HashMap, VecDeque};
 
