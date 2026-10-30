@@ -7,7 +7,9 @@
 //!
 //! `com.performativenonsense.Bpfrag1` at `/com/performativenonsense/Bpfrag1`, one
 //! interface of the same name. Properties describe the match in progress;
-//! signals mark its start, its tier changes and its end. There are no
+//! signals mark its start, its tier changes and its end, and StateChanged
+//! every move between no game, a game's menu and a match, with the time it
+//! happened by the game's traffic (for cutting a recording). There are no
 //! methods, and `Set` is refused, so nothing on the bus can change what
 //! bpfrag does. Everything published is also in /run/bpfrag/stats.json,
 //! which any user can read; the list of other processes' UDP rates and
@@ -45,10 +47,33 @@ const PEER: &str = "org.freedesktop.DBus.Peer";
 /// How long to wait before trying the bus again after it went away.
 const RETRY: Duration = Duration::from_secs(30);
 
+/// What bpfrag sees the game doing: the `State` property.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Phase {
+    /// No game, or a game without traffic worth a look.
+    #[default]
+    Idle,
+    /// A game whose traffic stays on this machine: a menu or a local
+    /// server (Deadlock's menu).
+    Menu,
+    Match,
+}
+
+impl Phase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Phase::Idle => "idle",
+            Phase::Menu => "menu",
+            Phase::Match => "match",
+        }
+    }
+}
+
 /// What the properties say. The daemon builds one every tick; whatever
 /// changed goes out as a single PropertiesChanged signal.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct State {
+    pub phase: Phase,
     /// The game's process id; 0 between matches.
     pub game_pid: u32,
     pub game: String,
@@ -58,6 +83,12 @@ pub struct State {
     pub tier: String,
     /// When the match started, in Unix seconds; 0 between matches.
     pub since: u64,
+    /// When the match's traffic began, in Unix milliseconds: earlier than
+    /// `since`, which waits for the traffic to settle. 0 between matches.
+    pub started_at_ms: u64,
+    /// The game's Steam app id; 0 between matches or if Steam didn't
+    /// launch it.
+    pub app_id: u32,
     /// The `[experiment]` arm, e.g. "busy_polling off"; "" if none.
     pub experiment: String,
     /// (setting, value now, value before the match)
@@ -76,6 +107,9 @@ const NAMES: &[&str] = &[
     "MatchSince",
     "Experiment",
     "Applied",
+    "State",
+    "AppId",
+    "MatchStartedAt",
 ];
 
 /// Everything the properties are read from.
@@ -98,6 +132,9 @@ impl Published {
             "MatchSince" => Box::new(s.since),
             "Experiment" => Box::new(s.experiment.clone()),
             "Applied" => Box::new(s.applied.clone()),
+            "State" => Box::new(s.phase.as_str().to_string()),
+            "AppId" => Box::new(s.app_id),
+            "MatchStartedAt" => Box::new(s.started_at_ms),
             _ => return None,
         })
     }
@@ -141,6 +178,15 @@ fn changed(old: &State, new: &State) -> Vec<&'static str> {
     if old.applied != new.applied {
         v.push("Applied");
     }
+    if old.phase != new.phase {
+        v.push("State");
+    }
+    if old.app_id != new.app_id {
+        v.push("AppId");
+    }
+    if old.started_at_ms != new.started_at_ms {
+        v.push("MatchStartedAt");
+    }
     v
 }
 
@@ -177,6 +223,47 @@ pub fn health_dict(h: Option<&Health>) -> PropMap {
         "server_changes",
         Box::new(u64::from(h.server_changes)),
     );
+    m
+}
+
+/// What StateChanged reports about a state: the game, if any.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BusPhase {
+    pub phase: Phase,
+    pub pid: u32,
+    pub game: String,
+    pub app_id: u32,
+}
+
+/// A match that just ended, by its traffic.
+#[derive(Clone, Debug)]
+pub struct Ended {
+    pub started_at_ms: u64,
+    pub ended_at_ms: u64,
+    pub reason: String,
+}
+
+/// StateChanged's info: where it came from, the game (the new state's, or
+/// the old one's on the way to idle), when it happened, and the match
+/// that ended, if one did.
+pub fn state_info(from: &BusPhase, to: &BusPhase, at_ms: u64, ended: Option<&Ended>) -> PropMap {
+    fn put(m: &mut PropMap, k: &str, v: Box<dyn RefArg>) {
+        m.insert(k.into(), Variant(v));
+    }
+    let mut m = PropMap::new();
+    put(&mut m, "from", Box::new(from.phase.as_str().to_string()));
+    put(&mut m, "at_ms", Box::new(at_ms));
+    let game = if to.phase == Phase::Idle { from } else { to };
+    if game.pid != 0 {
+        put(&mut m, "pid", Box::new(game.pid));
+        put(&mut m, "game", Box::new(game.game.clone()));
+        put(&mut m, "app_id", Box::new(game.app_id));
+    }
+    if let Some(e) = ended.filter(|_| from.phase == Phase::Match) {
+        put(&mut m, "match_started_at_ms", Box::new(e.started_at_ms));
+        put(&mut m, "match_ended_at_ms", Box::new(e.ended_at_ms));
+        put(&mut m, "end_reason", Box::new(e.reason.clone()));
+    }
     m
 }
 
@@ -341,6 +428,11 @@ impl Bus {
             .append3(pid, game, tier)
             .append2(reason, experiment);
         self.send(m);
+    }
+
+    /// The move to `state` (see [`Phase`]), with what's known about it.
+    pub fn state_changed(&self, state: Phase, info: PropMap) {
+        self.send(signal("StateChanged").append2(state.as_str(), info));
     }
 
     pub fn tier_changed(&self, pid: u32, game: &str, from: &str, to: &str) {
@@ -561,6 +653,9 @@ const OBJECT_XML: &str = r#"<node>
     <property name="MatchSince" type="t" access="read"/>
     <property name="Experiment" type="s" access="read"/>
     <property name="Applied" type="a(sss)" access="read"/>
+    <property name="State" type="s" access="read"/>
+    <property name="AppId" type="u" access="read"/>
+    <property name="MatchStartedAt" type="t" access="read"/>
     <signal name="MatchStarted">
       <arg name="pid" type="u"/>
       <arg name="game" type="s"/>
@@ -573,6 +668,10 @@ const OBJECT_XML: &str = r#"<node>
       <arg name="game" type="s"/>
       <arg name="from" type="s"/>
       <arg name="to" type="s"/>
+    </signal>
+    <signal name="StateChanged">
+      <arg name="state" type="s"/>
+      <arg name="info" type="a{sv}"/>
     </signal>
     <signal name="MatchEnded">
       <arg name="pid" type="u"/>
@@ -628,6 +727,9 @@ mod tests {
         Published {
             dry_run: false,
             state: State {
+                phase: Phase::Match,
+                started_at_ms: 1_699_999_998_250,
+                app_id: 730,
                 game_pid: 6230,
                 game: "cs2".into(),
                 reason: "Steam app 730".into(),
@@ -677,6 +779,9 @@ mod tests {
         assert_eq!(keys, want);
         assert_eq!(all["GamePid"].0.as_u64(), Some(6230));
         assert_eq!(all["Experiment"].0.as_str(), Some("busy_polling off"));
+        assert_eq!(all["State"].0.as_str(), Some("match"));
+        assert_eq!(all["AppId"].0.as_u64(), Some(730));
+        assert_eq!(all["MatchStartedAt"].0.as_u64(), Some(1_699_999_998_250));
     }
 
     #[test]
@@ -785,6 +890,52 @@ mod tests {
         let idle = State::default();
         let c = changed(&a, &idle);
         assert!(c.contains(&"InMatch") && c.contains(&"GamePid") && c.contains(&"Applied"));
+        assert!(c.contains(&"State") && c.contains(&"AppId") && c.contains(&"MatchStartedAt"));
+        let menu = State {
+            phase: Phase::Menu,
+            ..State::default()
+        };
+        assert_eq!(changed(&idle, &menu), ["State"]);
+    }
+
+    #[test]
+    fn state_changes_say_what_and_when() {
+        let deadlock = |phase| BusPhase {
+            phase,
+            pid: 4242,
+            game: "Deadlock".into(),
+            app_id: 1422450,
+        };
+        let idle = BusPhase::default();
+        // into a match: the game, and when its traffic began
+        let m = state_info(&idle, &deadlock(Phase::Match), 1_000, None);
+        assert_eq!(m["from"].0.as_str(), Some("idle"));
+        assert_eq!(m["at_ms"].0.as_u64(), Some(1_000));
+        assert_eq!(m["app_id"].0.as_u64(), Some(1422450));
+        assert!(!m.contains_key("match_ended_at_ms"));
+        // back to the menu: the match that ended, by its traffic
+        let ended = Ended {
+            started_at_ms: 1_000,
+            ended_at_ms: 1_800_000,
+            reason: "its traffic stayed on this machine for 15s".into(),
+        };
+        let m = state_info(
+            &deadlock(Phase::Match),
+            &deadlock(Phase::Menu),
+            ended.ended_at_ms,
+            Some(&ended),
+        );
+        assert_eq!(m["from"].0.as_str(), Some("match"));
+        assert_eq!(m["match_started_at_ms"].0.as_u64(), Some(1_000));
+        assert_eq!(m["match_ended_at_ms"].0.as_u64(), Some(1_800_000));
+        assert_eq!(m["game"].0.as_str(), Some("Deadlock"));
+        // the game leaving: idle, still naming it
+        let m = state_info(&deadlock(Phase::Menu), &idle, 2_000_000, Some(&ended));
+        assert_eq!(m["pid"].0.as_u64(), Some(4242));
+        assert!(!m.contains_key("match_ended_at_ms"), "no match was on");
+        // nothing to name
+        let m = state_info(&idle, &idle, 5, None);
+        assert!(!m.contains_key("pid"));
     }
 
     #[test]

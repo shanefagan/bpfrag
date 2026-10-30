@@ -236,6 +236,12 @@ pub struct SessionInfo {
     /// Highest tier and rate so far in this match.
     pub peak_tier: Tier,
     pub peak_pps: f64,
+    /// When the match's traffic began, and when it was last seen, on the
+    /// detector's clock (`now`). Both are earlier than the Start and End
+    /// actions, which wait for the traffic to settle: a recording can be
+    /// cut by these.
+    pub began: f64,
+    pub last_seen: f64,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -289,6 +295,9 @@ struct Session {
     quiet_secs: f64,
     /// Seconds the match's traffic has stayed on this machine.
     local_secs: f64,
+    /// Traffic from outside has been measured in this match, so it's what
+    /// `last_seen` follows.
+    saw_outside: bool,
 }
 
 /// A game being watched, not (yet) a match.
@@ -302,6 +311,10 @@ struct Watched {
     /// Its traffic was found to stay on this machine.
     local: bool,
     quiet_secs: f64,
+    /// When its steady traffic began, and the current run of windows with
+    /// traffic from outside, on the detector's clock.
+    since: f64,
+    outside_since: Option<f64>,
 }
 
 /// What the detector needs to know about a process. In the daemon this is
@@ -570,7 +583,13 @@ impl Detector {
                 && t.jitter() <= cfg.max_jitter;
             t.steady = if steady_now { t.steady + 1 } else { 0 };
             if t.steady >= cfg.steady_windows && Some(tgid) != session_tgid {
-                candidates.push((tgid, t.smooth(), t.smooth_dirs(), t.ifindex));
+                candidates.push((
+                    tgid,
+                    t.smooth(),
+                    t.smooth_dirs(),
+                    t.ifindex,
+                    now - f64::from(t.steady) * dt,
+                ));
             }
         }
         if self.session.is_some() || self.watched.is_some() {
@@ -578,7 +597,7 @@ impl Detector {
         }
         // Busiest candidate first.
         candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (tgid, pps, (tx_pps, rx_pps), ifindex) in candidates {
+        for (tgid, pps, (tx_pps, rx_pps), ifindex, began) in candidates {
             if self.ignored.contains_key(&tgid) {
                 continue;
             }
@@ -594,6 +613,8 @@ impl Detector {
                         windows: 0,
                         local: false,
                         quiet_secs: 0.0,
+                        since: began,
+                        outside_since: None,
                     });
                     actions.push(Action::Watch {
                         tgid,
@@ -605,6 +626,7 @@ impl Detector {
                 Verdict::Game(reason) => {
                     actions.push(self.start(
                         now,
+                        began,
                         tgid,
                         name,
                         reason,
@@ -634,6 +656,7 @@ impl Detector {
     fn start(
         &mut self,
         now: f64,
+        began: f64,
         tgid: u32,
         name: String,
         reason: String,
@@ -656,6 +679,8 @@ impl Detector {
             ifindex,
             peak_tier: tier,
             peak_pps: pps,
+            began,
+            last_seen: now,
         };
         self.paths.clear();
         self.session = Some(Session {
@@ -665,6 +690,7 @@ impl Detector {
             last_change: now,
             quiet_secs: 0.0,
             local_secs: 0.0,
+            saw_outside: false,
         });
         Action::Start(info)
     }
@@ -699,6 +725,11 @@ impl Detector {
             w.quiet_secs = 0.0;
         }
         let latest = self.paths.back().copied().unwrap_or_default();
+        if latest.outside_pps >= idle {
+            w.outside_since.get_or_insert(now - dt);
+        } else {
+            w.outside_since = None;
+        }
         let go = if w.local {
             // back from a menu: two windows in three from outside
             where_now(&self.paths, 3, idle) == Where::Outside
@@ -723,6 +754,11 @@ impl Detector {
             return Vec::new();
         }
         let w = self.watched.take().expect("watched");
+        // Traffic from outside began with this run of windows; a game the
+        // meter can't see began when its steady traffic did.
+        let began = w
+            .outside_since
+            .unwrap_or(if w.local { now - dt } else { w.since });
         // The match starts with this window: earlier ones may be the game
         // talking to itself (a menu at 256 pkt/s would make it INTENSE).
         let Some(t) = self.tracks.get_mut(&tgid) else {
@@ -734,7 +770,7 @@ impl Detector {
         let pps = t.smooth();
         let dirs = t.smooth_dirs();
         let ifindex = t.ifindex;
-        vec![self.start(now, tgid, w.name, w.reason, pps, dirs, ifindex)]
+        vec![self.start(now, began, tgid, w.name, w.reason, pps, dirs, ifindex)]
     }
 
     /// Close the session, handing its final state to the caller.
@@ -777,6 +813,8 @@ impl Detector {
                     windows: 0,
                     local: true,
                     quiet_secs: 0.0,
+                    since: now,
+                    outside_since: None,
                 });
                 let ifindex = self.tracks.get(&tgid).map_or(0, |t| t.ifindex);
                 out.push(Action::Watch {
@@ -805,6 +843,21 @@ impl Detector {
         };
         let pps = t.smooth();
         let idle = t.idle_ticks > 0;
+        // The match's traffic: from outside once that's been measured,
+        // otherwise any.
+        let outside = self.paths.back().map(|p| p.outside_pps);
+        let idle_pps = self.cfg.idle_pps as f64;
+        if self.check_paths && outside.is_some_and(|o| o >= idle_pps) {
+            sess.saw_outside = true;
+        }
+        let seen = if sess.saw_outside {
+            outside.is_some_and(|o| o >= idle_pps)
+        } else {
+            t.last().total() >= idle_pps
+        };
+        if seen {
+            sess.info.last_seen = now;
+        }
         sess.info.pps = pps;
         sess.info.peak_pps = sess.info.peak_pps.max(pps);
         (sess.info.tx_pps, sess.info.rx_pps) = t.smooth_dirs();
@@ -1344,6 +1397,47 @@ mod tests {
         sim.arrivals = outside(64.0);
         let a = sim.run(4, &[(7, 64, 64, 200)]);
         assert_eq!(starts(&a).len(), 1, "{a:?}");
+    }
+
+    #[test]
+    fn a_match_knows_when_its_traffic_began_and_stopped() {
+        let mut sim = Sim::with_paths(&[7]);
+        sim.arrivals = local(128.0);
+        sim.run(10, &[(7, 128, 128, 220)]);
+        // outside traffic from the window ending at 11
+        sim.arrivals = outside(64.0);
+        let a = sim.run(3, &[(7, 64, 64, 200)]);
+        let s = starts(&a)[0];
+        assert_eq!(s.began, 10.0, "{s:?}");
+        assert!(s.began < sim.now - 1.0);
+        sim.run(20, &[(7, 64, 64, 200)]);
+        let last = sim.now;
+        sim.arrivals = local(128.0);
+        let a = sim.run(25, &[(7, 128, 128, 220)]);
+        let ended = a
+            .iter()
+            .find_map(|x| match x {
+                Action::End { session, .. } => Some(session.clone()),
+                _ => None,
+            })
+            .expect("ended");
+        // the end is reported well after the outside traffic stopped,
+        // but knows when that was
+        assert_eq!(ended.last_seen, last, "{ended:?}");
+        assert_eq!(ended.began, 10.0);
+
+        // without the meter: the steady traffic's start
+        let mut sim = Sim::new(&[7]);
+        let a = sim.run(6, &[(7, 64, 64, 200)]);
+        let s = starts(&a)[0];
+        assert!(s.began < sim.now - 1.0, "{s:?}");
+        sim.run(5, &[(7, 64, 64, 200)]);
+        let last = sim.now;
+        let a = sim.run(30, &[]);
+        assert!(
+            has(&a, |x| matches!(x, Action::End { session, .. } if session.last_seen == last)),
+            "{a:?}"
+        );
     }
 
     #[test]

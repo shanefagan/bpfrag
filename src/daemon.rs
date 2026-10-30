@@ -33,7 +33,7 @@ use crate::bpf::tc::{Role, TcSet};
 use crate::bpf::{self, maps};
 use crate::bpf_intf;
 use crate::bpf_skel::{BpfSkel, BpfSkelBuilder};
-use crate::bus::{self, Bus};
+use crate::bus::{self, Bus, BusPhase, Ended, state_info};
 use crate::config::{Config, ExperimentPlan, Period, Pool, Profile, TcpMode, Tier, parse_dscp};
 use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::Verdict;
@@ -162,6 +162,16 @@ pub struct Tuner<'a> {
     /// same in Unix seconds for the D-Bus `MatchSince` property.
     session_start: Option<Instant>,
     started_unix: u64,
+    /// The detector's clock at its last window, and when that was, to
+    /// turn the times it reports into Unix time.
+    det_clock: (f64, Instant),
+    /// The match's Steam app id and when its traffic began (Unix ms).
+    app_id: u32,
+    started_at_ms: u64,
+    /// The last state sent on the bus, and the match that just ended, for
+    /// StateChanged.
+    bus_phase: BusPhase,
+    ended: Option<Ended>,
     /// The read-only D-Bus interface, unless `[general] dbus = false`.
     bus: Option<Bus>,
     /// (pid, start time) of processes already reported as ignored.
@@ -277,6 +287,11 @@ impl<'a> Tuner<'a> {
             meter_prev: HashMap::new(),
             bus,
             started_unix: 0,
+            det_clock: (0.0, Instant::now()),
+            app_id: 0,
+            started_at_ms: 0,
+            bus_phase: BusPhase::default(),
+            ended: None,
             dry_run: run.dry_run,
             stats_every: run.stats_every,
             knobs: Knobs::new(&run_dir, run.dry_run),
@@ -466,6 +481,37 @@ impl<'a> Tuner<'a> {
         }
         self.session_start = None;
         self.arm = None;
+        self.app_id = 0;
+        self.started_at_ms = 0;
+    }
+
+    /// Unix milliseconds for a time on the detector's clock.
+    fn unix_ms(&self, at: f64) -> u64 {
+        let (now, then) = self.det_clock;
+        let ago = (now - at).max(0.0) + then.elapsed().as_secs_f64();
+        stats::now_unix_ms().saturating_sub((ago * 1000.0) as u64)
+    }
+
+    /// No game, a game in its menu (its traffic stays on this machine), or
+    /// a match; with the game's pid, name and Steam app id.
+    fn phase_now(&self) -> BusPhase {
+        if let Some(s) = self.detector.session() {
+            return BusPhase {
+                phase: bus::Phase::Match,
+                pid: s.tgid,
+                game: s.name.clone(),
+                app_id: self.app_id,
+            };
+        }
+        match self.detector.watched() {
+            Some((tgid, name, true)) => BusPhase {
+                phase: bus::Phase::Menu,
+                pid: tgid,
+                game: name.to_string(),
+                app_id: self.procs.app_id(tgid),
+            },
+            _ => BusPhase::default(),
+        }
     }
 
     /// Act on one thing the detector reported.
@@ -497,6 +543,8 @@ impl<'a> Tuner<'a> {
                 maps::track_ports(&self.skel, s.tgid, true);
                 self.health.start(s.tgid, &self.candidates(&s));
                 self.started_unix = stats::now_unix();
+                self.app_id = self.procs.app_id(s.tgid);
+                self.started_at_ms = self.unix_ms(s.began);
                 self.start_timeline(&s);
                 self.apply_tier(&s);
                 // Properties first, so a listener that reads them when the
@@ -553,6 +601,11 @@ impl<'a> Tuner<'a> {
                 });
                 self.recent.truncate(5);
                 let arm = self.arm_label();
+                self.ended = Some(Ended {
+                    started_at_ms: self.started_at_ms,
+                    ended_at_ms: self.unix_ms(session.last_seen),
+                    reason: reason.clone(),
+                });
                 self.end_session(Some(session.tgid));
                 info!(
                     "Match ended after {} ({reason}); settings restored",
@@ -1062,6 +1115,9 @@ impl<'a> Tuner<'a> {
             return bus::State::default();
         };
         bus::State {
+            phase: bus::Phase::Match,
+            started_at_ms: self.started_at_ms,
+            app_id: self.app_id,
             game_pid: s.tgid,
             game: s.name.clone(),
             reason: s.reason.clone(),
@@ -1077,15 +1133,36 @@ impl<'a> Tuner<'a> {
         }
     }
 
-    /// Bring the D-Bus properties up to date (only changes are sent).
+    /// Bring the D-Bus properties up to date (only changes are sent),
+    /// then send StateChanged if the state moved.
     fn publish(&mut self) {
         if self.bus.is_none() {
             return;
         }
-        let state = self.bus_state();
+        let mut state = self.bus_state();
+        let now = self.phase_now();
+        state.phase = now.phase;
         if let Some(b) = self.bus.as_mut() {
             b.set(state);
         }
+        if now.phase == self.bus_phase.phase {
+            // A match that ends straight into another one isn't possible
+            // (a new match needs its own start), so nothing ended unseen.
+            self.ended = None;
+            return;
+        }
+        let at = match now.phase {
+            bus::Phase::Match => self.started_at_ms,
+            _ => self
+                .ended
+                .as_ref()
+                .map_or_else(stats::now_unix_ms, |e| e.ended_at_ms),
+        };
+        let info = state_info(&self.bus_phase, &now, at, self.ended.take().as_ref());
+        if let Some(b) = self.bus.as_ref() {
+            b.state_changed(now.phase, info);
+        }
+        self.bus_phase = now;
     }
 
     /// What happens to bulk packets, for the log and --monitor.
@@ -1325,12 +1402,10 @@ impl<'a> Tuner<'a> {
                 let p = self.read_paths(dt);
                 self.detector.paths(p);
             }
-            let actions = self.detector.tick(
-                now.duration_since(t0).as_secs_f64(),
-                dt,
-                &samples,
-                &mut self.procs,
-            );
+            self.det_clock = (now.duration_since(t0).as_secs_f64(), now);
+            let actions = self
+                .detector
+                .tick(self.det_clock.0, dt, &samples, &mut self.procs);
             for a in actions {
                 self.handle(a);
             }
@@ -1359,6 +1434,7 @@ impl<'a> Tuner<'a> {
 impl Drop for Tuner<'_> {
     fn drop(&mut self) {
         let arm = self.arm_label();
+        let started_at_ms = self.started_at_ms;
         let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
         let session = self.detector.take_session();
         if let Some(s) = &session {
@@ -1376,8 +1452,22 @@ impl Drop for Tuner<'_> {
         }
         // Tell listeners the match is over for them too: its settings
         // have just been restored.
+        let left = (self.bus_phase.phase != bus::Phase::Idle).then(|| {
+            let ended = session.as_ref().map(|s| Ended {
+                started_at_ms,
+                ended_at_ms: self.unix_ms(s.last_seen),
+                reason: "bpfrag stopped".into(),
+            });
+            let at = ended
+                .as_ref()
+                .map_or_else(stats::now_unix_ms, |e| e.ended_at_ms);
+            state_info(&self.bus_phase, &BusPhase::default(), at, ended.as_ref())
+        });
         if let Some(b) = self.bus.as_mut() {
             b.set(bus::State::default());
+            if let Some(info) = left {
+                b.state_changed(bus::Phase::Idle, info);
+            }
             if let Some(s) = &session {
                 let peak = tier_name(s.peak_tier);
                 b.match_ended(s.tgid, &s.name, "bpfrag stopped", secs, &peak, &arm, None);

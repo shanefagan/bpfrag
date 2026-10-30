@@ -467,6 +467,12 @@ EOT
   INTRO=$(asuser introspect $OBJ 2>&1)
   echo "$INTRO" | grep -q '^\.InMatch .* true' && echo "$INTRO" | grep -q '^\.Tier .*"competitive"' && ok "another user sees the match (InMatch, Tier)" || bad "introspect: $INTRO"
   echo "$INTRO" | grep -q '^\.Reason .*"Steam app 4242"' && ok "Reason says why it's a game" || bad "Reason: $(echo "$INTRO" | grep Reason)"
+  [ "$(asuser get-property $OBJ $IFC State 2>&1)" = 's "match"' ] && ok "State=match" || bad "State: $(asuser get-property $OBJ $IFC State 2>&1)"
+  [ "$(asuser get-property $OBJ $IFC AppId 2>&1)" = "u 4242" ] && ok "AppId is the Steam app id" || bad "AppId: $(asuser get-property $OBJ $IFC AppId 2>&1)"
+  STARTED=$(asuser get-property $OBJ $IFC MatchStartedAt 2>&1 | awk '{print $2}')
+  SINCE=$(asuser get-property $OBJ $IFC MatchSince 2>&1 | awk '{print $2}')
+  NOWMS=$(date +%s%3N)
+  [ -n "$STARTED" ] && [ "$STARTED" -gt $((NOWMS - 15000)) ] && [ "$STARTED" -lt $((SINCE * 1000)) ] && ok "MatchStartedAt is when the traffic began, before MatchSince ($(( SINCE * 1000 - STARTED )) ms)" || bad "MatchStartedAt $STARTED, MatchSince $SINCE, now $NOWMS"
   asuser get-property $OBJ $IFC Applied 2>&1 | grep -q '"net.core.busy_poll" "50"' && ok "Applied lists the settings changed" || bad "Applied: $(asuser get-property $OBJ $IFC Applied 2>&1)"
   asuser set-property $OBJ $IFC Tier s intense > $W/set.out 2>&1 && bad "another user could Set a property" || ok "another user can't Set (policy: $(head -c 60 $W/set.out))"
   busctl --address=$ADDR set-property $OBJ $IFC Tier s intense > $W/set0.out 2>&1 && bad "root could Set a property" || ok "root can't Set either"
@@ -479,9 +485,13 @@ EOT
   grep -A4 "member=MatchEnded" $W/mon.log | grep -q 'string "game exited"' && ok "MatchEnded says the game exited" || bad "MatchEnded: $(grep -A8 member=MatchEnded $W/mon.log)"
   grep -A60 "member=MatchEnded" $W/mon.log | grep -q 'string "gap_p50_ms"' && ok "MatchEnded carries the match health" || bad "no health in MatchEnded"
   grep -q "member=PropertiesChanged" $W/mon.log && ok "PropertiesChanged signals" || bad "no PropertiesChanged"
+  [ "$(asuser get-property $OBJ $IFC State 2>&1)" = 's "idle"' ] && ok "State=idle after the match" || bad "State after: $(asuser get-property $OBJ $IFC State 2>&1)"
+  grep -A1 "member=StateChanged" $W/mon.log | grep -q 'string "match"' && grep -A30 "member=StateChanged" $W/mon.log | grep -q 'string "at_ms"' && ok "StateChanged to match, with at_ms" || bad "StateChanged match: $(grep -A20 member=StateChanged $W/mon.log | head -40)"
+  grep -A40 "member=StateChanged" $W/mon.log | grep -q 'string "match_ended_at_ms"' && ok "StateChanged back to idle says when the match ended" || bad "StateChanged idle: $(grep -A40 member=StateChanged $W/mon.log | tail -40)"
   # Shutting down mid-match ends the match for listeners too.
   game 64 180; sleep 6; kill -INT $D; wait $D; D=; sleep 0.5; kill $G
   grep -A4 "member=MatchEnded" $W/mon.log | grep -q 'string "bpfrag stopped"' && ok "stopping bpfrag mid-match sends MatchEnded" || bad "no MatchEnded on shutdown"
+  grep -A40 "member=StateChanged" $W/mon.log | grep -A1 'string "end_reason"' | grep -q 'bpfrag stopped' && ok "and StateChanged to idle" || bad "no StateChanged on shutdown"
   kill $MONP; MONP=
   # No bus at all: logged, and the daemon carries on.
   DBUS_SYSTEM_BUS_ADDRESS="unix:abstract=bpfrag-e2e-none-$$" "$B" -c $W/cfg12.toml > $W/d12b.log 2>&1 & D=$!; sleep 1

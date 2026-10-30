@@ -116,6 +116,15 @@ impl ProcInfo {
             .filter(|p| p.starts_with('/'))
     }
 
+    /// See [`ProcfsLookup::app_id`].
+    pub fn app_id(&self) -> u32 {
+        ["SteamAppId", "SteamGameId"]
+            .iter()
+            .filter_map(|k| self.env(k))
+            .find_map(|v| v.parse::<u32>().ok().filter(|n| *n != 0))
+            .unwrap_or(0)
+    }
+
     fn steam_title(&self) -> Option<String> {
         let id = ["SteamAppId", "SteamGameId"]
             .iter()
@@ -427,6 +436,13 @@ impl ProcfsLookup {
         }
     }
 
+    /// The Steam app id from its environment (SteamAppId, else
+    /// SteamGameId); 0 for anything Steam didn't launch, or a non-Steam
+    /// game added to Steam (whose SteamGameId is a large shortcut id).
+    pub fn app_id(&self, tgid: u32) -> u32 {
+        self.classifier.read(tgid).map_or(0, |i| i.app_id())
+    }
+
     /// Display name, and the names lists are matched against (comm, exe
     /// name). None if the process is gone.
     pub fn names(&self, tgid: u32) -> Option<(String, Vec<String>)> {
@@ -527,6 +543,26 @@ mod tests {
         assert_eq!(c.classify(300).0, Verdict::Game("Steam app 730".into()));
         // the Steam client itself is not a game
         assert!(!c.classify(100).0.is_game());
+    }
+
+    #[test]
+    fn steam_app_ids() {
+        let info = |env: &[(&str, &str)]| ProcInfo {
+            environ: env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(info(&[("SteamAppId", "1422450")]).app_id(), 1422450);
+        assert_eq!(info(&[("SteamGameId", "730")]).app_id(), 730);
+        assert_eq!(
+            info(&[("SteamAppId", "0"), ("SteamGameId", "2357570")]).app_id(),
+            2357570
+        );
+        // a non-Steam game added to Steam: a shortcut id, not an app
+        assert_eq!(info(&[("SteamGameId", "12345678901234567890")]).app_id(), 0);
+        assert_eq!(info(&[]).app_id(), 0);
     }
 
     #[test]
