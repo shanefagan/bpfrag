@@ -18,6 +18,16 @@ RestartSec=2
 # CAP_SYS_ADMIN. /proc/sys and /run/bpfrag must stay writable.
 CapabilityBoundingSet=CAP_BPF CAP_PERFMON CAP_NET_ADMIN CAP_SYS_RESOURCE CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
 NoNewPrivileges=yes
+# Things bpfrag never does: switch personality or architecture, set the
+# clock or hostname, use real-time scheduling (it leaves the CPU alone),
+# make setuid files or new namespaces.
+LockPersonality=yes
+SystemCallArchitectures=native
+ProtectClock=yes
+ProtectHostname=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes
