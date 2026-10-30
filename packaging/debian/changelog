@@ -1,3 +1,9 @@
+bpfrag (0.9.2-1) unstable; urgency=medium
+
+  * Fix a way for any user to hang the daemon; keep others' mid-match changes and unrestorable originals; unit hardening
+
+ -- Shane Fagan <mail@shanefagan.com>  Fri, 30 Oct 2026 17:18:31 +0000
+
 bpfrag (0.9.1-1) unstable; urgency=medium
 
   * Formatting fix so CI passes; no code changes
