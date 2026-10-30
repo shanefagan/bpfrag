@@ -53,6 +53,30 @@ Street Brawl. The same pattern appears twice in a 54-minute "match" on
 2026-10-28, which was probably several games too. What would mark the
 boundary reliably is [experiment 22](experiments.md#22-back-to-back-games).
 
+**2026-10-30: the "end-of-game pattern" is Deadlock's menu talking to
+itself.** A timeline (bpfrag with `[capture] timeline`) of a 44-minute
+session: two games, on servers A and B (the second on a new local
+socket), and between and around them, 128 packets a second each way,
+equal to the packet, for 15 seconds before the first game, 75 seconds
+between the two, and 11 minutes after the second until the game was
+closed. None of it arrived on the network card: the arrival meter on
+`eno1` saw nothing, so it went over loopback, the game sending to and
+receiving from a server of its own (for its menu). Counted as UDP like
+any other, that looked like an INTENSE match, so bpfrag kept the match
+going, tuned, through the menu, and two games became one. 0.8.0 only
+counts traffic that reaches the network ([detection.md](detection.md)).
+The same timeline showed the gap figures following the wrong socket in a
+merged session: they tracked the socket with the most packets over the
+whole session, so the second game's gaps weren't measured; they now
+cover every socket carrying the match. A second timeline that morning
+(one game) showed the same: 62 seconds of local traffic before the game,
+19 minutes on server A, 26 seconds of local traffic before the game was
+closed. Both show how a Deadlock game ends on the wire: for about 15
+seconds the server sends more and larger packets (up to 165 a second,
+about 1 KB each, 2 ms apart; end-of-game data, probably), then 32
+updates a second instead of 64 for about 10 seconds, then the switch to
+loopback.
+
 The same session had busy polling on throughout (`[experiment]`
 `busy_polling`, "on" arm): 160,405 busy-polled packets, about 24 a
 second, machine-wide. So busy polling does run on this machine during

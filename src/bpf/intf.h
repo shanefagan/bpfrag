@@ -21,6 +21,7 @@ enum consts {
 	GAP_STALL_MS = 100,	/* a gap this long is a stall the player feels... */
 	GAP_IDLE_MS = 2000,	/* ...up to this; longer means the flow paused */
 	GAP_RESUME = 4,		/* fast gaps in a row that end a quiet stretch */
+	IFACE_LOCAL = 1,	/* mark_iface.flags: loopback, traffic that stays on the machine */
 };
 
 /* Global counters, one slot per CPU (summed by userspace). */
@@ -77,9 +78,9 @@ struct port_rx {
 
 /* An interface the DSCP marker or the arrival meter is attached to. */
 struct mark_iface {
-	__u32 l2_len;		/* 14 for Ethernet/Wi-Fi, 0 for L3 tunnels */
-	__u32 _pad;
-	__u64 game_pkts;	/* game packets seen leaving here */
+	__u32 l2_len;		/* 14 for Ethernet/Wi-Fi/loopback, 0 for L3 tunnels */
+	__u32 flags;		/* IFACE_LOCAL */
+	__u64 game_pkts;	/* game packets seen leaving (marker) or arriving (meter) here */
 };
 
 /*

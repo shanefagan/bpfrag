@@ -33,6 +33,8 @@ pub struct Iface {
     pub l2_len: u32,
     /// Backed by real hardware (has a /sys/class/net/X/device link).
     pub physical: bool,
+    /// Loopback: what arrives here never left the machine.
+    pub local: bool,
 }
 
 impl Iface {
@@ -57,6 +59,21 @@ pub fn iface_by_name(name: &str) -> Option<Iface> {
         ifindex,
         l2_len,
         physical: fs::metadata(format!("{base}/device")).is_ok(),
+        local: false,
+    })
+}
+
+/// The loopback interface, for the arrival meter: a game that talks to a
+/// server of its own (in its menus, say) does it here. Loopback frames
+/// carry an Ethernet header at tc, like any ARPHRD_LOOPBACK device.
+pub fn loopback() -> Option<Iface> {
+    let ifindex: u32 = read_trim("/sys/class/net/lo/ifindex").ok()?.parse().ok()?;
+    Some(Iface {
+        name: "lo".into(),
+        ifindex,
+        l2_len: 14,
+        physical: false,
+        local: true,
     })
 }
 

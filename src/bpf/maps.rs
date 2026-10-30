@@ -166,18 +166,33 @@ pub fn game_packets(skel: &BpfSkel) -> Vec<(u32, u64)> {
         .collect()
 }
 
-/// The `mark_ifaces` value for an interface the marker attaches to, with
-/// its packet count at zero.
-pub fn mark_iface_bytes(l2_len: u32) -> Vec<u8> {
+/// The `mark_ifaces` / `rx_ifaces` value for an interface a tc program
+/// attaches to, with its packet count at zero.
+pub fn mark_iface_bytes(l2_len: u32, local: bool) -> Vec<u8> {
     let mi = bpf_intf::mark_iface {
         l2_len,
+        flags: if local { bpf_intf::IFACE_LOCAL } else { 0 },
         ..Default::default()
     };
     let mut v = Vec::with_capacity(size_of_val(&mi));
     v.extend_from_slice(&mi.l2_len.to_ne_bytes());
-    v.extend_from_slice(&mi._pad.to_ne_bytes());
+    v.extend_from_slice(&mi.flags.to_ne_bytes());
     v.extend_from_slice(&mi.game_pkts.to_ne_bytes());
     v
+}
+
+/// (ifindex, game packets that arrived there, local) for every interface
+/// the arrival meter is on. Counts start at zero when it attaches.
+pub fn meter_packets(skel: &BpfSkel) -> Vec<(u32, u64, bool)> {
+    let map = &skel.maps.rx_ifaces;
+    map.keys()
+        .filter_map(|key| {
+            let v = map.lookup(&key, MapFlags::ANY).ok().flatten()?;
+            let mi: bpf_intf::mark_iface = from_bytes(&v);
+            let local = mi.flags & bpf_intf::IFACE_LOCAL != 0;
+            Some((from_bytes::<u32>(&key), mi.game_pkts, local))
+        })
+        .collect()
 }
 
 /// Arrival statistics per game port, as the meter recorded them.

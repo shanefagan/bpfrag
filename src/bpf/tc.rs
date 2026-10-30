@@ -112,7 +112,7 @@ impl TcSet {
             // so the entry goes in before the program is attached.
             if let Err(e) = self.role.ifaces_map(skel).update(
                 &ifc.ifindex.to_ne_bytes(),
-                &mark_iface_bytes(ifc.l2_len),
+                &mark_iface_bytes(ifc.l2_len, ifc.local),
                 MapFlags::ANY,
             ) {
                 warn!("{}: {what} map update failed: {e}", ifc.name);

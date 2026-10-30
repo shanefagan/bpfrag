@@ -161,7 +161,10 @@ echo "== 6. network path changes mid-match are followed"
 # docking or a VPN coming up); within ~5s bpfrag should start marking there.
 sed '/^\[dscp\]/,/^interfaces/d' $W/cfg.toml > $W/cfg-auto.toml
 "$B" -c $W/cfg-auto.toml > $W/d7.log 2>&1 & D=$!; sleep 1
-game 64 180; sleep 6
+# The meter starts on the default-route interface, which doesn't carry the
+# game here, so it sees the game nowhere: two more seconds, then the rate
+# alone decides, as before.
+game 64 180; sleep 9
 grep -q "Match detected" $W/d7.log && ok "match detected (auto interfaces)" || bad "no match"
 ip route add default via 10.99.0.2 dev bpfrag0 metric 4242
 sleep 7
@@ -210,7 +213,9 @@ grep -q "Match ended after .*(netcode quiet" $W/d6c.log && ok "first match ended
 same "after two matches"
 
 echo "== 7. --dry-run changes nothing"
-"$B" -c $W/cfg.toml --dry-run > $W/d5.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
+# A match starts a second or so after the game is seen (where its traffic
+# comes from is checked first), and the gaps need a few seconds of it.
+"$B" -c $W/cfg.toml --dry-run > $W/d5.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 8
 grep -q "would set" $W/d5.log && ok "dry run logs intended changes" || bad "dry run silent"
 "$B" -c $W/cfg.toml --monitor 0 | grep -q 'connection: packet gaps half' && ok "dry run still measures the connection" || bad "dry run: no gap measurement"
 same "dry run"; kill $G; kill -INT $D; wait $D; D=
@@ -391,6 +396,30 @@ if [ -n "$CSV" ]; then
 else
   bad "no timeline in $W/run/captures: $(ls -la $W/run/captures 2>&1)"
 fi
+
+echo "== 11g. a game talking to itself (a menu server) isn't a match; its games are"
+{ cat $W/cfg.toml; printf '[capture]\ntimeline = true\n'; } > $W/cfg11g.toml
+rm -rf $W/run/captures
+"$B" -c $W/cfg11g.toml > $W/d11g.log 2>&1 & D=$!; sleep 1
+# Its own server on 127.0.0.1 (as Deadlock's menu), then a game on the real
+# server, the menu again, and the next game.
+export PHASES="local:12,remote:22,local:30,remote:30"; game 64 180; unset PHASES
+sleep 10
+grep -q "fakeshooter (pid $G): its traffic stays on this machine" $W/d11g.log && ok "traffic over loopback is recognised as the game talking to itself" || bad "local: $(cat $W/d11g.log)"
+grep -q "Match detected" $W/d11g.log && bad "a match started on loopback traffic" || ok "no match while the game talks to itself"
+same "while the game talks to itself"
+"$B" -c $W/cfg11g.toml --monitor 0 2>&1 | grep -q "fakeshooter (pid $G) is running, its traffic staying on this machine" && ok "--monitor says why nothing is tuned" || bad "monitor: $("$B" -c $W/cfg11g.toml --monitor 0 2>&1 | head -6)"
+sleep 11   # 21 s in: on the real server since 12
+[ "$(grep -c 'Match detected: fakeshooter' $W/d11g.log)" = 1 ] && ok "traffic from outside starts the match" || bad "starts: $(grep -i 'match\|stays' $W/d11g.log)"
+[ "$(sysctl -n net.core.busy_poll)" = 50 ] && ok "tuned during the game, at the game's tier (not the menu's)" || bad "busy_poll $(sysctl -n net.core.busy_poll): $(grep 'Match detected' $W/d11g.log)"
+sleep 37   # 58 s in: back on its own server since 34
+grep -q "Match ended after [0-9]*s (its traffic stayed on this machine for 6s: a menu or a local server); settings restored" $W/d11g.log && ok "back to the menu ends the match" || bad "end: $(grep -i 'match' $W/d11g.log)"
+same "in the menu between games"
+sleep 12   # 70 s in: the next game since 64
+[ "$(grep -c 'Match detected: fakeshooter' $W/d11g.log)" = 2 ] && ok "the next game is a match of its own" || bad "starts: $(grep -i 'match' $W/d11g.log)"
+kill $G; sleep 2; kill -INT $D; wait $D; D=
+[ "$(ls $W/run/captures/*_fakeshooter.csv 2>/dev/null | wc -l)" = 2 ] && ok "a timeline per game, in the run directory" || bad "timelines: $(ls -la $W/run/captures 2>&1)"
+same "after the menu server"
 
 echo "== 12. D-Bus: read-only interface, readable by anyone"
 if command -v dbus-daemon >/dev/null && command -v dbus-monitor >/dev/null && command -v busctl >/dev/null; then

@@ -14,7 +14,7 @@
 //!      its traffic moves to another interface.
 
 use std::cell::RefCell;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::mem::MaybeUninit;
 use std::os::fd::AsRawFd;
@@ -41,7 +41,7 @@ use crate::detect::classify::{self, ProcfsLookup};
 use crate::detect::egress::Egress;
 use crate::detect::observe::{ObsEvent, Observer, Proto, Rules};
 use crate::detect::tagged::{self, Tagged};
-use crate::detect::{Action, Detector, ProcessLookup, Sample, SessionInfo};
+use crate::detect::{Action, Arrivals, Detector, ProcessLookup, Sample, SessionInfo};
 use crate::experiment;
 use crate::health::{self, peers::ServerEvent, timeline::Timeline};
 use crate::net::{self, Iface};
@@ -108,6 +108,17 @@ fn iface_names(ifaces: &[Iface]) -> Vec<String> {
 const EGRESS_GRACE: Duration = Duration::from_secs(5);
 /// How often /proc is listed for new processes tagged BPFRAG_OBSERVE=1.
 const TAG_SCAN_EVERY: Duration = Duration::from_secs(5);
+
+/// `ifaces` plus loopback, for the arrival meter: a game talking to a
+/// server of its own shows up there.
+fn with_loopback(mut ifaces: Vec<Iface>) -> Vec<Iface> {
+    if let Some(lo) = net::loopback() {
+        if !ifaces.iter().any(|i| i.ifindex == lo.ifindex) {
+            ifaces.push(lo);
+        }
+    }
+    ifaces
+}
 
 /// Interface names the current tier was applied to.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -188,6 +199,9 @@ pub struct Tuner<'a> {
     arm: Option<experiment::Arm>,
     /// `[capture] timeline`: this match's per-second record.
     timeline: Option<Timeline>,
+    /// The meter's game packets per interface at the last reading, for
+    /// [`Arrivals`].
+    meter_prev: HashMap<u32, u64>,
 }
 
 impl<'a> Tuner<'a> {
@@ -260,13 +274,14 @@ impl<'a> Tuner<'a> {
             plan,
             arm: None,
             timeline: None,
+            meter_prev: HashMap::new(),
             bus,
             started_unix: 0,
             dry_run: run.dry_run,
             stats_every: run.stats_every,
             knobs: Knobs::new(&run_dir, run.dry_run),
             run_dir,
-            detector: Detector::new(cfg.detect.clone()),
+            detector: Detector::new(cfg.detect.clone()).with_paths(),
             bulk: BulkDetector::new(&cfg.bulk),
             procs: ProcfsLookup::new(&cfg.classify),
             cfg,
@@ -290,6 +305,11 @@ impl<'a> Tuner<'a> {
     /// Where the game's packets can leave: the configured interfaces, or
     /// those with a default route (plus a connected socket's device).
     fn candidates(&self, s: &SessionInfo) -> Vec<Iface> {
+        self.candidate_ifaces(s.ifindex)
+    }
+
+    /// The same for a socket's egress device `ifindex` (0 if unknown).
+    fn candidate_ifaces(&self, ifindex: u32) -> Vec<Iface> {
         if !self.cfg.dscp.interfaces.is_empty() {
             return self
                 .cfg
@@ -300,10 +320,36 @@ impl<'a> Tuner<'a> {
                 .collect();
         }
         let mut v = net::default_route_ifaces();
-        if s.ifindex != 0 && !v.iter().any(|i| i.ifindex == s.ifindex) {
-            v.extend(net::iface_by_index(s.ifindex));
+        if ifindex != 0 && !v.iter().any(|i| i.ifindex == ifindex) {
+            v.extend(net::iface_by_index(ifindex));
         }
         v
+    }
+
+    /// Where the game's packets arrived since the last reading: from
+    /// outside (real interfaces) and on loopback, per second.
+    fn read_paths(&mut self, dt: f64) -> Arrivals {
+        let dt = dt.max(0.001);
+        let mut p = Arrivals::default();
+        let mut now = HashMap::new();
+        for (ifindex, pkts, local) in maps::meter_packets(&self.skel) {
+            // an entry made again (re-attached) starts from zero
+            let before = self
+                .meter_prev
+                .get(&ifindex)
+                .copied()
+                .filter(|b| *b <= pkts)
+                .unwrap_or(0);
+            let rate = (pkts - before) as f64 / dt;
+            if local {
+                p.local_pps += rate;
+            } else {
+                p.outside_pps += rate;
+            }
+            now.insert(ifindex, pkts);
+        }
+        self.meter_prev = now;
+        p
     }
 
     /// Links the game's packets have been seen leaving on.
@@ -359,7 +405,8 @@ impl<'a> Tuner<'a> {
         let mut changes = self.knobs.apply(&profile, &ifaces, &skip);
         maps::watch(&self.skel, s.tgid, true);
         // The meter only observes, so it runs in every tier and in dry-run.
-        self.meter.attach(&self.skel, &marker);
+        self.meter
+            .attach(&self.skel, &with_loopback(marker.clone()));
         if profile.dscp {
             let names: Vec<&str> = marker.iter().map(|i| i.name.as_str()).collect();
             if self.dry_run {
@@ -529,6 +576,33 @@ impl<'a> Tuner<'a> {
                 if let Some(p) = timeline {
                     info!("{}: timeline written to {}", session.name, p.display());
                 }
+            }
+            Action::Watch {
+                tgid,
+                name,
+                ifindex,
+            } => {
+                debug!("{name} (pid {tgid}): watching where its traffic goes before tuning");
+                maps::clear_port_rx(&self.skel);
+                maps::track_ports(&self.skel, tgid, true);
+                maps::watch(&self.skel, tgid, true);
+                let ifaces = with_loopback(self.candidate_ifaces(ifindex));
+                self.meter.attach(&self.skel, &ifaces);
+                self.meter_prev.clear();
+            }
+            Action::Unwatch { tgid } => {
+                debug!("pid {tgid}: no longer watched");
+                maps::track_ports(&self.skel, tgid, false);
+                maps::watch(&self.skel, tgid, false);
+                self.meter.detach_all(&self.skel);
+                maps::clear_port_rx(&self.skel);
+                self.meter_prev.clear();
+            }
+            Action::Local { tgid, name } => {
+                info!(
+                    "{name} (pid {tgid}): its traffic stays on this machine (a menu or a local \
+                     server); waiting for traffic from outside before tuning"
+                );
             }
             Action::Ignored {
                 tgid,
@@ -1163,6 +1237,16 @@ impl<'a> Tuner<'a> {
             top,
             recent: self.recent.iter().cloned().collect(),
             observing: self.observing(),
+            waiting: self
+                .detector
+                .watched()
+                .filter(|(_, _, local)| *local)
+                .map(|(tgid, name, _)| {
+                    format!(
+                        "{name} (pid {tgid}) is running, its traffic staying on this machine \
+                         (a menu or a local server): nothing is tuned until traffic comes from outside"
+                    )
+                }),
         }
     }
 
@@ -1237,6 +1321,10 @@ impl<'a> Tuner<'a> {
             next = now + tick;
 
             let samples = maps::read_proc_stats(&self.skel);
+            if self.detector.wants_paths() {
+                let p = self.read_paths(dt);
+                self.detector.paths(p);
+            }
             let actions = self.detector.tick(
                 now.duration_since(t0).as_secs_f64(),
                 dt,

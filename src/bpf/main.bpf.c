@@ -15,8 +15,9 @@
  *   raw_tp/sched_process_exit                         game exit -> revert now
  *   tc egress (tcx link)                              DSCP marking
  *   tc ingress (tcx link)                             arrival gaps per game port,
- *                                                     arrivals per game peer,
- *                                                     bulk flows demoted
+ *                                                     arrivals per game peer and
+ *                                                     per interface (loopback
+ *                                                     included), bulk flows demoted
  *
  * The tc programs only observe or rewrite, and always return TCX_NEXT so
  * whatever else is on the interface (other tcx programs, classic filters
@@ -684,6 +685,11 @@ int bpfrag_rx(struct __sk_buff *skb)
 		if ((void *)(pt + 1) > data_end)
 			return TCX_NEXT;
 		if (proto == IPPROTO_UDP && game_owns(bpf_ntohs(pt->dest))) {
+			__sync_fetch_and_add(&mi->game_pkts, 1);
+			/* the game talking to itself (a menu or a local server)
+			 * is counted, but isn't the match's traffic */
+			if (mi->flags & IFACE_LOCAL)
+				return TCX_NEXT;
 			record_arrival(bpf_ntohs(pt->dest), skb->napi_id);
 			k.family = AF_INET;
 			k.proto = proto;
@@ -719,6 +725,9 @@ int bpfrag_rx(struct __sk_buff *skb)
 		if ((void *)(pt + 1) > data_end)
 			return TCX_NEXT;
 		if (proto == IPPROTO_UDP && game_owns(bpf_ntohs(pt->dest))) {
+			__sync_fetch_and_add(&mi->game_pkts, 1);
+			if (mi->flags & IFACE_LOCAL)
+				return TCX_NEXT;
 			record_arrival(bpf_ntohs(pt->dest), skb->napi_id);
 			k.family = AF_INET6;
 			k.proto = proto;

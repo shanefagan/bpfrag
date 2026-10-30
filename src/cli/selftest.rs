@@ -455,6 +455,55 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
     ))
 }
 
+/// On loopback (flagged local), game packets are counted against the
+/// interface but not timed or counted per sender: the game talking to
+/// itself isn't the match.
+fn check_local_meter(skel: &BpfSkel) -> Result<String, String> {
+    let rx = &skel.maps.rx_ifaces;
+    let key = LOOPBACK_IFINDEX.to_ne_bytes();
+    let set = |local: bool| {
+        rx.update(
+            &key,
+            &crate::bpf::maps::mark_iface_bytes(14, local),
+            MapFlags::ANY,
+        )
+        .map_err(|e| format!("rx_ifaces update: {e}"))
+    };
+    crate::bpf::maps::clear_port_rx(skel);
+    set(true)?;
+    let pkt = to_port(ipv4(0, OTHER_PORT, 0x4000, 0), GAME_PORT);
+    let mut result = Ok(());
+    for _ in 0..3 {
+        let input = ProgramInput {
+            data_in: Some(&pkt),
+            ..Default::default()
+        };
+        match skel.progs.bpfrag_rx.test_run(input) {
+            Ok(r) => {
+                if let Err(e) = check_verdict(r.return_value) {
+                    result = Err(e);
+                }
+            }
+            Err(e) => result = Err(format!("test_run failed: {e}")),
+        }
+    }
+    let counted = crate::bpf::maps::meter_packets(skel)
+        .into_iter()
+        .find(|(i, _, _)| *i == LOOPBACK_IFINDEX)
+        .map(|(_, n, local)| (n, local));
+    let timed = crate::bpf::maps::read_port_rx(skel).len();
+    let senders = crate::bpf::maps::read_game_peers(skel).len();
+    set(false)?;
+    result?;
+    match counted {
+        Some((3, true)) if timed == 0 && senders == 0 => Ok("3 counted, none timed".into()),
+        other => Err(format!(
+            "counted {other:?} on loopback, {timed} ports timed, {senders} senders; \
+             expected 3, local, and none timed"
+        )),
+    }
+}
+
 fn run_case(skel: &BpfSkel, c: &Case) -> Result<(), String> {
     run_case_on(skel, c, false)
 }
@@ -541,7 +590,7 @@ pub fn run(cfg: &Config) -> Result<bool> {
     for map in [&m.mark_ifaces, &m.rx_ifaces] {
         map.update(
             &LOOPBACK_IFINDEX.to_ne_bytes(),
-            &crate::bpf::maps::mark_iface_bytes(14),
+            &crate::bpf::maps::mark_iface_bytes(14, false),
             MapFlags::ANY,
         )?;
     }
@@ -661,6 +710,14 @@ pub fn run(cfg: &Config) -> Result<bool> {
         Err(e) => {
             failed += 1;
             println!("  FAIL arrival meter: {e}");
+        }
+    }
+    total += 1;
+    match check_local_meter(&skel) {
+        Ok(what) => println!("  PASS loopback arrivals counted, not measured ({what})"),
+        Err(e) => {
+            failed += 1;
+            println!("  FAIL loopback arrivals: {e}");
         }
     }
     let (n, f) = check_bulk(&mut skel, bulk, dscp)?;

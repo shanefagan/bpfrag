@@ -121,6 +121,10 @@ pub struct Metrics {
     /// Processes tagged BPFRAG_OBSERVE=1 whose traffic is being logged.
     #[serde(default)]
     pub observing: Vec<String>,
+    /// A game that's running with no match: its traffic stays on this
+    /// machine.
+    #[serde(default)]
+    pub waiting: Option<String>,
 }
 
 pub fn now_unix() -> u64 {
@@ -231,6 +235,9 @@ impl Metrics {
                 s.reason
             )?,
             None => writeln!(w, "\nNo match in progress; baseline settings active.")?,
+        }
+        if let Some(wt) = self.waiting.as_ref().filter(|_| self.session.is_none()) {
+            writeln!(w, "  {wt}")?;
         }
         if let Some(h) = self.session.as_ref().and_then(|s| s.health.as_ref()) {
             writeln!(w, "  connection: {}", h.summary())?;

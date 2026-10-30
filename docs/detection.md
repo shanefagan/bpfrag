@@ -35,6 +35,24 @@ checks these signals, strongest first:
 7. A launcher ancestor: reaper, pressure-vessel, gamescope, Lutris, Heroic,
    umu, Bottles and so on.
 
+A game that passes is **watched** before anything is tuned: the arrival
+meter goes on its ports, on the default-route interfaces and on loopback,
+and counts where its packets arrive. Traffic from outside starts the match
+(usually within a second). Some games talk to a server of their own in
+their menus, over loopback: Deadlock does, about 128 packets a second each
+way, which by rate alone looks like an INTENSE match. If after three
+seconds the game's traffic arrives on loopback and not from outside, no
+match starts, and the log says so once:
+
+```
+Deadlock (pid 643053): its traffic stays on this machine (a menu or a local server); waiting for traffic from outside before tuning
+```
+
+`bpfrag --monitor` shows the same while it lasts. The match starts when
+traffic from outside does. If the meter sees the game's traffic nowhere
+(a path it isn't attached to, say an interface missing from `--iface`), the
+rate alone decides, as before.
+
 The tier comes from the smoothed packet rate. Total packets per second are
 roughly twice the server tick rate:
 
@@ -63,23 +81,30 @@ Wi-Fi to Ethernet, or a VPN coming up is followed without waiting for the
 next match.
 
 A match ends **immediately when the game exits** (via the
-`sched_process_exit` hook), or after **15 quiet seconds**, for example back in
-the menus. "Quiet" is the median of the last five seconds at 10 packets a
-second or fewer: menus and queues are mostly silent but ping relays in
-short bursts, and judging each second on its own let those bursts keep one
-match going into the next (0.4.0 and earlier). With the game left running,
-each match is its own match: its own health line, its own experiment
-draw, its own row in `matches.py`. A dip while you're dead or waiting to
-respawn stays well above that (Deadlock still gets 70+ packets a second).
+`sched_process_exit` hook), after **15 quiet seconds**, for example back in
+the menus, or after **15 seconds of its traffic staying on this machine**
+(back to a menu with a server of its own). "Quiet" is the median of the
+last five seconds at 10 packets a second or fewer: menus and queues are
+mostly silent but ping relays in short bursts, and judging each second on
+its own let those bursts keep one match going into the next (0.4.0 and
+earlier). "Staying on this machine" is the same median, of packets from
+outside, while loopback carries at least that. With the game left
+running, each match is its own match: its own health line, its own
+experiment draw, its own row in `matches.py`, its own timeline. A dip
+while you're dead or waiting to respawn stays well above that (Deadlock
+still gets 70+ packets a second).
 
-That needs the game to go quiet between matches, and some don't:
-Deadlock's Street Brawl goes from one game straight into the next, with
-traffic never under about 75 packets a second, so five or six games end
-up as one long match ([findings.md](findings.md#back-to-back-games)).
-bpfrag doesn't split those yet. It follows which server the game
-receives from, though (the remote address and port sending the most to
-the game's ports, at 10 packets a second or more), logs it, and logs
-when another one takes over for three seconds:
+Before 0.8.0, a game whose menu talks to itself never went quiet between
+matches: Deadlock's Street Brawl games, played back to back, ended up as
+one long match, and the "match" carried on, tuned, in the menu after the
+last one ([findings.md](findings.md#back-to-back-games)). After a match
+ends that way, the game is watched again, and its next game starts a new
+match.
+
+bpfrag also follows which server the game receives from (the remote
+address and port sending the most to the game's ports, at 10 packets a
+second or more), logs it, and logs when another one takes over for three
+seconds:
 
 ```
 Deadlock: receiving from server A:27031 on local port 51234 (~64 pkt/s)
@@ -90,9 +115,10 @@ Servers are named by a letter per address, in the order they turn up,
 plus the port; addresses themselves are only logged at debug level
 (`-v`), since a game that talks peer to peer would put other players'
 home addresses in the log. The end-of-match line counts the changes
-("the game's server changed 5 times"). Whether a server change, or
-something else in the traffic, marks a new game reliably enough to split
-on is what `[capture] timeline` is for
+("the game's server changed 5 times"). A change within one match means
+the game moved without going quiet or back to its menu, which may be two
+games in one ([experiments.md](experiments.md#22-back-to-back-games));
+`[capture] timeline` shows what happened
 ([measuring.md](measuring.md#match-timelines)).
 
 Rejections by the deny list (or `BPFRAG_GAME=0`) are only logged at debug

@@ -275,22 +275,21 @@ happen on a kind of link: leave it off there.
 without going quiet (Deadlock's Street Brawl), what in its traffic marks
 the boundary, reliably enough for the detector to split matches there?
 
-**Why:** today such a run of games is one match: one health line, one
-experiment draw, numbers that mix five or six games
-([findings.md](findings.md#back-to-back-games)). Candidates, none checked
-yet:
+**Why:** before 0.8.0 such a run of games was one match: one health
+line, one experiment draw, numbers that mix five or six games
+([findings.md](findings.md#back-to-back-games)). For Deadlock this is
+answered: what looked like an end-of-game pattern (sending as much as it
+receives, about 128 a second each way) was the game talking to a server
+of its own on loopback, in its menu between games, and 0.8.0 ends a
+match when that happens ([detection.md](detection.md)). Still open, for
+games that don't do that:
 
 - **A new server.** A new match is usually a new game server, so the
-  remote address or port the game receives from changes. Deadlock reaches
-  its servers through Valve's relays, so the address it sees may stay the
-  same; the port may not.
-- **The end-of-game pattern.** In Deadlock the send rate jumps to match
-  the receive rate (about 105 packets a second each way, against 32 or 64
-  sent during play) for a few seconds at the end of each game. Other
-  games may do something similar while they show a scoreboard and load
-  the next map; that would only be worth a rule if it holds across games.
-- **A change of local socket** (port): some games open a new one per
-  match.
+  remote address or port the game receives from changes. bpfrag logs
+  that ("the game's server changed"); whether it ever happens mid-game
+  isn't known yet.
+- **A change of local socket** (port): Deadlock opened a new one for its
+  second game on 2026-10-30. The timeline's `port` column shows it.
 
 **How:** `[capture] timeline = true` and a session of back-to-back games,
 noting roughly when each one ended. The end-of-match line and the log
