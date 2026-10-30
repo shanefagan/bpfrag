@@ -148,8 +148,20 @@ pub fn restore_one(saved: &Saved) -> Result<Outcome> {
     }
 }
 
-/// Undo whatever a previous (crashed or killed) instance left behind, then
-/// delete its journal. Returns how many settings were restored.
+/// The entries a journal holds; none if there is no journal or it can't be
+/// read.
+pub(super) fn load(path: &Path) -> Vec<(String, Saved)> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Journal>(&t).ok())
+        .map(|j| j.entries)
+        .unwrap_or_default()
+}
+
+/// Undo whatever a previous (crashed or killed) instance left behind.
+/// Entries that couldn't be restored (an interface that's gone, say) stay
+/// in the journal for the next try; the rest are removed. Returns how many
+/// settings were restored.
 pub fn recover(run_dir: &Path) -> Result<usize> {
     let path = journal_path(run_dir);
     let text = match fs::read_to_string(&path) {
@@ -159,6 +171,7 @@ pub fn recover(run_dir: &Path) -> Result<usize> {
     };
     let j: Journal = serde_json::from_str(&text).context("parsing journal")?;
     let mut n = 0;
+    let mut failed = Vec::new();
     for (key, saved) in j.entries.iter().rev() {
         match restore_one(saved) {
             Ok(Outcome::Restored(what)) => {
@@ -166,10 +179,14 @@ pub fn recover(run_dir: &Path) -> Result<usize> {
                 n += 1;
             }
             Ok(Outcome::Kept(why)) => info!("{why}"),
-            Err(e) => warn!("could not restore {key}: {e:#}"),
+            Err(e) => {
+                warn!("could not restore {key}: {e:#}; kept in the journal to try again");
+                failed.push((key.clone(), saved.clone()));
+            }
         }
     }
-    fs::remove_file(&path).context("removing journal")?;
+    failed.reverse();
+    write(&path, &failed).context("updating journal")?;
     Ok(n)
 }
 
@@ -215,6 +232,31 @@ mod tests {
         assert_eq!(fs::read_to_string(&theirs).unwrap(), "9000");
         assert!(!journal_path(&d).exists());
         assert_eq!(recover(&d).unwrap(), 0);
+        let _ = fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn what_cant_be_restored_stays_in_the_journal() {
+        let d = tmpdir("failed");
+        let ours = d.join("ours");
+        fs::write(&ours, "50").unwrap();
+        // a sysctl whose file is gone: writing it fails
+        let gone = d.join("gone/x");
+        let j = Journal {
+            pid: 1,
+            entries: vec![file_entry(&ours, "0", "50"), file_entry(&gone, "1", "")],
+        };
+        fs::write(journal_path(&d), serde_json::to_string(&j).unwrap()).unwrap();
+        assert_eq!(recover(&d).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&ours).unwrap(), "0");
+        let left = load(&journal_path(&d));
+        assert_eq!(left, vec![file_entry(&gone, "1", "")]);
+        // once it can be restored, it is, and the journal goes
+        fs::create_dir_all(gone.parent().unwrap()).unwrap();
+        fs::write(&gone, "7").unwrap();
+        assert_eq!(recover(&d).unwrap(), 1);
+        assert_eq!(fs::read_to_string(&gone).unwrap(), "1");
+        assert!(!journal_path(&d).exists());
         let _ = fs::remove_dir_all(&d);
     }
 

@@ -63,10 +63,18 @@ pub struct Knobs {
 
 impl Knobs {
     pub fn new(run_dir: &Path, dry_run: bool) -> Self {
+        let journal_path = journal::journal_path(run_dir);
+        // What a previous run couldn't restore is held on to, so it's
+        // tried again and never written over. A dry run leaves it alone.
+        let saved = if dry_run {
+            Vec::new()
+        } else {
+            journal::load(&journal_path)
+        };
         Self {
             dry_run,
-            journal_path: journal::journal_path(run_dir),
-            saved: Vec::new(),
+            journal_path,
+            saved,
             current: BTreeMap::new(),
             warned: HashSet::new(),
         }
@@ -180,7 +188,12 @@ impl Knobs {
             match restore_one(&saved) {
                 Ok(Outcome::Restored(what)) => changes.push(format!("restored {what}")),
                 Ok(Outcome::Kept(why)) => info!("{why}"),
-                Err(e) => warn!("could not restore {key}: {e:#}"),
+                Err(e) => {
+                    // keep the original to try again at the end of the match
+                    self.current.remove(&key);
+                    warn!("could not restore {key}: {e:#}; will try again");
+                    continue;
+                }
             }
             self.unsave(&key);
         }
@@ -200,7 +213,12 @@ impl Knobs {
             match restore_one(&saved) {
                 Ok(Outcome::Restored(what)) => done.push(what),
                 Ok(Outcome::Kept(why)) => kept.push(why),
-                Err(e) => warn!("could not restore {key}: {e:#}"),
+                Err(e) => {
+                    // The original stays in the journal: the next match's
+                    // end, --restore or the next start tries again.
+                    warn!("could not restore {key}: {e:#}; kept in the journal to try again");
+                    continue;
+                }
             }
             self.saved.retain(|(k, _)| *k != key);
         }
