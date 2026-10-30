@@ -1435,7 +1435,10 @@ mod tests {
         let last = sim.now;
         let a = sim.run(30, &[]);
         assert!(
-            has(&a, |x| matches!(x, Action::End { session, .. } if session.last_seen == last)),
+            has(
+                &a,
+                |x| matches!(x, Action::End { session, .. } if session.last_seen == last)
+            ),
             "{a:?}"
         );
     }
