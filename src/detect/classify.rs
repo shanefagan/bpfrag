@@ -64,6 +64,8 @@ impl Verdict {
 #[derive(Clone, Debug, Default)]
 pub struct ProcInfo {
     pub ppid: u32,
+    /// Real user id, from /proc/<pid>/status.
+    pub uid: Option<u32>,
     pub comm: String,
     pub exe: String,
     pub cwd: String,
@@ -141,7 +143,7 @@ impl ProcInfo {
             };
             let manifest =
                 Path::new(&p[..i + "/steamapps".len()]).join(format!("appmanifest_{id}.acf"));
-            if let Some(name) = manifest_name(&manifest) {
+            if let Some(name) = manifest_name(&manifest, self.uid) {
                 return Some(name);
             }
         }
@@ -186,10 +188,12 @@ const MANIFEST_MAX: u64 = 256 * 1024;
 /// process's own arguments and working directory, so any user can point
 /// it anywhere: only a small regular file is read, and opening doesn't
 /// wait (a FIFO there would otherwise block the daemon, and /dev/zero
-/// never ends).
-fn manifest_name(path: &Path) -> Option<String> {
+/// never ends). bpfrag can read any file, so it reads only one the
+/// process's user owns or anyone may read: nothing it shows can come from
+/// a file that user couldn't see.
+fn manifest_name(path: &Path, uid: Option<u32>) -> Option<String> {
     use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
     let f = fs::OpenOptions::new()
         .read(true)
@@ -198,6 +202,9 @@ fn manifest_name(path: &Path) -> Option<String> {
         .ok()?;
     let meta = f.metadata().ok()?;
     if !meta.is_file() || meta.len() > MANIFEST_MAX {
+        return None;
+    }
+    if Some(meta.uid()) != uid && meta.mode() & 0o004 == 0 {
         return None;
     }
     let mut text = String::new();
@@ -227,6 +234,8 @@ pub fn read_proc(root: &Path, pid: u32) -> Option<ProcInfo> {
             info.comm = v.trim().to_string();
         } else if let Some(v) = line.strip_prefix("PPid:") {
             info.ppid = v.trim().parse().unwrap_or(0);
+        } else if let Some(v) = line.strip_prefix("Uid:") {
+            info.uid = v.split_whitespace().next().and_then(|u| u.parse().ok());
         }
     }
     info.exe = fs::read_link(dir.join("exe"))
@@ -573,20 +582,30 @@ mod tests {
         fs::create_dir_all(&lib).unwrap();
         let good = lib.join("appmanifest_1.acf");
         fs::write(&good, "\"AppState\"\n{\n\t\"name\"\t\t\"Deadlock\"\n}\n").unwrap();
-        assert_eq!(manifest_name(&good).as_deref(), Some("Deadlock"));
+        assert_eq!(manifest_name(&good, None).as_deref(), Some("Deadlock"));
+        // only the process's user's own, or one anyone may read
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let owner = fs::metadata(&good).unwrap().uid();
+        fs::set_permissions(&good, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            manifest_name(&good, Some(owner)).as_deref(),
+            Some("Deadlock")
+        );
+        assert_eq!(manifest_name(&good, Some(owner + 1)), None);
+        assert_eq!(manifest_name(&good, None), None);
         // a FIFO: opening it must not wait for a writer
         let fifo = lib.join("appmanifest_2.acf");
         let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
         assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-        assert_eq!(manifest_name(&fifo), None);
+        assert_eq!(manifest_name(&fifo, None), None);
         // a device that never ends
         let zero = lib.join("appmanifest_3.acf");
         std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
-        assert_eq!(manifest_name(&zero), None);
+        assert_eq!(manifest_name(&zero, None), None);
         // too big to be a manifest
         let big = lib.join("appmanifest_4.acf");
         fs::write(&big, vec![b'x'; MANIFEST_MAX as usize + 1]).unwrap();
-        assert_eq!(manifest_name(&big), None);
+        assert_eq!(manifest_name(&big, None), None);
     }
 
     #[test]
