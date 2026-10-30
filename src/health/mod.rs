@@ -73,13 +73,26 @@ impl Gaps {
         }
     }
 
-    /// The game's main flow: the port that received the most packets.
-    /// (Games also ping relays and servers on other ports.)
-    pub fn main_flow(ports: &[(u16, bpf_intf::port_rx)]) -> Option<Self> {
-        ports
-            .iter()
-            .max_by_key(|(_, r)| r.pkts)
-            .map(|(port, r)| Self::from_bpf(*port, r))
+    /// The match's traffic: every port that received at least a tenth of
+    /// what the busiest one did, together (a game can move to a new socket
+    /// mid-match), named after the busiest. Ports pinging relays and
+    /// servers now and then fall under the tenth.
+    pub fn match_flows(ports: &[(u16, bpf_intf::port_rx)]) -> Option<Self> {
+        let (port, busiest) = ports.iter().max_by_key(|(_, r)| r.pkts)?;
+        let mut g = Self::from_bpf(*port, busiest);
+        for (p, r) in ports {
+            if p == port || r.pkts.saturating_mul(10) < busiest.pkts {
+                continue;
+            }
+            let other = Self::from_bpf(*p, r);
+            g.pkts += other.pkts;
+            for (h, o) in g.hist.iter_mut().zip(other.hist.iter()) {
+                *h += o;
+            }
+            g.stalls += other.stalls;
+            g.max_gap_ns = g.max_gap_ns.max(other.max_gap_ns);
+        }
+        Some(g)
     }
 
     fn count(&self) -> u64 {
@@ -395,7 +408,7 @@ impl Tracker {
             self.busy_on = busy_polling_on();
         }
         let busy_polled = sys.busy_polled.filter(|n| self.busy_on || *n > 0);
-        let main = Gaps::main_flow(ports);
+        let main = Gaps::match_flows(ports);
         let napi_id = main.as_ref().map_or(0, |g| g.napi_id);
         if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
             // a netlink round trip, so only when the flow's queue changes
@@ -497,14 +510,19 @@ mod tests {
     }
 
     #[test]
-    fn main_flow_is_the_busiest_port() {
+    fn the_match_is_every_busy_port_not_the_pings() {
         let ports = [
             (40001, port_rx(30, &[(63, 29)])), // relay pings
             (27015, port_rx(5000, &[(15, 4999)])),
+            // the game moved to a new socket for a while
+            (51234, port_rx(2001, &[(15, 1990), (31, 10)])),
         ];
-        let g = Gaps::main_flow(&ports).unwrap();
-        assert_eq!(g.port, 27015);
-        assert!(Gaps::main_flow(&[]).is_none());
+        let g = Gaps::match_flows(&ports).unwrap();
+        assert_eq!(g.port, 27015, "named after the busiest");
+        assert_eq!(g.pkts, 7001, "the pings are left out");
+        assert_eq!(g.hist[15], 4999 + 1990);
+        assert_eq!(g.hist[63], 0);
+        assert!(Gaps::match_flows(&[]).is_none());
     }
 
     #[test]

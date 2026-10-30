@@ -70,10 +70,12 @@
 # keep = 0.5             # share of matches that keep it on
 
 [capture]
+# For working out what a game's traffic does (mostly for developers):
 # timeline = true        # a per-second CSV of each match in
-#                        # <state_dir>/captures: the game's rates, its
-#                        # server, packet gaps, tier changes (about 300 KB
-#                        # an hour); see docs/measuring.md
+#                        # /run/bpfrag/captures (in memory, gone at
+#                        # reboot): the game's rates, its server, packet
+#                        # gaps, tier changes; about 300 KB an hour.
+#                        # See docs/measuring.md
 # keep = 50              # timelines kept, oldest removed first
 
 # Tiers: [tier.all] applies to every tier, then [tier.casual],

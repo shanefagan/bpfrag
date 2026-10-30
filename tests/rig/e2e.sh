@@ -378,7 +378,7 @@ grep -q "10\.99\.0\.[23]" $W/d11f.log && bad "server addresses logged at info: $
 grep -q "Match ended" $W/d11f.log && bad "the match ended at the server change" || ok "still one match (no quiet spell to end it)"
 kill $G; sleep 2; kill -INT $D; wait $D; D=
 grep -q "fakeshooter: packet gaps.*; the game's server changed once" $W/d11f.log && ok "the summary counts the server change" || bad "summary: $(grep 'fakeshooter: packet' $W/d11f.log)"
-CSV=$(ls $W/state/captures/*_fakeshooter.csv 2>/dev/null | head -1)
+CSV=$(ls $W/run/captures/*_fakeshooter.csv 2>/dev/null | head -1)
 if [ -n "$CSV" ]; then
   ok "a timeline was written ($(basename "$CSV"))"
   grep -q "fakeshooter: timeline written to $CSV" $W/d11f.log && ok "its path is logged" || bad "path: $(grep timeline $W/d11f.log)"
@@ -389,7 +389,7 @@ if [ -n "$CSV" ]; then
   grep -q "server A:27015 -> B:27015" "$CSV" && grep -q "match ended (game exited)" "$CSV" && ok "server change and match end are events" || bad "events: $(cut -d, -f18- "$CSV" | sort -u)"
   grep -q "10\.99\." "$CSV" && bad "addresses in the timeline" || ok "no addresses in the timeline"
 else
-  bad "no timeline in $W/state/captures: $(ls -la $W/state/captures 2>&1)"
+  bad "no timeline in $W/run/captures: $(ls -la $W/run/captures 2>&1)"
 fi
 
 echo "== 12. D-Bus: read-only interface, readable by anyone"

@@ -20,34 +20,28 @@
 //! | `tcp_tx_bytes_s`, `tcp_rx_bytes_s` | the game's own TCP |
 //! | `server`, `server_pps` | who the game receives from ([`super::peers`]): a letter per address, and the port; its packets a second |
 //! | `peers` | remote addresses and ports that sent anything this second |
-//! | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps on the main port this second (1 ms buckets; 64 is over 63 ms) |
+//! | `port` | the game's local port that received the most this second |
+//! | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps this second on the ports carrying the match (1 ms buckets; 64 is over 63 ms) |
 //! | `stalls` | stalls the meter finished counting this second |
 //! | `events` | match start and end, tier and server changes |
 //!
 //! Addresses aren't written, only letters, so a timeline can be shared.
-//!
-//! Rows are kept in memory and written out every `WRITE_EVERY` (and when
-//! the match ends), not a write a second: about 3 KB at a time. A crash
-//! loses at most the last half minute.
+//! Timelines live in the run directory (`/run/bpfrag`, in memory), so a
+//! row a second costs no disk writes, and they go at reboot.
 
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::{self, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use super::{BUCKETS, Gaps};
 use crate::bpf_intf;
 use crate::detect::Sample;
 
 const HEADER: &str = "t,unix,tier,udp_tx_pps,udp_rx_pps,udp_tx_bytes_s,udp_rx_bytes_s,\
-tcp_tx_bytes_s,tcp_rx_bytes_s,server,server_pps,peers,gaps,gap_p50_ms,gap_p99_ms,gap_max_ms,\
-stalls,events";
-
-/// How often buffered rows go to the file.
-const WRITE_EVERY: Duration = Duration::from_secs(30);
-/// Room for well over `WRITE_EVERY` of rows, so the buffer doesn't fill and
-/// write early.
-const BUFFER: usize = 32 * 1024;
+tcp_tx_bytes_s,tcp_rx_bytes_s,server,server_pps,peers,port,gaps,gap_p50_ms,gap_p99_ms,\
+gap_max_ms,stalls,events";
 
 /// What one row reports, besides the time.
 #[derive(Default)]
@@ -67,10 +61,9 @@ pub struct Timeline {
     path: PathBuf,
     start: Instant,
     last: Instant,
-    written: Instant,
     prev: Option<Sample>,
-    /// The main port, its histogram and stall count at the last row.
-    prev_gaps: Option<(u16, [u64; BUCKETS], u64)>,
+    /// Each port's packets, histogram and stall count at the last row.
+    prev_ports: HashMap<u16, (u64, [u64; BUCKETS], u64)>,
     events: Vec<String>,
 }
 
@@ -86,9 +79,10 @@ impl Timeline {
     ) -> io::Result<Timeline> {
         fs::create_dir_all(dir)?;
         let path = dir.join(file_name(unix, game));
-        let mut out = BufWriter::with_capacity(BUFFER, File::create(&path)?);
+        let mut out = BufWriter::new(File::create(&path)?);
         writeln!(out, "# {}", about.replace('\n', " "))?;
         writeln!(out, "{HEADER}")?;
+        out.flush()?;
         prune(dir, keep);
         let now = Instant::now();
         Ok(Timeline {
@@ -96,9 +90,8 @@ impl Timeline {
             path,
             start: now,
             last: now,
-            written: now,
             prev: None,
-            prev_gaps: None,
+            prev_ports: HashMap::new(),
             events: Vec::new(),
         })
     }
@@ -112,8 +105,7 @@ impl Timeline {
         self.events.push(e.into());
     }
 
-    /// Add one row (rates since the last row); the file gets it within
-    /// `WRITE_EVERY`.
+    /// Write one row: rates since the last row.
     pub fn row(&mut self, r: &Row) -> io::Result<()> {
         let now = Instant::now();
         let dt = now.duration_since(self.last).as_secs_f64().max(0.001);
@@ -150,35 +142,55 @@ impl Timeline {
             gaps,
             csv_field(&events),
         )?;
-        if now.duration_since(self.written) >= WRITE_EVERY {
-            self.written = now;
-            self.out.flush()?;
-        }
-        Ok(())
+        self.out.flush()
     }
 
-    /// Write out whatever is buffered: the match is over.
+    /// The match is over.
     pub fn finish(mut self) -> io::Result<PathBuf> {
         self.out.flush()?;
         Ok(self.path)
     }
 
-    /// "gaps,p50,p99,max,stalls" for the main port since the last row.
+    /// "port,gaps,p50,p99,max,stalls" since the last row, over the ports
+    /// that received at least a tenth of what the busiest did this second.
     fn gaps_since_last(&mut self, ports: &[(u16, bpf_intf::port_rx)]) -> String {
-        let Some(main) = Gaps::main_flow(ports) else {
-            return ",,,,".into();
-        };
-        let (base, base_stalls) = match self.prev_gaps {
-            Some((port, hist, stalls)) if port == main.port => (hist, stalls),
-            _ => ([0u64; BUCKETS], 0),
-        };
-        self.prev_gaps = Some((main.port, main.hist, main.stalls));
-        let mut hist = [0u64; BUCKETS];
-        for (h, (now, then)) in hist.iter_mut().zip(main.hist.iter().zip(base.iter())) {
-            *h = now.saturating_sub(*then);
+        let mut now = HashMap::with_capacity(ports.len());
+        let mut deltas = Vec::with_capacity(ports.len());
+        for (port, r) in ports {
+            let g = Gaps::from_bpf(*port, r);
+            let (pkts, hist, stalls) = match self.prev_ports.get(port) {
+                // an entry the LRU map dropped and made again starts over
+                Some(&(p, h, s)) if p <= g.pkts => (p, h, s),
+                _ => (0, [0u64; BUCKETS], 0),
+            };
+            let mut d = [0u64; BUCKETS];
+            for (x, (a, b)) in d.iter_mut().zip(g.hist.iter().zip(hist.iter())) {
+                *x = a.saturating_sub(*b);
+            }
+            deltas.push((*port, g.pkts - pkts, d, g.stalls.saturating_sub(stalls)));
+            now.insert(*port, (g.pkts, g.hist, g.stalls));
         }
-        let stalls = main.stalls.saturating_sub(base_stalls);
-        let this = Gaps { hist, ..main };
+        self.prev_ports = now;
+        let Some(&(port, most, _, _)) = deltas.iter().max_by_key(|d| d.1).filter(|d| d.1 > 0)
+        else {
+            return ",0,,,,0".into();
+        };
+        let mut hist = [0u64; BUCKETS];
+        let mut stalls = 0;
+        for (_, _, d, s) in deltas.iter().filter(|d| d.1.saturating_mul(10) >= most) {
+            for (h, x) in hist.iter_mut().zip(d.iter()) {
+                *h += x;
+            }
+            stalls += s;
+        }
+        let this = Gaps {
+            port,
+            pkts: most,
+            hist,
+            max_gap_ns: 0,
+            stalls,
+            napi_id: 0,
+        };
         let n: u64 = hist.iter().sum();
         let q = |v: Option<u32>| v.map(|x| x.to_string()).unwrap_or_default();
         let max = hist
@@ -187,7 +199,7 @@ impl Timeline {
             .map(|i| (i + 1).to_string())
             .unwrap_or_default();
         format!(
-            "{n},{},{},{max},{stalls}",
+            "{port},{n},{},{},{max},{stalls}",
             q(this.quantile_ms(0.5)),
             q(this.quantile_ms(0.99))
         )
@@ -299,11 +311,6 @@ mod tests {
         .unwrap();
         t.row(&Row::default()).unwrap();
         let path = t.path().to_path_buf();
-        assert_eq!(
-            fs::metadata(&path).unwrap().len(),
-            0,
-            "rows wait in memory, not a write a second"
-        );
         assert_eq!(t.finish().unwrap(), path);
         let text = fs::read_to_string(&path).unwrap();
         let lines: Vec<&str> = text.lines().collect();
@@ -325,6 +332,7 @@ mod tests {
         assert_eq!(at(&r2, "gap_max_ms"), "64");
         assert_eq!(at(&r2, "stalls"), "1");
         assert_eq!(at(&r2, "peers"), "1");
+        assert_eq!(at(&r2, "port"), "27015");
         assert!(at(&r2, "udp_rx_pps").parse::<f64>().unwrap() > 0.0);
         let r3 = cols(lines[4]);
         assert_eq!(r3.len(), head.len(), "an empty row keeps its columns");

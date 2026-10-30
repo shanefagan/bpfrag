@@ -311,7 +311,7 @@ impl Default for Experiment {
 #[serde(default, deny_unknown_fields)]
 pub struct Capture {
     /// Write a per-second timeline of each match, as CSV, to
-    /// `<state_dir>/captures`.
+    /// `<run_dir>/captures` (in memory: gone at reboot).
     pub timeline: bool,
     /// Timelines kept; the oldest go first.
     pub keep: usize,

@@ -179,12 +179,12 @@ timeline = true
 keep = 50        # the newest 50 are kept
 ```
 
-Each match then gets a CSV file in `/var/lib/bpfrag/captures`, named by
-its start time and the game, logged at the end of the match ("timeline
-written to ..."). It's about 300 KB an hour, written out every 30 seconds
-rather than a row at a time. The first line is a `#`
-comment with the bpfrag version, the game and the experiment arm, then a
-row a second:
+Each match then gets a CSV file in `/run/bpfrag/captures`, named by its
+start time and the game, and logged at the end of the match ("timeline
+written to ..."). `/run` is in memory, so writing a row a second costs no
+disk writes, and the files go at reboot: copy out the ones to keep. It's
+about 300 KB an hour of play. The first line is a `#` comment with the
+bpfrag version, the game and the experiment arm, then a row a second:
 
 | Column | Meaning |
 |---|---|
@@ -195,7 +195,8 @@ row a second:
 | `tcp_tx_bytes_s`, `tcp_rx_bytes_s` | the game's own TCP |
 | `server`, `server_pps` | the server it receives from (a letter per address, and the port) and its packets a second |
 | `peers` | addresses and ports that sent the game anything that second (relay pings included) |
-| `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps on the main port that second; 64 is over 63 ms |
+| `port` | the game's local port that received the most that second |
+| `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps that second on the ports carrying the match; 64 is over 63 ms |
 | `stalls` | stalls that finished that second |
 | `events` | match start and end, tier changes, server changes |
 

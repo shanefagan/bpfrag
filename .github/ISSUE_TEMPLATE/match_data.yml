@@ -104,8 +104,9 @@ body:
       label: Match timelines
       description: |
         With `[capture] timeline = true`: drag CSV files from
-        `/var/lib/bpfrag/captures` in here (they hold no addresses). If you
-        played games back to back, say roughly when each one ended.
+        `/run/bpfrag/captures` in here (they hold no addresses; they're gone
+        after a reboot). If you played games back to back, say roughly when
+        each one ended.
 
   - type: textarea
     id: check

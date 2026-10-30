@@ -889,7 +889,7 @@ impl<'a> Tuner<'a> {
         if !self.cfg.capture.timeline {
             return;
         }
-        let dir = Path::new(&self.cfg.general.state_dir).join("captures");
+        let dir = Path::new(&self.cfg.general.run_dir).join("captures");
         let about = format!(
             "bpfrag {}{}; {} (pid {}) [{}]; experiment: {}",
             env!("CARGO_PKG_VERSION"),
