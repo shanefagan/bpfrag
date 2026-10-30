@@ -179,8 +179,29 @@ fn is_exe(arg: &str) -> bool {
 }
 
 /// `"name"  "Deadlock"` from a Steam `appmanifest_<id>.acf`.
+/// A Steam appmanifest is a few KiB; anything bigger isn't one.
+const MANIFEST_MAX: u64 = 256 * 1024;
+
+/// The game's title from a Steam appmanifest. The path comes from the
+/// process's own arguments and working directory, so any user can point
+/// it anywhere: only a small regular file is read, and opening doesn't
+/// wait (a FIFO there would otherwise block the daemon, and /dev/zero
+/// never ends).
 fn manifest_name(path: &Path) -> Option<String> {
-    let text = fs::read_to_string(path).ok()?;
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let f = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY)
+        .open(path)
+        .ok()?;
+    let meta = f.metadata().ok()?;
+    if !meta.is_file() || meta.len() > MANIFEST_MAX {
+        return None;
+    }
+    let mut text = String::new();
+    f.take(MANIFEST_MAX).read_to_string(&mut text).ok()?;
     text.lines().find_map(|l| {
         let parts: Vec<&str> = l.trim().split('"').collect();
         // ["", "name", "\t\t", "Deadlock", ""]
@@ -543,6 +564,29 @@ mod tests {
         assert_eq!(c.classify(300).0, Verdict::Game("Steam app 730".into()));
         // the Steam client itself is not a game
         assert!(!c.classify(100).0.is_game());
+    }
+
+    #[test]
+    fn manifests_must_be_small_regular_files() {
+        let fp = FakeProc::new("manifest");
+        let lib = fp.dir.join("lib/steamapps");
+        fs::create_dir_all(&lib).unwrap();
+        let good = lib.join("appmanifest_1.acf");
+        fs::write(&good, "\"AppState\"\n{\n\t\"name\"\t\t\"Deadlock\"\n}\n").unwrap();
+        assert_eq!(manifest_name(&good).as_deref(), Some("Deadlock"));
+        // a FIFO: opening it must not wait for a writer
+        let fifo = lib.join("appmanifest_2.acf");
+        let c = std::ffi::CString::new(fifo.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        assert_eq!(manifest_name(&fifo), None);
+        // a device that never ends
+        let zero = lib.join("appmanifest_3.acf");
+        std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+        assert_eq!(manifest_name(&zero), None);
+        // too big to be a manifest
+        let big = lib.join("appmanifest_4.acf");
+        fs::write(&big, vec![b'x'; MANIFEST_MAX as usize + 1]).unwrap();
+        assert_eq!(manifest_name(&big), None);
     }
 
     #[test]

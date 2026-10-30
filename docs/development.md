@@ -73,7 +73,7 @@ AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
 ## Testing
 
 ```sh
-cargo test                     # detectors, classifier, config, journal, health, report, D-Bus, packaging (126 tests)
+cargo test                     # detectors, classifier, config, journal, health, report, D-Bus, packaging (127 tests)
 sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (30 checks)
 sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (143 checks)
 ```
