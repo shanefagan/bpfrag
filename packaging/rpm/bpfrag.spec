@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.9.0
+Version:        0.9.1
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -118,6 +118,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Fri Oct 30 2026 Shane Fagan <mail@shanefagan.com> - 0.9.1-1
+- Formatting fix so CI passes; no code changes
+
 * Fri Oct 30 2026 Shane Fagan <mail@shanefagan.com> - 0.9.0-1
 - D-Bus: match state, Steam app id and real match times for clients
 
