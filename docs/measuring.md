@@ -20,7 +20,7 @@ show what reaches the machine, not what the game does with it.
 
 | Number | Meaning | Moved by |
 |---|---|---|
-| half ≤N ms | median gap between the game's incoming packets (1 ms buckets) | the server's tick rate; shouldn't change |
+| half ≤N ms | median gap between the game's incoming packets (1 ms buckets) | the server's update rate and how it packs them; shouldn't change within one kind of match |
 | 99% ≤N ms | the gap 99% of packets beat | jitter anywhere on the path: Wi-Fi, queues, the internet |
 | longest N ms | the longest gap counted (pauses of 2 s or more aren't) | one-off hiccups, Wi-Fi power save |
 | stalls | the flow went quiet for 100 ms to 2 s, then came back at game rate | what a player feels as rubber-banding |
@@ -33,6 +33,13 @@ show what reaches the machine, not what the game does with it.
 | bulk | what was demoted, and how much | `[bulk]` |
 
 Limits to keep in mind:
+
+- **The gaps are between packets, not server updates.** A server that
+  splits each update over several packets shows the short gaps inside
+  each burst: a Deadlock bot match (about 32 updates a second, two
+  packets each) reads "half ≤3 ms", a match against people (64 a
+  second, one packet each) "half ≤14–16 ms"
+  ([findings.md](findings.md)). Compare matches of the same kind.
 
 - **1 ms resolution.** Changes of tens or hundreds of microseconds
   (interrupt coalescing, busy polling) can't show in the gap numbers.

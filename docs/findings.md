@@ -83,6 +83,36 @@ second, machine-wide. So busy polling does run on this machine during
 matches, but the count can't say whose packets they were
 ([experiment 1](experiments.md#1-does-busy-polling-reach-the-game)).
 
+**2026-10-30: the first matches on 0.8.0, and what a Deadlock bot match
+looks like.** A bot match at 13:55 (14m39s) was detected from its
+traffic from outside and nothing else: no tuning in the menu before or
+after, one match, no server changes, ended when the game was closed.
+Bot matches are a different kind of traffic from matches against
+people, and both belong in the data:
+
+| | Against people (10:07, game 1) | Bot match (13:55) |
+|---|---|---|
+| Game sends | 64 a second (32 while dead) | 32 a second throughout |
+| Server sends | about 64 a second, 200–400 bytes | about 64 a second, ~1 KB, in pairs about 2 ms apart, a pair every ~31 ms |
+| Packet gaps, half / 99% | ≤14–16 ms / ≤31 ms | ≤3 ms / ≤33 ms |
+| Seconds with a gap of 40 ms+ | 3 in 19 min | 12 in 14.5 min |
+| Typical download | 94 KB/s | 60 KB/s |
+| The game's own TCP | 3.5 MB | 2.5 MB |
+
+So the bot server runs at about 32 updates a second, each split over two
+packets, and "half ≤3 ms" is the gap inside a pair, not the update rate
+([measuring.md](measuring.md#what-the-numbers-measure)). Its one stall
+came 8 seconds in, during a second of about 490 packets and 575 KB,
+probably the match's data loading. Every Deadlock game so far also
+talked TCP throughout, 2.5 to 5.4 MB a game, spread over the match
+rather than one download.
+
+Busy polling (on that day) counted about 97 packets a second
+machine-wide during the bot match, while the game received about 64,
+against 53 a second in the morning session with the game receiving
+about 127: the count doesn't follow the game's traffic, so most of it is
+probably other programs'.
+
 ## Games observed
 
 Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`
