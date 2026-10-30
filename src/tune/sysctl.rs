@@ -127,6 +127,19 @@ impl Knobs {
                 }
             };
             let prev = self.saved_get(&key).cloned();
+            if let Some(Saved::File { applied, .. }) = &prev {
+                if !applied.is_empty() && cur != *applied {
+                    // Someone else changed it after us, mid-match: theirs
+                    // stands now, as it will when the match ends.
+                    self.theirs(&key, || {
+                        format!(
+                            "{k} was changed by someone else during the match (now {cur}); \
+                             leaving it"
+                        )
+                    });
+                    continue;
+                }
+            }
             let baseline = match &prev {
                 Some(Saved::File { value, .. }) => value.clone(),
                 _ => cur.clone(),

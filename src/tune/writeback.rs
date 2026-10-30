@@ -92,6 +92,18 @@ impl Knobs {
                 continue;
             };
             wanted.insert(key.clone());
+            if let Some(Saved::Dirty { applied, .. }) = self.saved_get(&key) {
+                if *applied != 0 && bytes != *applied {
+                    // changed by someone else mid-match: leave theirs
+                    self.theirs(&key, || {
+                        format!(
+                            "vm.{which}_bytes was changed by someone else during the match \
+                             (now {bytes}); leaving it"
+                        )
+                    });
+                    continue;
+                }
+            }
             let target = mb * MIB;
             if bytes == target {
                 continue;

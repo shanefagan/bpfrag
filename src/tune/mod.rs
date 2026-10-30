@@ -83,6 +83,16 @@ impl Knobs {
         }
     }
 
+    /// A knob someone else changed after bpfrag did, mid-match: stop
+    /// holding it (it no longer shows as ours), but keep its journal entry,
+    /// so the end of the match leaves it alone too. Logged once.
+    fn theirs(&mut self, key: &str, msg: impl FnOnce() -> String) {
+        self.current.remove(key);
+        if self.warned.insert(format!("theirs:{key}")) {
+            info!("{}", msg());
+        }
+    }
+
     /// Write the journal. Returns false if it couldn't be written, in which
     /// case callers must not change the knob they journalled for.
     fn persist(&self) -> bool {
@@ -195,6 +205,7 @@ impl Knobs {
             self.saved.retain(|(k, _)| *k != key);
         }
         self.current.clear();
+        self.warned.retain(|w| !w.starts_with("theirs:"));
         self.persist();
         (done, kept)
     }

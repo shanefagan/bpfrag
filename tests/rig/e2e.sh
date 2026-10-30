@@ -124,7 +124,14 @@ same "after game exit"
 kill $N1 $N2 $N3
 
 echo "== 2. a value changed by someone else mid-match is left alone"
-echo 64 > $W/rate; game 64 180 $W/rate; sleep 6; sysctl -qw net.core.busy_poll=99; kill $G; sleep 2
+echo 64 > $W/rate; game 64 180 $W/rate; sleep 6; sysctl -qw net.core.busy_poll=99
+# a tier change re-applies the profile (intense wants busy_poll=75)
+echo 150 > $W/rate; sleep 8
+[ "$(grep -c "COMPETITIVE -> INTENSE" $W/d.log)" -ge 2 ] && ok "tier changed mid-match" || bad "no tier change: $(tail -3 $W/d.log)"
+[ "$(sysctl -n net.core.busy_poll)" = 99 ] && ok "busy_poll=99 kept through the tier change" || bad "tier change clobbered busy_poll ($(sysctl -n net.core.busy_poll))"
+grep -q "net.core.busy_poll was changed by someone else during the match (now 99)" $W/d.log && ok "and logged" || bad "not logged"
+[ "$(sysctl -n net.core.busy_read)" = 75 ] && ok "the rest of the intense profile applied" || bad "busy_read $(sysctl -n net.core.busy_read)"
+kill $G; sleep 2; echo 64 > $W/rate
 [ "$(sysctl -n net.core.busy_poll)" = 99 ] && ok "busy_poll=99 kept" || bad "clobbered busy_poll"
 sysctl -qw net.core.busy_poll=0
 
