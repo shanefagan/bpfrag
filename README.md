@@ -377,9 +377,11 @@ game, why it counts as a game, every applied setting and the last match.
 
 bpfrag also publishes a read-only interface on the system bus,
 `com.performativenonsense.Bpfrag1`, for programs that want to follow matches
-as they happen: properties for the match in progress, and signals when
-one starts, changes tier and ends, with its health. Any user can read it,
-and nothing on the bus can change what bpfrag does.
+as they happen (a status bar, OBS scene switching, clipping a recording):
+whether a game is idle, in its menu or in a match, the match in
+progress with its Steam app id, and signals when one starts, changes tier
+and ends, with when its traffic really began and stopped and its health.
+Any user can read it, and nothing on the bus can change what bpfrag does.
 
 ```sh
 gdbus monitor --system --dest com.performativenonsense.Bpfrag1
