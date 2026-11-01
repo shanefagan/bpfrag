@@ -29,7 +29,6 @@ BuildRequires:  rust >= 1.85
 BuildRequires:  clang
 BuildRequires:  clang-devel
 BuildRequires:  gcc
-BuildRequires:  make
 BuildRequires:  /usr/bin/pkg-config
 BuildRequires:  pkgconfig(dbus-1)
 BuildRequires:  pkgconfig(libelf)

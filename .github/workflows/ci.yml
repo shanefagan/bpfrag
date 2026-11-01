@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: MIT
 #
 # Every push runs the tests and builds the .deb, .rpm and binary tarball.
-# Pushing a tag vX.Y.Z (see packaging/bump-version.sh) also publishes them
-# as a GitHub release.
+# Pushing a tag vX.Y.Z (see `just bump`) also publishes them as a GitHub
+# release.
+#
+# Every build and test step is a recipe in the justfile, so CI runs what a
+# developer runs (`just ci` is the test job). Steps here only install
+# tools.
 name: CI
 
 on:
@@ -24,36 +28,37 @@ jobs:
       - name: Install build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config tcpdump iproute2
+          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config tcpdump iproute2 just
 
       - name: Rust toolchain
         run: |
           rustup toolchain install stable --profile minimal --component clippy,rustfmt
           rustup default stable
 
+      # The same steps as `just ci`, one at a time so each shows up on its own.
       - name: Format
-        run: cargo fmt --check
+        run: just fmt-check
 
       - name: Clippy
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: just lint
 
       - name: Unit tests
-        run: cargo test --locked
+        run: just test
 
       - name: Build
-        run: cargo build --locked --release
+        run: just build
 
       - name: What the runner supports
-        run: sudo ./target/release/bpfrag --check || true
+        run: just check-system
 
-      - name: BPF selftest (packet vectors through the DSCP marker)
-        run: sudo ./target/release/bpfrag --selftest
+      - name: BPF selftest (packet vectors through both tc programs)
+        run: just selftest
 
       - name: End-to-end (netns, fake game, noise, crash recovery)
-        run: sudo tests/rig/e2e.sh target/release/bpfrag
+        run: just e2e
 
       - name: End-to-end with only the systemd unit's capabilities
-        run: sudo tests/rig/e2e.sh tests/rig/unit-caps.sh
+        run: just e2e-unit
 
   msrv:
     # rust-version in Cargo.toml: 1.85, Debian 13's rustc.
@@ -63,13 +68,11 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config
+          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config just
       - name: Rust 1.85
-        run: |
-          rustup toolchain install 1.85 --profile minimal
-          rustup default 1.85
+        run: rustup toolchain install 1.85 --profile minimal
       - name: Check
-        run: cargo check --locked --all-targets
+        run: just msrv
 
   deb:
     # Built on Ubuntu 22.04 (glibc 2.35) so the package installs on
@@ -83,31 +86,20 @@ jobs:
           apt-get install -y --no-install-recommends ca-certificates curl git build-essential \
             clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config dpkg-dev lintian
       - uses: actions/checkout@v7
-      - name: Rust toolchain and cargo-deb
+      - name: Rust toolchain, cargo-deb and just
+        # Ubuntu 22.04 has no just package.
         run: |
           curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.cargo/bin/cargo" install cargo-deb --locked
+          "$HOME/.cargo/bin/cargo" install cargo-deb just --locked
       - name: Build .deb
-        run: cargo deb --locked
+        run: just deb
       - name: Lint
-        run: lintian --suppress-tags initial-upload-closes-no-bugs target/debian/*.deb
+        run: just deb-lint
       - name: Binary tarball (glibc 2.35+, any distro)
-        run: |
-          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-          d=bpfrag-$ver-x86_64-linux
-          mkdir -p "target/$d"
-          cp target/release/bpfrag dist/bpfrag.service dist/bpfrag.8 dist/bpfrag.toml \
-            dist/bpfrag.default dist/com.performativenonsense.Bpfrag1.conf README.md LICENSE LICENSE-GPL-2.0 "target/$d/"
-          tar -C target -czf "target/$d.tar.gz" "$d"
-      - name: Install, selftest the installed binary, remove, purge
-        run: |
-          apt-get install -y ./target/debian/*.deb
-          bpfrag --version
-          bpfrag --dump-config >/dev/null
-          apt-get remove -y bpfrag
-          apt-get purge -y bpfrag
-          test ! -e /etc/bpfrag
+        run: just tarball
+      - name: Install, run the installed binary, remove, purge
+        run: just deb-smoke
       - uses: actions/upload-artifact@v7
         with:
           name: bpfrag-deb
@@ -122,22 +114,18 @@ jobs:
       LC_ALL: C.UTF-8
     steps:
       - name: Install rpm tooling
-        run: dnf -y install git rpm-build rpmlint
+        run: dnf -y install git rpm-build rpmlint just
       - uses: actions/checkout@v7
       - name: Install the spec's BuildRequires
         run: dnf -y builddep packaging/rpm/bpfrag.spec
       - name: Build .src.rpm and .rpm
         run: |
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          packaging/rpm/build.sh
+          just rpm
       - name: Lint
-        run: rpmlint -r packaging/rpm/bpfrag.rpmlintrc target/rpm/RPMS/*/*.rpm target/rpm/SRPMS/*.rpm
-      - name: Install and remove
-        run: |
-          dnf -y install target/rpm/RPMS/*/bpfrag-[0-9]*.rpm
-          bpfrag --version
-          bpfrag --dump-config >/dev/null
-          dnf -y remove bpfrag
+        run: just rpm-lint
+      - name: Install, run the installed binary, remove
+        run: just rpm-smoke
       - uses: actions/upload-artifact@v7
         with:
           name: bpfrag-rpm
@@ -155,13 +143,10 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      - name: Install just
+        run: sudo apt-get update && sudo apt-get install -y just
       - name: Tag matches the version in Cargo.toml
-        run: |
-          ver=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
-          if [ "$GITHUB_REF_NAME" != "v$ver" ]; then
-            echo "tag $GITHUB_REF_NAME, but Cargo.toml says $ver (run packaging/bump-version.sh)"
-            exit 1
-          fi
+        run: just check-tag "$GITHUB_REF_NAME"
       - uses: actions/download-artifact@v8
         with:
           path: artifacts

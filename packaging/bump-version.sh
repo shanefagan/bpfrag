@@ -1,7 +1,7 @@
 #!/bin/sh
 # SPDX-License-Identifier: MIT
 #
-# Set a new version everywhere it is recorded:
+# Set a new version everywhere it is recorded (`just bump` runs this):
 #
 #   packaging/bump-version.sh 0.2.0 "Per-match network health report"
 #   git commit -am "Release 0.2.0"
