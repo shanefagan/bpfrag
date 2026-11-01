@@ -57,14 +57,17 @@ dist/                        systemd unit, man page, /etc/default file, example 
 packaging/arch/              PKGBUILD (bpfrag-git) + install hook
 packaging/debian/            changelog + postinst for cargo-deb ([package.metadata.deb])
 packaging/rpm/               spec, build.sh (vendored, offline), rpmlintrc
-packaging/bump-version.sh    set a new version everywhere it is recorded
+packaging/bump-version.sh    set a new version everywhere it is recorded (just bump)
+justfile                     build, test, install, package and release recipes;
+                             CI runs the same ones
 tests/rig/                   end-to-end test in a throwaway netns (root): fake game,
                              echo and TCP bulk server, bulk.py, pcap checks
 docs/                        why each setting, how to measure, findings, internals
 docs/scripts/matches.py      the log as a CSV of matches
 AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
-.github/workflows/ci.yml     fmt, clippy, tests, --selftest and the e2e rig as root,
-                             MSRV check, .deb/.rpm builds, releases on tags
+.github/workflows/ci.yml     the justfile's recipes: fmt, clippy, tests, --selftest and
+                             the e2e rig as root, MSRV check, .deb/.rpm builds,
+                             releases on tags
 .github/ISSUE_TEMPLATE/      bug report (asks for --report) and feature request forms
 .github/pull_request_template.md  testing and scope checklist
 ```
@@ -72,11 +75,29 @@ AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
 
 ## Testing
 
+The [justfile](../justfile) holds every build and test command, and CI
+runs the same recipes, so a change that passes `just ci` passes CI's test
+job. `just` alone lists them all.
+
 ```sh
-cargo test                     # detectors, classifier, config, journal, health, report, D-Bus, packaging (128 tests)
-sudo bpfrag --selftest         # BPF_PROG_TEST_RUN vectors through both tc programs (30 checks)
-sudo tests/rig/e2e.sh          # real kernel: netns + fake Steam game + noise (147 checks)
+just pre-commit    # cargo fmt --check, clippy -D warnings, unit tests: no root
+just ci            # all of the below, as CI runs it
 ```
+
+| Recipe | What | Root |
+|---|---|---|
+| `just fmt-check` | `cargo fmt --check` | |
+| `just lint` | `cargo clippy --locked --all-targets -- -D warnings` | |
+| `just test` | unit tests: detectors, classifier, config, journal, health, report, D-Bus, packaging (128) | |
+| `just build` | `cargo build --locked --release` | |
+| `just check-system` | `bpfrag --check`: what this machine and kernel support (never fails) | yes |
+| `just selftest` | `bpfrag --selftest`: BPF_PROG_TEST_RUN vectors through both tc programs (30 checks) | yes |
+| `just e2e` | real kernel: netns, fake Steam game, noise (147 checks) | yes |
+| `just e2e-unit` | the same, with only the systemd unit's capabilities | yes |
+| `just msrv` | `cargo +1.85 check` (the `rust-version` in Cargo.toml) | |
+
+Recipes that need root use `sudo` unless they already run as root (a
+container), and build the binary as you first, so `target/` stays yours.
 
 `--selftest` loads the BPF object on your running kernel and pushes
 hand-built IPv4 and IPv6 packets through the tc programs. Nothing is attached
@@ -154,19 +175,37 @@ Userspace wakes once a second.
 
 Side-by-side numbers for each release are in [findings.md](findings.md#overhead).
 
+## Packages
+
+```sh
+just deb          # .deb in target/debian/ (needs cargo-deb); just deb-lint, just deb-smoke
+just rpm          # .rpm and .src.rpm in target/rpm/; just srpm, just rpm-lint, just rpm-smoke
+just tarball      # binary, unit, man page, configs and licences, for any glibc distro
+```
+
+`deb-smoke` and `rpm-smoke` install the package, run it and remove it, so
+they're for a container or a VM; CI runs them in Ubuntu 22.04 and Fedora
+containers.
+
+Distributions don't need just: bpfrag builds with `cargo build --release`,
+and `just install` (with `DESTDIR` and `PREFIX`, or `SYSCONFDIR`, `UNITDIR`
+and `DBUSDIR`) is the list of files a package ships.
+
+
 ## Releasing
 
 ```sh
-packaging/bump-version.sh 0.2.0 "One line about what changed"
+just bump 0.2.0 "One line about what changed"
 git commit -am "Release 0.2.0"
 git tag -a v0.2.0            # the tag message becomes the release notes
 git push origin main v0.2.0
 ```
 
-The script updates `Cargo.toml`, `Cargo.lock`, the RPM spec, the Debian
-changelog and the man page; a unit test fails if any of them disagree. For
-a `v*` tag, CI runs everything as usual, checks the tag matches
-`Cargo.toml`, and publishes a GitHub release. The tag's message becomes the
+`just bump` runs `packaging/bump-version.sh`, which updates `Cargo.toml`,
+`Cargo.lock`, the RPM spec, the Debian changelog and the man page; a unit
+test fails if any of them disagree. For a `v*` tag, CI runs everything as
+usual, checks the tag matches `Cargo.toml` (`just check-tag`), and
+publishes a GitHub release. The tag's message becomes the
 release notes, and the release carries the `.deb`, `.rpm`, `.src.rpm`, the
 vendored-crates tarball the spec needs, the binary tarball and
 `SHA256SUMS`.

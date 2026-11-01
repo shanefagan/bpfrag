@@ -287,21 +287,21 @@ The package needs the glibc it was built against or newer, so build on the
 oldest release you'll install it on.
 
 ```sh
-sudo apt install clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config make
+sudo apt install clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config
 cargo install cargo-deb --locked
-make deb
+cargo deb --locked
 sudo apt install ./target/debian/bpfrag_*.deb
 ```
 
-**Fedora, Nobara.** `make rpm` packs the committed tree and its
-vendored crates into source tarballs, then runs `rpmbuild` on
-`packaging/rpm/bpfrag.spec`, which builds offline. `make srpm` stops at the
+**Fedora, Nobara.** `packaging/rpm/build.sh` packs the committed tree and
+its vendored crates into source tarballs, then runs `rpmbuild` on
+`packaging/rpm/bpfrag.spec`, which builds offline. `--srpm` stops at the
 `.src.rpm`, which COPR or mock can build. On Bazzite and other image-based
 Fedoras, build in a toolbox and layer the RPM with `rpm-ostree install`.
 
 ```sh
 sudo dnf install rpm-build git && sudo dnf builddep packaging/rpm/bpfrag.spec
-make rpm
+packaging/rpm/build.sh
 sudo dnf install ./target/rpm/RPMS/*/bpfrag-[0-9]*.rpm
 ```
 
@@ -312,11 +312,11 @@ upgrades.
 
 **Anything else.** Unpack the release tarball (binary, systemd unit, man
 page, example config, D-Bus policy), or install the build dependencies and
-use the Makefile:
+[just](https://github.com/casey/just), then:
 
 ```sh
-make
-sudo make install
+just build                    # cargo build --locked --release
+sudo just install             # DESTDIR and PREFIX work as usual
 sudo systemctl daemon-reload
 sudo systemctl reload dbus    # loads the D-Bus policy
 ```

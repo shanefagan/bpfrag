@@ -184,7 +184,7 @@ once and carries on; it tries again every 30 seconds.
 The log then says `D-Bus: can't own com.performativenonsense.Bpfrag1`. Signals
 still go out, but property reads can't reach bpfrag. Usually the bus
 hasn't loaded the policy file yet: the packages reload it when they
-install, and after a `make install` run `sudo systemctl reload dbus`.
+install, and after a `just install` run `sudo systemctl reload dbus`.
 bpfrag asks for the name again every 30 seconds, so it doesn't need a
 restart.
 

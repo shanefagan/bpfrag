@@ -36,17 +36,21 @@ Needs Rust 1.85+, clang, libclang, libelf, libdbus, zlib. The BPF object
 is built by `build.rs` (libbpf-cargo); `src/bpf/intf.h` is bindgen'd into
 `bpf_intf.rs`.
 
+Every build and test command is a recipe in the `justfile`, and CI calls
+the same recipes; don't add a command to CI that isn't one.
+
 ```sh
-cargo fmt --check
-cargo clippy --all-targets -- -D warnings
-cargo test                                   # pure logic, no root
-sudo ./target/release/bpfrag --selftest      # BPF on this kernel, changes nothing
-sudo tests/rig/e2e.sh target/release/bpfrag  # real kernel, netns, fake game
-sudo tests/rig/e2e.sh tests/rig/unit-caps.sh # same, with only the unit's capabilities
+just pre-commit   # fmt --check, clippy -D warnings, unit tests: no root
+just selftest     # BPF on this kernel, changes nothing (sudo)
+just e2e          # real kernel, netns, fake game (sudo)
+just e2e-unit     # same, with only the unit's capabilities (sudo)
+just ci           # all of the above, in CI's order
 ```
 
-CI runs all of these, plus a Rust 1.85 build, the .deb (Ubuntu 22.04
-container) and the .rpm (Fedora container).
+CI runs `just ci`'s steps, plus `just msrv` (Rust 1.85), the .deb
+(`just deb`, Ubuntu 22.04 container) and the .rpm (`just rpm`, Fedora
+container). bpfrag itself must keep building with plain `cargo build
+--release`: distributions build it their own way.
 
 ## Rules that keep it safe
 
@@ -117,7 +121,7 @@ container) and the .rpm (Fedora container).
   when adding or renaming one.
 - The versions in `Cargo.toml`, `packaging/rpm/bpfrag.spec`,
   `packaging/debian/changelog` and the man page header agree. Use
-  `packaging/bump-version.sh NEW "note"` to change them.
+  `just bump NEW "note"` to change them.
 - `dist/bpfrag.toml` must load with every example uncommented.
 
 ## Packaging and releases
@@ -125,8 +129,12 @@ container) and the .rpm (Fedora container).
 - .deb: `[package.metadata.deb]` in Cargo.toml plus `packaging/debian/`.
   .rpm: `packaging/rpm/bpfrag.spec`, built offline from a vendored-crates
   tarball by `packaging/rpm/build.sh`. Arch: `packaging/arch/PKGBUILD`.
-- Releases: bump the version, commit, tag `vX.Y.Z`, push; CI builds and
+- Releases: `just bump`, commit, tag `vX.Y.Z`, push; CI builds and
   publishes the GitHub release (see `docs/development.md`, "Releasing").
+- `just install` is the list of files a package ships (binary, unit, man
+  page, D-Bus policy, default config). A new shipped file goes there, in
+  `[package.metadata.deb]` assets, the RPM spec, the PKGBUILD and
+  `just tarball`.
 - makepkg rewrites `pkgver` in the PKGBUILD on every build; don't commit
   that change on its own.
 - Packages built on CachyOS carry its CPU-specific flags (AVX-512 on
