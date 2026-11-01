@@ -189,7 +189,8 @@ containers.
 
 Distributions don't need just: bpfrag builds with `cargo build --release`,
 and `just install` (with `DESTDIR` and `PREFIX`, or `SYSCONFDIR`, `UNITDIR`
-and `DBUSDIR`) is the list of files a package ships.
+and `DBUSDIR`) is the list of files a package ships. `install` and
+`uninstall` ask before they run; `just --yes install` doesn't.
 
 
 ## Releasing

@@ -78,7 +78,8 @@ msrv toolchain=msrv:
 
 # ---- install ---------------------------------------------------------------
 
-# Install the binary, unit, man page, D-Bus policy and (if absent) config
+# Install the binary, unit, man page, D-Bus policy and (if absent) config (asks first; --yes skips)
+[confirm]
 install:
     @test -x {{ bin }} || { echo "{{ bin }} not built: run 'just build' first (not as root)"; exit 1; }
     install -Dm755 {{ bin }} "{{ destdir }}{{ prefix }}/bin/bpfrag"
@@ -90,7 +91,8 @@ install:
     @echo
     @echo "Installed. Next: sudo systemctl daemon-reload && sudo systemctl reload dbus && sudo systemctl enable --now bpfrag"
 
-# Stop the service and remove what `just install` put in place (not the config)
+# Stop the service and remove what `just install` put in place, not the config (asks first)
+[confirm]
 uninstall:
     -systemctl disable --now bpfrag 2>/dev/null
     rm -f "{{ destdir }}{{ prefix }}/bin/bpfrag" "{{ destdir }}{{ unitdir }}/bpfrag.service" \
