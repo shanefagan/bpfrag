@@ -47,6 +47,8 @@ There are four kinds:
 | 20 | [What does a TCP game's traffic look like?](#20-tcp-games) | observe (runs today) | MMO players |
 | 21 | [Do thin-stream timeouts help a game that talks TCP?](#21-thin-stream-tcp-timeouts) | Check, then Setup | TCP games on Wi-Fi |
 | 22 | [Where does one game end when the next starts straight away?](#22-back-to-back-games) | timelines (run today) | Deadlock Street Brawl, any queue-straight-in game |
+| 23 | [Can both ends of a match together say where a hitch happened?](#23-both-ends-of-a-match) | timelines on two machines (runs today) | anyone who can play on a server they or a friend host |
+| 24 | [What does a game server hosted at home look like to bpfrag?](#24-a-game-server-hosted-at-home) | observe, dry run (runs today) | home-hosted servers (Valheim, Palworld, Minecraft) |
 
 Entries 18 and 19, and parts of 5, 7, 9, 12 and M3, came from an outside
 review (October 2026); each was checked against kernel sources before
@@ -305,6 +307,94 @@ the middle of a game (a false split is worse than none).
 matches on it (a new match with its own experiment draw, the settings
 staying applied). Several partial ones: combine them, or leave splitting
 off and keep counting server changes.
+
+### 23. Both ends of a match
+
+**Question:** when a match hitches, can bpfrag's numbers from the
+player's machine and from the server, lined up second by second, say
+where it happened: the player's machine, the path between, or the
+server?
+
+**Why:** each end sees half. A server operator already knows a lot per
+player from its own protocol (round-trip time, loss, jitter), but not
+what happens below the game's socket on the player's machine. bpfrag
+does: arrival gaps timed at the network card before the game reads
+anything, the game's own socket buffer drops, backlog and NIC drops,
+Wi-Fi power save, and whether a local upload or download was competing
+(bulk). Together they could tell apart, as a hypothesis:
+
+| Server's side | Player's side | Points at |
+|---|---|---|
+| sent steadily (needs M4) | arrivals stalled at the card | the path |
+| sent steadily | arrivals fine, the game's socket dropped or a local upload was saturating | the player's machine or home network |
+| its outgoing stream paused for every player at once (needs M4) | arrivals stalled | the server |
+| arrivals from this player stalled | the player's outgoing stream was steady (needs M4) | the path, upstream |
+
+Comparing gap patterns needs clocks within a second or so (NTP is
+plenty), not synchronised to the millisecond; one-way delay would need
+more than that and isn't the aim.
+
+**How:** runs today without M4, which covers half the table. Host a
+server at home (or play on a friend's) with bpfrag on both machines,
+`[capture] timeline = true` on both, both clocks on NTP (`timedatectl`
+says "System clock synchronized: yes"). On the server, tag the server
+process `BPFRAG_GAME=1` so it's treated as a game. Play a session,
+noting the times of any hitch you feel. Then line up the two timelines
+by their `unix` column: the server's arrivals are the player-to-server
+direction, the player's arrivals the server-to-player one. A home
+server's upload is the narrow link, so loading it (a big upload on the
+server's line) is a good way to make hitches to look for.
+
+**Read it:** for each stall or bad second on either side, whether the
+other side saw the same second; which direction it was in; and whether
+the player's machine had drops or bulk traffic then.
+
+**Decides:** if the two sides line up and point at a cause, the
+measurement is worth making easier: M4 (the server's outgoing gaps, and
+the player's), M10 (health while a match is on), and a documented
+summary a game, launcher or support tool could read from bpfrag's
+D-Bus interface, with the player's consent, to attach to what it
+already reports. bpfrag would never send it anywhere itself, would
+share kinds of cause ("a local upload was saturating the line") rather
+than which program, and would keep addresses out of its logs as now; a
+match id from the game, not addresses (NAT changes them), would join
+the two sides. If they don't line up usefully, record that in
+findings.md and leave it there.
+
+### 24. A game server hosted at home
+
+**Question:** does bpfrag detect, measure and help a game server run on a
+home machine (Valheim, Palworld, Minecraft, a CS2 or Deadlock community
+server), and which of its settings matter there?
+
+**Why:** a home server sends every player's updates out through the home
+upload, usually the narrowest link and the one that queues, so bulk
+demotion and DSCP (with CAKE or router QoS) are the likely gains. It
+also receives every player on one socket, so the buffer, backlog and
+budget drop counters that stay at 0 on clients might move; and servers
+save world state while running, which is where writeback tightening
+could show up as fewer tick hitches (hypothesis). Wi-Fi power save and,
+usually, coalescing don't apply. On a dedicated machine doing nothing
+else, a static `sysctl.d` file would get most of the same settings;
+bpfrag's part would be bulk demotion and the measurements.
+
+What doesn't fit yet: a server talks to many peers, so "the server"
+bpfrag follows would be the busiest player; servers started by steamcmd
+may carry no `SteamAppId`; a machine can run several servers, and
+bpfrag tunes one game at a time.
+
+**How:** `--dry-run` (nothing changed), the server process tagged
+`BPFRAG_GAME=1`, `[capture] timeline = true`, and a session with a few
+players. Note when autosaves happen if the server logs them.
+
+**Read it:** whether it's detected and when matches start and end; the
+drop counters; per-player arrivals in the timeline (`peers`); stalls
+against autosave times.
+
+**Decides:** whether a server mode is worth building, and what it needs:
+all players followed, not one server; several instances; a profile
+without the client-only settings; per-player health with addresses kept
+out of logs (as servers are now: a letter each).
 
 ### 18. Byte Queue Limits
 
@@ -565,12 +655,13 @@ it.
 | M1 | Busy-polled packets (`BusyPollRxPackets`) during the match, in the health line. Done: "busy-polled packets: N" | 1 |
 | M2 | The game's socket buffer sizes (`rb`, via sock_diag as `ss -m` does) | 2 |
 | M3 | Round-trip time to the gateway and a public anycast address, about once a second during a match. Arrival gaps measure jitter, not delay: a queue holding a steady 80 ms still delivers a steady 64 Hz stream, so only round-trip time shows it. Game servers and relays may not answer pings, which is why the gateway and a public address are the dependable targets; the server's own address needs M7 | 8, 10, 12, 18 |
-| M4 | Gaps between the game's outgoing packets (the egress marker sees them) to tell a game or host hiccup from a network one | all |
+| M4 | Gaps between the game's outgoing packets (the egress marker sees them) to tell a game or host hiccup from a network one; on a server, a tick-loop hitch shows as every player's outgoing stream pausing at once | all, 23, 24 |
 | M5 | Timestamps of the last stalls in each match, to line them up with tier changes, scans and other events | 4, 7 |
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
 | M7 | The game's peer address (or its network) per match. Partly done: the server is followed and named by a letter per address within a match ("server A:27031"), without the address itself; comparing servers across matches would need a stable name for one | 17, 22 |
 | M8 | Sub-millisecond arrival timing | 5, 13 |
 | M9 | The game's own TCP retransmissions and timeouts (the `tcp_retransmit_skb` tracepoint carries the socket, so it can be tied to the game's connection) | 21 |
+| M10 | Health while a match is on: the gap figures, stalls and drops so far, as a D-Bus property refreshed every few seconds, not only in `MatchEnded`. For an overlay, a game or a support tool to say "your side is fine" during play | 23 |
 
 ## Out of scope
 
