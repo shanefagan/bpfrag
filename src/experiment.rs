@@ -40,10 +40,12 @@ pub enum Setting {
 /// `[experiment] setting` value that picks one from `pool` each period.
 pub const RANDOM: &str = "random";
 
-/// The pool for a wired connection: everything but Wi-Fi power save.
+/// The pool for a wired connection: everything but Wi-Fi power save, and
+/// NIC coalescing, whose effect (microseconds) the gap figures (1 ms) can't
+/// show; on 2026-11-02 what it did change was how much busy polling
+/// found to do. `setting = "coalescing"` still tests it on its own.
 pub const WIRED_POOL: &[&str] = &[
     "dscp",
-    "coalescing",
     "busy_polling",
     "socket_buffers",
     "backlog",
@@ -356,7 +358,7 @@ mod tests {
     fn pools_follow_the_link() {
         let auto = Pool::Named("auto".into());
         assert!(!pool_names(&auto, Link::Wired).contains(&"wifi_power_save".into()));
-        assert!(pool_names(&auto, Link::Wired).contains(&"coalescing".into()));
+        assert!(!pool_names(&auto, Link::Wired).contains(&"coalescing".into()));
         assert!(pool_names(&auto, Link::Wifi).contains(&"wifi_power_save".into()));
         assert!(!pool_names(&auto, Link::Wifi).contains(&"coalescing".into()));
         // a named pool ignores the link; a list is taken as given

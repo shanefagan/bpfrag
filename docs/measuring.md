@@ -89,9 +89,12 @@ pick is kept in `/var/lib/bpfrag`, so restarts and reboots during the day
 don't change it. The day starts at 05:00, so an evening that runs past
 midnight stays one experiment. Settings this machine already has (because
 the distribution ships them, or bpftune holds them) are left out, since
-both halves would be the same. The wired pool leaves out Wi-Fi power save;
-the Wi-Fi pool leaves out NIC coalescing. `sudo bpfrag --check` shows
-today's pick.
+both halves would be the same. The wired pool leaves out Wi-Fi power save
+and NIC coalescing (its effect is microseconds, below what the gap
+figures can show; test it on its own with `setting = "coalescing"` and
+watch the busy-polled and NIC drop counts); the Wi-Fi pool leaves out
+coalescing too. The day's pick waits until the network is up.
+`sudo bpfrag --check` shows today's pick.
 
 Testing one setting at a time is the point: switching everything off at
 once (`setting = "all"`) can show whether bpfrag helps as a whole, but not
