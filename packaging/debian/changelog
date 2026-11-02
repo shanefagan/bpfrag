@@ -1,3 +1,9 @@
+bpfrag (0.11.0-1) unstable; urgency=medium
+
+  * Gaps between updates at the usual rate; tier from the update rate
+
+ -- Shane Fagan <mail@shanefagan.com>  Mon, 02 Nov 2026 19:54:26 +0000
+
 bpfrag (0.10.0-1) unstable; urgency=medium
 
   * Gap figures cover play; tiers only go up; fewer false matches
