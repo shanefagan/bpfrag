@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.9.2
+Version:        0.10.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.10.0-1
+- Gap figures cover play; tiers only go up; fewer false matches
+
 * Fri Oct 30 2026 Shane Fagan <mail@shanefagan.com> - 0.9.2-1
 - Fix a way for any user to hang the daemon; keep others' mid-match changes and unrestorable originals; unit hardening
 
