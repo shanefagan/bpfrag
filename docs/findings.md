@@ -16,6 +16,20 @@ conditions, the number of matches on each side, and the medians.
 |---|---|---|---|---|---|---|---|
 | 2026-11-02 | CachyOS, wired (`eno1`), bpfrag 0.9.2 tuning, Deadlock, ktorrent seeding and downloading throughout (marked LE) | NIC coalescing on (0–10 µs) / off (NIC default) | 5 / 5 | 32 / 31 ms | 1016 / 573 ms | 2 / 1 | No difference in the gaps (1 ms resolution can't show a microsecond effect, and every stall and long gap was loading or the end screen). Busy polling did far less with coalescing on: 31–37 busy-polled packets a second against 114–192, no overlap (permutation p = 0.047 on medians) |
 
+**2026-11-02 evening: six more Deadlock matches** (three on 0.10.0,
+three on 0.11.0; experiment: socket buffers). On 0.11.0 the meter counted
+64 updates a second where 0.10.0 counted 108–119 packets, and the
+per-second half-gap stayed at 16 ms. Two things it got wrong, fixed in
+0.11.1: a relay-ping burst (the client pinging two dozen of Steam's
+relays at once, 100 more packets a second for two seconds) moved a
+64-tick match to INTENSE ten minutes in; and a 12-second menu between two
+games, under the 15 seconds that ended a match, made them one 31-minute
+match, its "server change" the second game. The relay moved mid-game,
+with no break, in four of the six. The second game of that merged match
+had the evening's only stall during play: incoming updates fell to 37 in
+one second, then a burst of 455 packets in 2 ms gaps caught up, a real
+hiccup on the path, not loading or the end screen.
+
 **2026-11-02: what that day showed beyond the comparison.** Same setup,
 13 matches. Every stall and every longest gap of a second or more fell
 in a match's first 50 seconds (loading arrives in bursts) or its last
