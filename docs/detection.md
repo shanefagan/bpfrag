@@ -37,8 +37,10 @@ checks these signals, strongest first:
 
 A game that passes is **watched** before anything is tuned: the arrival
 meter goes on its ports, on the default-route interfaces and on loopback,
-and counts where its packets arrive. Traffic from outside starts the match
-(usually within a second). Some games talk to a server of their own in
+and counts where its packets arrive. Traffic from outside in two of three
+one-second windows starts the match (usually two seconds in); a single
+second of it isn't enough, since a game checking in with a server from its
+menu sends some too (Deadlock does as it starts). Some games talk to a server of their own in
 their menus, over loopback: Deadlock does, about 128 packets a second each
 way, which by rate alone looks like an INTENSE match. If after three
 seconds the game's traffic arrives on loopback and not from outside, no

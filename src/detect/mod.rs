@@ -730,11 +730,23 @@ impl Detector {
         } else {
             w.outside_since = None;
         }
+        // Traffic from outside in two of the last three windows: one
+        // window alone can be the game checking in with a server from its
+        // menu (Deadlock does when it starts), not a match.
+        let outside_windows = self
+            .paths
+            .iter()
+            .rev()
+            .take(3)
+            .filter(|p| p.outside_pps >= idle)
+            .count();
         let go = if w.local {
             // back from a menu: two windows in three from outside
             where_now(&self.paths, 3, idle) == Where::Outside
-        } else if latest.outside_pps >= idle {
+        } else if outside_windows >= 2 {
             true
+        } else if outside_windows == 1 {
+            false
         } else {
             match where_now(&self.paths, w.windows as usize, idle) {
                 Where::Local if w.windows >= CONFIRM_WINDOWS => {
@@ -1444,16 +1456,38 @@ mod tests {
     }
 
     #[test]
-    fn outside_traffic_starts_a_match_at_once() {
+    fn outside_traffic_in_two_windows_starts_a_match() {
         let mut sim = Sim::with_paths(&[7]);
         sim.arrivals = outside(64.0);
         let a = sim.run(4, &[(7, 64, 64, 200)]);
         assert!(has(&a, |x| matches!(x, Action::Watch { .. })), "{a:?}");
-        // candidate after the baseline and 3 steady windows, then one more
-        // window to see where the traffic comes from
+        // candidate after the baseline and 3 steady windows, then two more
+        // windows to see the traffic comes from outside
         assert!(starts(&a).is_empty(), "{a:?}");
         let a = sim.run(1, &[(7, 64, 64, 200)]);
+        assert!(starts(&a).is_empty(), "one window isn't enough: {a:?}");
+        let a = sim.run(1, &[(7, 64, 64, 200)]);
         assert_eq!(starts(&a).len(), 1, "{a:?}");
+    }
+
+    #[test]
+    fn one_window_from_outside_in_a_menu_isnt_a_match() {
+        // Deadlock starting: its menu over loopback, and for one second
+        // a little traffic from outside (2026-11-02, twice)
+        let mut sim = Sim::with_paths(&[7]);
+        sim.arrivals = local(128.0);
+        let a = sim.run(4, &[(7, 128, 128, 220)]);
+        assert!(has(&a, |x| matches!(x, Action::Watch { .. })), "{a:?}");
+        sim.arrivals = Arrivals {
+            outside_pps: 30.0,
+            local_pps: 128.0,
+        };
+        let a = sim.run(1, &[(7, 128, 128, 220)]);
+        assert!(starts(&a).is_empty(), "{a:?}");
+        sim.arrivals = local(128.0);
+        let a = sim.run(30, &[(7, 128, 128, 220)]);
+        assert!(starts(&a).is_empty(), "{a:?}");
+        assert!(has(&a, |x| matches!(x, Action::Local { .. })), "{a:?}");
     }
 
     #[test]
