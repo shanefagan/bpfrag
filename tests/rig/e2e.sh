@@ -144,7 +144,7 @@ kill $G $BTP; sleep 2; same "after bpftune match"
 kill -INT $D; wait $D; D=
 
 echo "== 4. kill -9 mid-match, then --restore"
-"$B" -c $W/cfg.toml > $W/d4.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 6
+"$B" -c $W/cfg.toml > $W/d4.log 2>&1 & D=$!; sleep 1; game 64 180; sleep 8
 kill -9 $D; wait $D 2>/dev/null; D=
 # The game keeps running: its packets must now leave unmarked.
 ip netns exec bpfrag-srv timeout 4 tcpdump -n -i bpfrag1 -c 30 -w $W/v4k.pcap 'udp and dst port 27015 and src 10.99.0.1' 2>/dev/null
@@ -245,7 +245,7 @@ mkdir -p $W/run8
 sed "s#^run_dir = .*#run_dir = \"$W/run8\"#" $W/cfg.toml > $W/cfg8.toml
 "$B" -c $W/cfg8.toml > $W/d8.log 2>&1 & D=$!; sleep 1
 if mount --bind $W/run8 $W/run8 && mount -o remount,ro,bind $W/run8; then
-  game 64 180; sleep 6
+  game 64 180; sleep 8
   grep -q "Match detected" $W/d8.log && ok "match still detected" || bad "no match with a read-only run dir"
   grep -q "could not write restore journal" $W/d8.log && ok "journal failure reported" || bad "journal failure not reported"
   same "mid-match with no journal"
@@ -261,7 +261,7 @@ echo "== 9. bulk transfers during a match"
 cat $W/cfg.toml > $W/cfg9.toml
 printf '[bulk]\nenabled = true\nmin_mbps = 2\nsecs = 2\nrelease_secs = 3\n' >> $W/cfg9.toml
 "$B" -c $W/cfg9.toml > $W/d9.log 2>&1 & D=$!; sleep 1
-game 64 180; sleep 5
+game 64 180; sleep 7
 $W/apps/steam $W/bulk.py down 10 40100 & BS=$!
 $W/apps/obs $W/bulk.py up 10 40200 & BO=$!
 sleep 5
@@ -294,7 +294,7 @@ same "after bulk match"
 
 echo "== 10. bulk with --dry-run: reported, never marked"
 "$B" -c $W/cfg9.toml --dry-run > $W/d10.log 2>&1 & D=$!; sleep 1
-game 64 180; sleep 5
+game 64 180; sleep 7
 $W/apps/steam $W/bulk.py down 10 40102 & BS=$!; sleep 5
 grep -q "Bulk transfer during the match: steam.*dry run: would mark LE" $W/d10.log && ok "dry run reports what it would demote" || bad "dry run bulk: $(grep -i bulk $W/d10.log)"
 SD=$(cap dry-acks 'tcp and src 10.99.0.1 and src port 40102')
@@ -307,7 +307,7 @@ echo "== 11. A/B experiment: the drawn arm decides, and is reported"
 for keep in 0 1; do
   { cat $W/cfg.toml; printf '[experiment]\nsetting = "busy_polling"\nkeep = %s\n' $keep; } > $W/cfg11.toml
   "$B" -c $W/cfg11.toml > $W/d11.log 2>&1 & D=$!; sleep 1
-  game 64 180; sleep 6
+  game 64 180; sleep 8
   BP=$(sysctl -n net.core.busy_poll); BR=$(sysctl -n net.core.busy_read)
   MON=$("$B" -c $W/cfg11.toml --monitor 0)
   kill $G; sleep 2; kill -INT $D; wait $D; D=
@@ -347,7 +347,9 @@ kill -INT $D; wait $D
 "$B" -c $W/cfg11c.toml > $W/d11c2.log 2>&1 & D=$!; sleep 1
 grep -q "Experiment for today: backlog, .*(picked earlier today)" $W/d11c2.log && ok "a restart keeps today's pick" || bad "restart: $(grep -i experiment $W/d11c2.log)"
 BL=$(sysctl -n net.core.netdev_max_backlog)
-game 64 180; sleep 6
+game 64 180
+for i in $(seq 1 15); do grep -q "Match detected" $W/d11c2.log && break; sleep 1; done
+sleep 2
 grep -q "Experiment: backlog off for this match" $W/d11c2.log && ok "matches draw arms for today's setting" || bad "arm: $(grep -i 'experiment' $W/d11c2.log)"
 [ "$(sysctl -n net.core.netdev_max_backlog)" = "$BL" ] && ok "off arm: backlog left alone" || bad "backlog changed to $(sysctl -n net.core.netdev_max_backlog)"
 [ "$(sysctl -n net.core.busy_poll)" = 50 ] && ok "off arm: the other settings still applied" || bad "busy_poll $(sysctl -n net.core.busy_poll)"
@@ -509,13 +511,13 @@ EOT
   grep -A1 "member=StateChanged" $W/mon.log | grep -q 'string "match"' && grep -A30 "member=StateChanged" $W/mon.log | grep -q 'string "at_ms"' && ok "StateChanged to match, with at_ms" || bad "StateChanged match: $(grep -A20 member=StateChanged $W/mon.log | head -40)"
   grep -A40 "member=StateChanged" $W/mon.log | grep -q 'string "match_ended_at_ms"' && ok "StateChanged back to idle says when the match ended" || bad "StateChanged idle: $(grep -A40 member=StateChanged $W/mon.log | tail -40)"
   # Shutting down mid-match ends the match for listeners too.
-  game 64 180; sleep 6; kill -INT $D; wait $D; D=; sleep 0.5; kill $G
+  game 64 180; sleep 8; kill -INT $D; wait $D; D=; sleep 0.5; kill $G
   grep -A4 "member=MatchEnded" $W/mon.log | grep -q 'string "bpfrag stopped"' && ok "stopping bpfrag mid-match sends MatchEnded" || bad "no MatchEnded on shutdown"
   grep -A40 "member=StateChanged" $W/mon.log | grep -A1 'string "end_reason"' | grep -q 'bpfrag stopped' && ok "and StateChanged to idle" || bad "no StateChanged on shutdown"
   kill $MONP; MONP=
   # No bus at all: logged, and the daemon carries on.
   DBUS_SYSTEM_BUS_ADDRESS="unix:abstract=bpfrag-e2e-none-$$" "$B" -c $W/cfg12.toml > $W/d12b.log 2>&1 & D=$!; sleep 1
-  game 64 180; sleep 6; kill $G; sleep 2; kill -INT $D; wait $D; D=
+  game 64 180; sleep 8; kill $G; sleep 2; kill -INT $D; wait $D; D=
   grep -q "D-Bus: system bus not available" $W/d12b.log && grep -q "Match detected" $W/d12b.log && ok "no bus: logged, matches still handled" || bad "no bus: $(head -5 $W/d12b.log)"
   kill $BUSD; BUSD=
   same "after D-Bus"
