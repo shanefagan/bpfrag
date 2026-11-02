@@ -194,6 +194,23 @@ impl Track {
             / pkts
     }
 
+    /// The update rate tiers are judged on ([`tick_pps`]), the median over
+    /// the history: a game pinging Steam's relays every couple of minutes
+    /// sends 100 more packets a second for a second or two, which raised
+    /// the mean enough to move a 64-tick game to INTENSE (2026-11-02).
+    fn tick_rate(&self) -> f64 {
+        let mut v: Vec<f64> = self
+            .hist
+            .iter()
+            .map(|w| tick_pps((w.tx_pps, w.rx_pps)))
+            .collect();
+        if v.is_empty() {
+            return 0.0;
+        }
+        v.sort_by(f64::total_cmp);
+        v[v.len() / 2]
+    }
+
     /// Mean tx / rx pps over the history.
     fn smooth_dirs(&self) -> (f64, f64) {
         if self.hist.is_empty() {
@@ -671,10 +688,13 @@ impl Detector {
         (tx_pps, rx_pps): (f64, f64),
         ifindex: u32,
     ) -> Action {
-        let tier = self
-            .cfg
-            .pin_tier
-            .unwrap_or_else(|| tier_for(&self.cfg, Tier::Casual, tick_pps((tx_pps, rx_pps))));
+        let tier = self.cfg.pin_tier.unwrap_or_else(|| {
+            let rate = self
+                .tracks
+                .get(&tgid)
+                .map_or_else(|| tick_pps((tx_pps, rx_pps)), Track::tick_rate);
+            tier_for(&self.cfg, Tier::Casual, rate)
+        });
         let info = SessionInfo {
             tgid,
             name,
@@ -911,7 +931,7 @@ impl Detector {
         // settings every couple of minutes for nothing; the settings cost
         // nothing to keep until the end.
         let reported = sess.info.tier;
-        let cand = tier_for(&self.cfg, reported, tick_pps(t.smooth_dirs())).max(reported);
+        let cand = tier_for(&self.cfg, reported, t.tick_rate()).max(reported);
         if cand != sess.candidate {
             sess.candidate = cand;
             sess.confidence = 1;
@@ -1188,6 +1208,19 @@ mod tests {
         let mut sim = Sim::new(&[6]);
         let a = sim.run(4, &[(6, 128, 128, 150)]);
         assert_eq!(starts(&a)[0].tier, Tier::Intense);
+    }
+
+    #[test]
+    fn relay_pings_dont_raise_the_tier() {
+        // every couple of minutes the client pings a couple of dozen
+        // relays: 100 more packets a second for two seconds
+        let mut sim = Sim::new(&[5]);
+        let a = sim.run(4, &[(5, 64, 64, 150)]);
+        assert_eq!(starts(&a)[0].tier, Tier::Competitive);
+        let mut a = sim.run(10, &[(5, 64, 130, 300)]);
+        a.extend(sim.run(2, &[(5, 164, 220, 120)]));
+        a.extend(sim.run(10, &[(5, 64, 130, 300)]));
+        assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
     }
 
     #[test]
