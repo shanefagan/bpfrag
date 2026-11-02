@@ -27,7 +27,8 @@
 //! alone. So a candidate is first *watched*: the daemon feeds the arrival
 //! meter's counts ([`Arrivals`]: from outside, and on loopback), and only
 //! traffic from outside starts a match. A match whose traffic stays on the
-//! machine for `linger_secs` ends, and the game goes back to being watched
+//! machine for 6 seconds (or `linger_secs` if shorter) ends, and the game
+//! goes back to being watched
 //! until outside traffic returns, so back-to-back games are separate
 //! matches and menu time isn't tuned.
 //!
@@ -56,6 +57,13 @@ const CONFIRM_WINDOWS: u32 = 3;
 /// ...or, if the meter sees it nowhere, as a match anyway (the rate alone
 /// decides, as before paths were checked).
 const UNSEEN_WINDOWS: u32 = 2;
+
+/// Seconds of the match's traffic staying on this machine (the game back
+/// in its menu) that end a match: shorter than `linger_secs`, since the
+/// next game can start 12 seconds later (2026-11-02, Deadlock: two games
+/// counted as one when the menu was quicker than 15 s). Relay changes
+/// mid-game don't go through loopback at all.
+const LOCAL_END_SECS: f64 = 6.0;
 
 /// Consecutive windows that must agree on a higher tier before it is
 /// applied. Tiers only go up within a match.
@@ -823,7 +831,7 @@ impl Detector {
 
     fn advance_session(&mut self, now: f64, dt: f64, procs: &mut dyn ProcessLookup) -> Vec<Action> {
         let idle_pps = self.cfg.idle_pps as f64;
-        let linger = self.cfg.linger_secs as f64;
+        let linger = (self.cfg.linger_secs as f64).min(LOCAL_END_SECS);
         let Some(sess) = self.session.as_mut() else {
             return Vec::new();
         };
@@ -1208,6 +1216,22 @@ mod tests {
         let mut sim = Sim::new(&[6]);
         let a = sim.run(4, &[(6, 128, 128, 150)]);
         assert_eq!(starts(&a)[0].tier, Tier::Intense);
+    }
+
+    #[test]
+    fn a_short_menu_between_games_splits_them() {
+        let mut sim = Sim::with_paths(&[7]);
+        sim.arrivals = outside(64.0);
+        let a = sim.run(8, &[(7, 64, 64, 200)]);
+        assert_eq!(starts(&a).len(), 1);
+        sim.run(60, &[(7, 64, 64, 200)]);
+        // 12 seconds in the menu, then the next game
+        sim.arrivals = local(128.0);
+        let a = sim.run(12, &[(7, 128, 128, 220)]);
+        assert!(has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
+        sim.arrivals = outside(64.0);
+        let a = sim.run(4, &[(7, 64, 64, 200)]);
+        assert_eq!(starts(&a).len(), 1, "{a:?}");
     }
 
     #[test]

@@ -90,8 +90,11 @@ next match.
 
 A match ends **immediately when the game exits** (via the
 `sched_process_exit` hook), after **15 quiet seconds**, for example back in
-the menus, or after **15 seconds of its traffic staying on this machine**
-(back to a menu with a server of its own). "Quiet" is the median of the
+the menus, or after **6 seconds of its traffic staying on this machine**
+(back to a menu with a server of its own; shorter than the quiet wait,
+since Deadlock can be in its next game 12 seconds after the last one
+ends, and with 15 seconds two games became one match on 2026-11-02).
+"Quiet" is the median of the
 last five seconds at 10 packets a second or fewer: menus and queues are
 mostly silent but ping relays in short bursts, and judging each second on
 its own let those bursts keep one match going into the next (0.4.0 and
