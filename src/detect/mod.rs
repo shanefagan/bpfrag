@@ -57,11 +57,9 @@ const CONFIRM_WINDOWS: u32 = 3;
 /// decides, as before paths were checked).
 const UNSEEN_WINDOWS: u32 = 2;
 
-/// Consecutive windows that must agree on a new tier before it is applied:
-/// moving up is quick, moving down slower, and back to CASUAL slowest.
+/// Consecutive windows that must agree on a higher tier before it is
+/// applied. Tiers only go up within a match.
 const CONFIDENCE_UP: u32 = 3;
-const CONFIDENCE_DOWN: u32 = 4;
-const CONFIDENCE_TO_CASUAL: u32 = 6;
 
 /// Cumulative per-process counters as read from the BPF map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -892,30 +890,29 @@ impl Detector {
         if self.cfg.pin_tier.is_some() {
             return None;
         }
-
-        let reported = sess.info.tier;
-        let mut cand = tier_for(&self.cfg, reported, pps);
-        // Still playing: don't drop back to CASUAL mid-match.
-        if cand == Tier::Casual && reported > Tier::Casual && pps > self.cfg.idle_pps as f64 {
-            cand = reported;
+        // The game's traffic isn't arriving from outside right now (back in
+        // its menu, say): what it sends itself says nothing about the match.
+        if sess.saw_outside && !seen {
+            return None;
         }
+
+        // Tiers only go up within a match. A game's rate swings with what's
+        // happening in it (Deadlock: 64 updates a second, but 50 to 150
+        // packets as fights come and go, and short stretches at 32), so
+        // following it down re-applied settings every couple of minutes
+        // for nothing; the settings cost nothing to keep until the end.
+        let reported = sess.info.tier;
+        let cand = tier_for(&self.cfg, reported, pps).max(reported);
         if cand != sess.candidate {
             sess.candidate = cand;
             sess.confidence = 1;
-        } else if sess.confidence < CONFIDENCE_TO_CASUAL {
+        } else if sess.confidence < CONFIDENCE_UP {
             sess.confidence += 1;
         }
         if cand == reported || now - sess.last_change < self.cfg.dwell_secs as f64 {
             return None;
         }
-        let required = if cand > reported {
-            CONFIDENCE_UP
-        } else if cand == Tier::Casual {
-            CONFIDENCE_TO_CASUAL
-        } else {
-            CONFIDENCE_DOWN
-        };
-        if sess.confidence < required {
+        if sess.confidence < CONFIDENCE_UP {
             return None;
         }
         sess.info.tier = cand;
@@ -1139,7 +1136,7 @@ mod tests {
     }
 
     #[test]
-    fn tier_moves_up_with_confidence_and_dwell_and_never_to_casual() {
+    fn tier_moves_up_with_confidence_and_dwell_and_never_down() {
         let mut sim = Sim::new(&[5]);
         let a = sim.run(4, &[(5, 50, 50, 150)]);
         assert_eq!(starts(&a)[0].tier, Tier::Competitive);
@@ -1157,29 +1154,16 @@ mod tests {
             )),
             "{a:?}"
         );
-        // drop to 30 pps (would be CASUAL): only falls to COMPETITIVE
-        let a = sim.run(20, &[(5, 15, 15, 150)]);
+        // drop to 100, then 30 pps: tiers only go up within a match
+        let a = sim.run(20, &[(5, 50, 50, 150)]);
+        let a2 = sim.run(20, &[(5, 15, 15, 150)]);
         assert!(
-            a.iter().any(|x| matches!(
-                x,
-                Action::Retier {
-                    from: Tier::Intense,
-                    to: Tier::Competitive
-                }
-            )),
-            "{a:?}"
+            !a.iter()
+                .chain(&a2)
+                .any(|x| matches!(x, Action::Retier { .. })),
+            "{a:?} {a2:?}"
         );
-        assert!(
-            !a.iter().any(|x| matches!(
-                x,
-                Action::Retier {
-                    to: Tier::Casual,
-                    ..
-                }
-            )),
-            "{a:?}"
-        );
-        assert_eq!(sim.det.session().unwrap().tier, Tier::Competitive);
+        assert_eq!(sim.det.session().unwrap().tier, Tier::Intense);
     }
 
     #[test]
@@ -1468,6 +1452,20 @@ mod tests {
         assert!(starts(&a).is_empty(), "one window isn't enough: {a:?}");
         let a = sim.run(1, &[(7, 64, 64, 200)]);
         assert_eq!(starts(&a).len(), 1, "{a:?}");
+    }
+
+    #[test]
+    fn the_menu_at_the_end_doesnt_change_the_tier() {
+        let mut sim = Sim::with_paths(&[7]);
+        sim.arrivals = outside(64.0);
+        let a = sim.run(8, &[(7, 32, 32, 200)]);
+        assert_eq!(starts(&a)[0].tier, Tier::Casual, "{a:?}");
+        // back in the menu, 128 a second each way over loopback: as a rate
+        // that's INTENSE, but it isn't the match
+        sim.arrivals = local(128.0);
+        let a = sim.run(25, &[(7, 128, 128, 220)]);
+        assert!(has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
+        assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
     }
 
     #[test]

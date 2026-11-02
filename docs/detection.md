@@ -63,9 +63,12 @@ roughly twice the server tick rate:
 - **CASUAL** below that.
 
 There's ±15 pkt/s of hysteresis around each threshold. Moving up takes 3
-confident windows, moving down takes 4, and tier changes are at least 5
-seconds apart. A match never drops back to CASUAL while traffic is still
-flowing.
+confident windows, and tier changes are at least 5 seconds apart. Within a
+match the tier only goes up: a game's rate swings with what's happening in
+it (Deadlock sends 64 updates a second, but 50 to 150 packets as fights
+come and go), and following it down re-applied settings every couple of
+minutes for nothing. While the game's traffic isn't arriving from outside
+(back in its menu at the end of a match), the tier doesn't change at all.
 
 bpfrag puts the DSCP marker on the interfaces carrying the default routes,
 or the ones you pass with `--iface`. The marker counts the game's packets per
