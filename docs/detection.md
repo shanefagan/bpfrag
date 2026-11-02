@@ -55,8 +55,11 @@ traffic from outside does. If the meter sees the game's traffic nowhere
 (a path it isn't attached to, say an interface missing from `--iface`), the
 rate alone decides, as before.
 
-The tier comes from the smoothed packet rate. Total packets per second are
-roughly twice the server tick rate:
+The tier comes from the game's update rate: twice the smaller of its
+smoothed send and receive rates, about twice the server's tick rate. (The
+total would count a server that splits big updates into several packets
+as a faster one: Deadlock, a 64-tick game, receives 50 to 150 packets a
+second as fights come and go.)
 
 - **INTENSE** at ≥ 155 pkt/s: 128-tick servers.
 - **COMPETITIVE** at ≥ 85 pkt/s: 64-tick servers.
@@ -64,9 +67,9 @@ roughly twice the server tick rate:
 
 There's ±15 pkt/s of hysteresis around each threshold. Moving up takes 3
 confident windows, and tier changes are at least 5 seconds apart. Within a
-match the tier only goes up: a game's rate swings with what's happening in
-it (Deadlock sends 64 updates a second, but 50 to 150 packets as fights
-come and go), and following it down re-applied settings every couple of
+match the tier only goes up: a game's update rate dips with what's
+happening in it (Deadlock sends 32 a second instead of 64 while the player
+is dead), and following it down re-applied settings every couple of
 minutes for nothing. While the game's traffic isn't arriving from outside
 (back in its menu at the end of a match), the tier doesn't change at all.
 

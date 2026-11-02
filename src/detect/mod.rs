@@ -348,6 +348,15 @@ fn thresholds(cfg: &Detect) -> Thresholds {
 }
 
 /// Port of gaming_determine_intensity(): hysteresis around each threshold.
+/// The rate tiers are judged on: twice the smaller of the send and receive
+/// rates, about twice the tick rate. The total would count a server that
+/// splits big updates into several packets as a faster one: Deadlock, a
+/// 64-tick game, sends 64 a second but receives 50 to 150 as fights come
+/// and go.
+fn tick_pps((tx_pps, rx_pps): (f64, f64)) -> f64 {
+    2.0 * tx_pps.min(rx_pps)
+}
+
 fn tier_for(cfg: &Detect, current: Tier, pps: f64) -> Tier {
     let t = thresholds(cfg);
     match current {
@@ -665,7 +674,7 @@ impl Detector {
         let tier = self
             .cfg
             .pin_tier
-            .unwrap_or_else(|| tier_for(&self.cfg, Tier::Casual, pps));
+            .unwrap_or_else(|| tier_for(&self.cfg, Tier::Casual, tick_pps((tx_pps, rx_pps))));
         let info = SessionInfo {
             tgid,
             name,
@@ -896,13 +905,13 @@ impl Detector {
             return None;
         }
 
-        // Tiers only go up within a match. A game's rate swings with what's
-        // happening in it (Deadlock: 64 updates a second, but 50 to 150
-        // packets as fights come and go, and short stretches at 32), so
-        // following it down re-applied settings every couple of minutes
-        // for nothing; the settings cost nothing to keep until the end.
+        // Tiers only go up within a match. A game's rate dips with what's
+        // happening in it (Deadlock: short stretches at 32 updates a second
+        // while the player is dead), so following it down re-applied
+        // settings every couple of minutes for nothing; the settings cost
+        // nothing to keep until the end.
         let reported = sess.info.tier;
-        let cand = tier_for(&self.cfg, reported, pps).max(reported);
+        let cand = tier_for(&self.cfg, reported, tick_pps(t.smooth_dirs())).max(reported);
         if cand != sess.candidate {
             sess.candidate = cand;
             sess.confidence = 1;
@@ -1164,6 +1173,21 @@ mod tests {
             "{a:?} {a2:?}"
         );
         assert_eq!(sim.det.session().unwrap().tier, Tier::Intense);
+    }
+
+    #[test]
+    fn split_updates_dont_raise_the_tier() {
+        // Deadlock in a fight: 64 updates a second each way, the server's
+        // split into 2 or 3 packets
+        let mut sim = Sim::new(&[5]);
+        let a = sim.run(4, &[(5, 64, 64, 150)]);
+        assert_eq!(starts(&a)[0].tier, Tier::Competitive);
+        let a = sim.run(30, &[(5, 64, 170, 900)]);
+        assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
+        // a 128-tick server is INTENSE
+        let mut sim = Sim::new(&[6]);
+        let a = sim.run(4, &[(6, 128, 128, 150)]);
+        assert_eq!(starts(&a)[0].tier, Tier::Intense);
     }
 
     #[test]
