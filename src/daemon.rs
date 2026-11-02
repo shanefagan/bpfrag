@@ -889,8 +889,20 @@ impl<'a> Tuner<'a> {
                 if period == self.experiment_period {
                     return;
                 }
+                // Which settings are already in place, and wired or Wi-Fi,
+                // depend on the network: at boot it may not be up yet, and
+                // a pick made then would be kept all day. Wait for a route,
+                // unless today's pick is saved already.
+                let route = net::primary_default_route();
+                let state = PathBuf::from(&self.cfg.general.state_dir);
+                let saved = experiment::load_pick(&state);
+                if route.is_none() && !saved.as_ref().is_some_and(|p| p.period == period) {
+                    debug!("Experiment: no network route yet; picking once there is one");
+                    self.experiment = None;
+                    return;
+                }
                 self.experiment_period = period.clone();
-                let link = match net::primary_default_route() {
+                let link = match route {
                     Some(i) if net::is_wireless(&i.name) => experiment::Link::Wifi,
                     _ => experiment::Link::Wired,
                 };
@@ -911,8 +923,6 @@ impl<'a> Tuner<'a> {
                     Period::Day => "today",
                     Period::Boot => "this boot",
                 };
-                let state = PathBuf::from(&self.cfg.general.state_dir);
-                let saved = experiment::load_pick(&state);
                 let names: Vec<String> = cands.iter().map(|(n, _)| n.clone()).collect();
                 let Some((name, fresh)) =
                     experiment::pick_for(&period, saved.as_ref(), &names, experiment::random_index)
