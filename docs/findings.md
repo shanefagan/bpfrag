@@ -28,7 +28,14 @@ match, its "server change" the second game. The relay moved mid-game,
 with no break, in four of the six. The second game of that merged match
 had the evening's only stall during play: incoming updates fell to 37 in
 one second, then a burst of 455 packets in 2 ms gaps caught up, a real
-hiccup on the path, not loading or the end screen.
+hiccup on the path, not loading or the end screen. On 0.11.0 the health
+lines read 99% ≤18 ms, where 0.10.0's read ≤31 ms for the same game: the
+32-a-second stretches no longer set the figure. The socket-buffer
+experiment (4 matches on, 2 off): the game's own sockets dropped nothing
+either way, and the machine-wide drops ran at 1.07–1.14 a second in every
+match whichever arm, so whatever overflows isn't the game and isn't
+helped by bigger buffers. Not enough matches to call it, but nothing yet
+for socket buffers to do here.
 
 **2026-11-02: what that day showed beyond the comparison.** Same setup,
 13 matches. Every stall and every longest gap of a second or more fell
