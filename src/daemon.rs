@@ -690,6 +690,11 @@ impl<'a> Tuner<'a> {
         let Some(s) = self.detector.session().cloned() else {
             return;
         };
+        if self.health.settle_due() {
+            // a minute in: the gap figures cover play from here
+            maps::reset_max_gap(&self.skel);
+            self.health.settle(&maps::read_port_rx(&self.skel));
+        }
         let ports = maps::read_port_rx(&self.skel);
         self.health.update(&ports);
         let peers: Vec<_> = maps::read_game_peers(&self.skel)

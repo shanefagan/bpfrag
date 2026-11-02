@@ -14,6 +14,9 @@
 //!   quiet for 100 ms to 2 s and coming back at game rate; the quiet
 //!   stretch counts as one gap. Quiet for 2 s or more is a lobby, a menu
 //!   or loading (games still send keepalives there) and isn't counted.
+//!   The gaps, stalls and longest gap cover play only ([`Play`]): from
+//!   a minute after the start (loading) to a few seconds before the
+//!   game's traffic from outside stopped (the end screen).
 //! - Drops come from kernel counters, see [`counters`].
 //! - The receive queue: the meter also records which NAPI instance (one
 //!   per receive queue) handled the game's packets, shown as "eno1 rx
@@ -26,7 +29,7 @@ pub mod counters;
 pub mod peers;
 pub mod timeline;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -311,6 +314,94 @@ pub struct Tracker {
     busy_on: bool,
     /// Who the game receives from.
     servers: Servers,
+    /// The part of the match the gap figures cover.
+    play: Play,
+}
+
+/// Seconds after a match starts before its gaps count. Loading a map
+/// arrives in bursts with pauses between (2026-11-02: every stall of 13
+/// Deadlock matches fell in the first 50 seconds or the last one).
+const SETTLE: Duration = Duration::from_secs(60);
+/// Readings left out before the last one with arrivals: the end screen,
+/// and the game going back to its menu.
+const END_TRIM: usize = 5;
+
+type PortReadings = Vec<(u16, bpf_intf::port_rx)>;
+
+/// Which of the meter's readings the gap figures come from: play, not
+/// loading at the start or the end of the match. Until a minute in, and
+/// for matches that never get that far, it's the whole match.
+#[derive(Default)]
+struct Play {
+    started: Option<Instant>,
+    /// The reading play starts from, taken just after the meter's
+    /// longest-gap figures were zeroed.
+    base: Option<PortReadings>,
+    /// The last END_TRIM + 1 readings, oldest first.
+    recent: VecDeque<PortReadings>,
+    /// Packets in the previous reading, to tell when arrivals stop.
+    last_pkts: u64,
+    /// The reading END_TRIM before the latest one with new arrivals.
+    good: Option<PortReadings>,
+}
+
+impl Play {
+    fn start(&mut self) {
+        *self = Play {
+            started: Some(Instant::now()),
+            ..Play::default()
+        };
+    }
+
+    fn settle_due(&self) -> bool {
+        self.base.is_none() && self.started.is_some_and(|t| t.elapsed() >= SETTLE)
+    }
+
+    fn settle(&mut self, ports: &[(u16, bpf_intf::port_rx)]) {
+        self.base = Some(ports.to_vec());
+        self.recent.clear();
+        self.good = None;
+    }
+
+    /// One reading; returns the readings the figures should cover now.
+    fn update(&mut self, ports: &[(u16, bpf_intf::port_rx)]) -> PortReadings {
+        let total: u64 = ports.iter().map(|(_, r)| r.pkts).sum();
+        let arrived = total > self.last_pkts;
+        self.last_pkts = total;
+        self.recent.push_back(ports.to_vec());
+        while self.recent.len() > END_TRIM + 1 {
+            self.recent.pop_front();
+        }
+        let Some(base) = &self.base else {
+            return ports.to_vec();
+        };
+        if arrived && self.recent.len() > END_TRIM {
+            self.good = self.recent.front().cloned();
+        }
+        match &self.good {
+            Some(g) => since(g, base),
+            None => ports.to_vec(),
+        }
+    }
+}
+
+/// Each port's arrivals in `now` since `base`. The longest gap is `now`'s
+/// own (the meter's was zeroed when `base` was read); a port the map
+/// dropped and made again since counts from zero.
+fn since(now: &[(u16, bpf_intf::port_rx)], base: &[(u16, bpf_intf::port_rx)]) -> PortReadings {
+    now.iter()
+        .map(|(port, r)| {
+            let mut d = *r;
+            if let Some((_, b)) = base.iter().find(|(p, b)| p == port && b.pkts <= r.pkts) {
+                d.pkts = r.pkts - b.pkts;
+                d.stalls = r.stalls.saturating_sub(b.stalls);
+                for (x, y) in d.hist.iter_mut().zip(b.hist.iter()) {
+                    *x = x.saturating_sub(*y);
+                }
+            }
+            (*port, d)
+        })
+        .collect()
 }
 
 /// Seconds between readings of the game's sockets (a Proton game can hold
@@ -376,7 +467,18 @@ impl Tracker {
         self.rx_queue = None;
         self.busy_on = false;
         self.servers = Servers::default();
+        self.play.start();
         self.watch(ifaces);
+    }
+
+    /// Time to start counting play? The caller zeroes the meter's
+    /// longest-gap figures, then hands the next reading to [`Tracker::settle`].
+    pub fn settle_due(&self) -> bool {
+        self.base.is_some() && self.play.settle_due()
+    }
+
+    pub fn settle(&mut self, ports: &[(u16, bpf_intf::port_rx)]) {
+        self.play.settle(ports);
     }
 
     /// Take NIC baselines for interfaces not seen yet this match.
@@ -408,7 +510,8 @@ impl Tracker {
             self.busy_on = busy_polling_on();
         }
         let busy_polled = sys.busy_polled.filter(|n| self.busy_on || *n > 0);
-        let main = Gaps::match_flows(ports);
+        let play = self.play.update(ports);
+        let main = Gaps::match_flows(&play);
         let napi_id = main.as_ref().map_or(0, |g| g.napi_id);
         if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
             // a netlink round trip, so only when the flow's queue changes
@@ -461,6 +564,7 @@ impl Tracker {
         self.rx_queue = None;
         self.game = None;
         self.busy_on = false;
+        self.play = Play::default();
         let changes = self.servers.changes();
         self.servers = Servers::default();
         self.latest.take().map(|mut h| {
@@ -493,6 +597,58 @@ mod tests {
             r.hist[ms] = n;
         }
         r
+    }
+
+    #[test]
+    fn play_leaves_out_loading_and_the_end_screen() {
+        let mut p = Play::default();
+        p.start();
+        // loading: a burst, then a 1 s stall
+        let loading = vec![(27015, port_rx(500, &[(2, 400), (63, 1)]))];
+        let mut l = loading.clone();
+        l[0].1.stalls = 1;
+        l[0].1.max_gap_ns = 1_000_000_000;
+        let got = p.update(&l);
+        assert_eq!(got[0].1.stalls, 1, "the whole match until play starts");
+        // play starts: the meter's longest gap was zeroed
+        let mut base = l.clone();
+        base[0].1.max_gap_ns = 0;
+        p.settle(&base);
+        // a minute of steady 64-tick play
+        let mut now = base.clone();
+        for _ in 0..60 {
+            now[0].1.pkts += 64;
+            now[0].1.hist[15] += 64;
+            now[0].1.max_gap_ns = 17_000_000;
+            p.update(&now);
+        }
+        let playing = now.clone();
+        // the end screen: a stall, then nothing more arrives
+        now[0].1.pkts += 10;
+        now[0].1.stalls += 1;
+        now[0].1.hist[63] += 1;
+        now[0].1.max_gap_ns = 900_000_000;
+        p.update(&now);
+        for _ in 0..20 {
+            p.update(&now);
+        }
+        let got = p.update(&now);
+        let g = Gaps::match_flows(&got).unwrap();
+        // play only: no loading burst, no stalls, 17 ms longest
+        assert_eq!(g.stalls, 0, "{g:?}");
+        assert!(g.max_gap_ns <= 17_000_000, "{g:?}");
+        assert_eq!(g.hist[2], 0);
+        assert_eq!(g.hist[63], 0);
+        assert!(g.pkts > 0 && g.pkts <= playing[0].1.pkts - base[0].1.pkts);
+    }
+
+    #[test]
+    fn a_port_made_again_counts_from_zero() {
+        let base = vec![(1, port_rx(1000, &[(15, 999)]))];
+        let now = vec![(1, port_rx(10, &[(15, 9)])), (2, port_rx(5, &[(15, 4)]))];
+        let d = since(&now, &base);
+        assert_eq!(d[0].1.pkts, 10);
+        assert_eq!(d[1].1.pkts, 5);
     }
 
     #[test]

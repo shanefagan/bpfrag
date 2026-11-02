@@ -197,6 +197,19 @@ echo "$H" | grep -Eq "longest (2[5-9][0-9]|3[0-9][0-9]|4[0-4][0-9]) ms" && ok "l
 kill -INT $D; wait $D; D=
 same "after stall match"
 
+echo "== 6d. gaps count from a minute in: loading isn't play"
+# A hiccup 10 s in (loading) isn't counted; one 70 s in is.
+"$B" -c $W/cfg.toml > $W/d6d.log 2>&1 & D=$!; sleep 1
+echo 64 > $W/rate6d; game 64 180 $W/rate6d; sleep 10
+kill -STOP $G; sleep 0.6; kill -CONT $G; sleep 60
+kill -STOP $G; sleep 0.3; kill -CONT $G; sleep 10   # past the last 5 s, left out as the end
+kill $G; sleep 2
+H=$(grep "fakeshooter: packet gaps" $W/d6d.log); echo "  ($H)"
+echo "$H" | grep -q ", 1 stall (100 ms+)" && ok "the hiccup during play counts, the one while loading doesn't" || bad "stalls: $H"
+echo "$H" | grep -Eq "longest (2[5-9][0-9]|3[0-9][0-9]|4[0-4][0-9]) ms" && ok "longest gap is the one during play" || bad "longest: $H"
+kill -INT $D; wait $D; D=
+same "after play-only match"
+
 echo "== 6c. two matches in one game session are two matches"
 # Match, then menus (a packet a second with a burst every fourth second,
 # like relay pings), then another match, all in one game process.
