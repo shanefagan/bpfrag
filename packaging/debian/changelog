@@ -1,3 +1,9 @@
+bpfrag (0.11.1-1) unstable; urgency=medium
+
+  * Tier ignores relay-ping bursts; a short menu between games splits them
+
+ -- Shane Fagan <mail@shanefagan.com>  Mon, 02 Nov 2026 23:51:03 +0000
+
 bpfrag (0.11.0-1) unstable; urgency=medium
 
   * Gaps between updates at the usual rate; tier from the update rate
