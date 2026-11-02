@@ -92,6 +92,14 @@ during a match get `busy_read` too.
 does work). Growth: keep it and run the A/B (`busy_polling`) to see
 whether it helps.
 
+**So far:** it grows: 15,000 to 200,000 busy-polled packets a match on
+2026-11-02 (Deadlock, wired, a torrent client running), machine-wide, so
+not yet shown to be the game's. How much depends on coalescing: 31–37 a
+second with coalescing set to 0–10 µs, 114–192 at the NIC's default, 5
+matches each, no overlap ([findings.md](findings.md#match-comparisons)).
+Low coalescing lets the interrupt take packets first. The two settings
+do the same job, so test busy polling with coalescing at its default.
+
 ### 2. Do the socket buffer settings reach the game's socket?
 
 **Question:** what receive buffer does the game's socket actually have

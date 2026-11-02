@@ -121,9 +121,12 @@ plus the port; addresses themselves are only logged at debug level
 (`-v`), since a game that talks peer to peer would put other players'
 home addresses in the log. The end-of-match line counts the changes
 ("the game's server changed 5 times"). A change within one match means
-the game moved without going quiet or back to its menu, which may be two
-games in one ([experiments.md](experiments.md#22-back-to-back-games));
-`[capture] timeline` shows what happened
+the game moved without going quiet or back to its menu. That can be two
+games in one ([experiments.md](experiments.md#22-back-to-back-games)),
+but it can also be the same game moving mid-match: Deadlock moved twice
+on 2026-11-02 with no break at all, the same rate carrying straight on
+from a new address and a new local port (most likely Steam's relay
+network changing route). `[capture] timeline` shows which
 ([measuring.md](measuring.md#match-timelines)).
 
 Rejections by the deny list (or `BPFRAG_GAME=0`) are only logged at debug

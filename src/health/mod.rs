@@ -207,7 +207,8 @@ pub struct Health {
     #[serde(default)]
     pub busy_polled: Option<u64>,
     /// Times the game moved to another server (`peers`) without going
-    /// quiet: back-to-back games the detector saw as one match.
+    /// quiet: back-to-back games the detector saw as one match, or one
+    /// game moving mid-match (Steam's relays route through new ones).
     #[serde(default)]
     pub server_changes: u32,
 }

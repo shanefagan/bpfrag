@@ -39,7 +39,21 @@ Limits to keep in mind:
   each burst: a Deadlock bot match (about 32 updates a second, two
   packets each) reads "half ≤3 ms", a match against people (64 a
   second, one packet each) "half ≤14–16 ms"
-  ([findings.md](findings.md)). Compare matches of the same kind.
+  ([findings.md](findings.md)). Matches against people split updates
+  too when there's a lot going on (2–3 packets each, 130–190 a second
+  for minutes at a time), so a short half-gap doesn't by itself mean a
+  bot match. Compare matches of the same kind.
+- **The 99% gap follows the game's update rate.** Deadlock drops to 32
+  updates a second for stretches of about 8–10 seconds; at 3–5% of a
+  match those alone put its 99% figure at ≤32 ms, against ≤17 ms while
+  it sends 64. A difference in the 99% figure between matches can be
+  time spent in those stretches, not the network.
+- **Play only (0.10.0 and later).** The gaps, stalls and longest gap
+  count from a minute into the match to a few seconds before the game's
+  traffic from outside stops, leaving out loading and the end screen,
+  where every stall and second-long gap fell before. Matches shorter
+  than a minute are counted whole. Don't compare stalls or the longest
+  gap across 0.10.0.
 
 - **1 ms resolution.** Changes of tens or hundreds of microseconds
   (interrupt coalescing, busy polling) can't show in the gap numbers.
@@ -172,9 +186,11 @@ and `--compare mode` (tuned against dry-run) work the same way.
 
 For a spreadsheet instead, leave out `--compare`; label sessions with
 `--label`. A `gap_p99_ms` of 64 means "over 63 ms", the histogram's last
-bucket. A `server_changes` above 0 means the row is several games the
-detector saw as one ([detection.md](detection.md)): its numbers mix them,
-so leave it out of comparisons, or count it once per game by hand.
+bucket. A `server_changes` above 0 means the game moved to another
+server mid-match: either several games the detector saw as one, or one
+game moving (Deadlock does, through Steam's relays, with no break). The
+match's timeline tells them apart ([detection.md](detection.md)); leave
+rows of several games out of comparisons.
 
 ## Match timelines
 

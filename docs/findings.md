@@ -9,12 +9,33 @@ in through the "Share match data" issue form.
 
 ## Match comparisons
 
-None yet. Each entry should give the setup (`bpfrag --report` covers it),
-the two conditions, the number of matches on each side, and the medians.
+Each entry gives the setup (`bpfrag --report` covers it), the two
+conditions, the number of matches on each side, and the medians.
 
 | Date | Setup | A vs B | Matches A / B | 99% gap (median) A / B | Longest (median) A / B | Stalls (median) A / B | Conclusion |
 |---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| 2026-11-02 | CachyOS, wired (`eno1`), bpfrag 0.9.2 tuning, Deadlock, ktorrent seeding and downloading throughout (marked LE) | NIC coalescing on (0–10 µs) / off (NIC default) | 5 / 5 | 32 / 31 ms | 1016 / 573 ms | 2 / 1 | No difference in the gaps (1 ms resolution can't show a microsecond effect, and every stall and long gap was loading or the end screen). Busy polling did far less with coalescing on: 31–37 busy-polled packets a second against 114–192, no overlap (permutation p = 0.047 on medians) |
+
+**2026-11-02: what that day showed beyond the comparison.** Same setup,
+13 matches. Every stall and every longest gap of a second or more fell
+in a match's first 50 seconds (loading arrives in bursts) or its last
+second (the end screen): none during play, which 0.10.0's play-only
+figures now leave out. Deadlock's 99% gap read ≤31–32 ms in every match,
+set by stretches of 8–10 s at 32 updates a second (3–5% of the time);
+while it sent 64 a second, ≤17 ms. The game's server changed twice
+mid-match with no break (a new address and a new local port, the same
+rate carrying straight on), most likely Steam's relays changing route:
+not two games in one. The tier changed 10 or more times a match between
+INTENSE and COMPETITIVE as the incoming rate swung between 50 and 150 a
+second; none of 15 changes checked was followed by a stall or a gap
+spike within 3 seconds, so re-applying settings didn't cause hiccups
+([experiment 4](experiments.md#4-do-tier-changes-cause-hiccups)), but it
+was pointless, and from 0.10.0 tiers only go up within a match. Socket
+buffer drops ran at 1.03–1.13 a second in every match whatever ktorrent
+was doing (1 to 58 Mbit/s), 0 of them the game's: probably a socket some
+program never reads, not the torrent client. Two 18–19 second "matches"
+when the game started (one second of traffic from outside while its menu
+ran over loopback) are fixed in 0.10.0.
 
 ## Single matches
 
