@@ -185,6 +185,21 @@ each:
 
 ## Bugs found and what they taught
 
+**0.10.0: the gap figures still measured the game, not the network**
+(found in an outside review of the 2026-11-02 timelines). Gaps were
+between packets, so a server splitting updates into 2–3 packets in a
+fight halved the half-gap; Deadlock's 32-a-second stretches (dead, end
+screen) pinned the 99% figure at 32 ms in any match where they made up
+more than 1% of the gaps, so no A/B comparison could see it move; and
+0.10.0's end of play was set by the last arrival, which relay pings
+after the end screen moved, leaving 5–12 s of end screen in. The tier
+had the same root: it counted packets, so Deadlock reached INTENSE only
+in big fights. Fixed in 0.11.0: gaps between updates (packets within
+4 ms of an update's first are part of it), half and 99% from seconds
+at the game's usual rate, play ending five seconds before the last of
+them, and the tier from the update rate. The coalescing comparison
+above stands: it rests on the busy-polled count, not the gaps.
+
 **0.5.0: a released bulk process could stay demoted** (found in an outside
 review). When a process stopped moving bulk data, bpfrag dropped it from
 `bulk_tgids` and then swept its flows out of `bulk_flows`; a packet sent in
