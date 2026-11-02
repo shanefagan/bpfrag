@@ -390,7 +390,12 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
         to_port(ipv4(0, GAME_PORT, 0x4000, 0), STALE_PORT),
         to_port(ipv4(0, OTHER_PORT, 0x00b9, 0), GAME_PORT),
     ];
-    for pkt in to_game.iter().chain(&ignored) {
+    // The first three back to back are one update (a server splitting it
+    // into packets); the fourth, 6 ms later, is the next one.
+    for (i, pkt) in to_game.iter().chain(&ignored).enumerate() {
+        if i == 3 {
+            std::thread::sleep(std::time::Duration::from_millis(6));
+        }
         let input = ProgramInput {
             data_in: Some(pkt),
             ..Default::default()
@@ -426,11 +431,13 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
     }
     let gaps: u32 = r.hist.iter().sum();
     let want = to_game.len() as u64;
-    if r.pkts != want || u64::from(gaps) != want - 1 {
+    // one gap, between the two updates: at least the 6 ms slept
+    let gap_ms = r.hist.iter().position(|n| *n > 0);
+    if r.pkts != want || r.updates != 2 || gaps != 1 || gap_ms.is_none_or(|ms| ms < 5) {
         return Err(format!(
-            "{} packets and {gaps} gaps, expected {want} and {}",
-            r.pkts,
-            want - 1
+            "{} packets, {} updates, {gaps} gaps (at {gap_ms:?} ms), expected {want}, 2 and \
+             1 of 6 ms or more",
+            r.pkts, r.updates
         ));
     }
     // Who sent them: three from 10.99.0.1, one from fd00:99::1, both from
@@ -450,7 +457,7 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
         ));
     }
     Ok(format!(
-        "{want} packets, {gaps} gaps, {} senders",
+        "{want} packets in 2 updates, {gaps} gap, {} senders",
         peers.len()
     ))
 }

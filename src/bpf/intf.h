@@ -21,6 +21,8 @@ enum consts {
 	GAP_STALL_MS = 100,	/* a gap this long is a stall the player feels... */
 	GAP_IDLE_MS = 2000,	/* ...up to this; longer means the flow paused */
 	GAP_RESUME = 4,		/* fast gaps in a row that end a quiet stretch */
+	GAP_BURST_US = 4000,	/* packets this close to an update's first are part
+				 * of it: no server sends 250 updates a second */
 	IFACE_LOCAL = 1,	/* mark_iface.flags: loopback, traffic that stays on the machine */
 };
 
@@ -62,10 +64,13 @@ struct game_port {
 
 /*
  * Arrivals on one game port, measured at tc ingress: gaps between
- * consecutive packets, as a histogram plus the longest one.
+ * consecutive updates (a packet, or a burst of packets within GAP_BURST_US
+ * of the first, as servers split big updates), as a histogram plus the
+ * longest one.
  */
 struct port_rx {
 	__u64 pkts;
+	__u64 updates;
 	__u64 last_ns;
 	__u64 max_gap_ns;	/* longest gap counted */
 	__u64 held_ns;		/* quiet stretch waiting for game-rate traffic */

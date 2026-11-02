@@ -590,7 +590,13 @@ static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 	 * changes if RSS moves the flow, so the latest one is the answer. */
 	if (napi_id && pr->napi_id != napi_id)
 		pr->napi_id = napi_id;
+	/* A server splits a big update into packets sent back to back: they
+	 * arrive within GAP_BURST_US of its first one and are one update.
+	 * Gaps are timed from an update's first packet. */
 	last = pr->last_ns;
+	if (last && now >= last && now - last < (__u64)GAP_BURST_US * 1000)
+		return;
+	__sync_fetch_and_add(&pr->updates, 1);
 	pr->last_ns = now;
 	if (!last || now <= last)
 		return;

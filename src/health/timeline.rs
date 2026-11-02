@@ -186,6 +186,7 @@ impl Timeline {
         let this = Gaps {
             port,
             pkts: most,
+            updates: 0,
             hist,
             max_gap_ns: 0,
             stalls,

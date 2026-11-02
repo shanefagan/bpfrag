@@ -50,6 +50,9 @@ pub(crate) const BUCKETS: usize = bpf_intf::GAP_BUCKETS as usize;
 pub struct Gaps {
     pub port: u16,
     pub pkts: u64,
+    /// Updates: a packet, or packets that arrived together (a server
+    /// splitting a big update). The gaps are between updates.
+    pub updates: u64,
     /// `hist[i]`: gaps of i to i+1 ms; the last bucket holds longer ones.
     pub hist: [u64; BUCKETS],
     /// Longest gap counted (lobbies and other 2 s+ pauses aren't).
@@ -69,6 +72,7 @@ impl Gaps {
         Self {
             port,
             pkts: r.pkts,
+            updates: r.updates,
             hist,
             max_gap_ns: r.max_gap_ns,
             stalls: u64::from(r.stalls),
@@ -89,6 +93,7 @@ impl Gaps {
             }
             let other = Self::from_bpf(*p, r);
             g.pkts += other.pkts;
+            g.updates += other.updates;
             for (h, o) in g.hist.iter_mut().zip(other.hist.iter()) {
                 *h += o;
             }
@@ -323,27 +328,56 @@ pub struct Tracker {
 /// arrives in bursts with pauses between (2026-11-02: every stall of 13
 /// Deadlock matches fell in the first 50 seconds or the last one).
 const SETTLE: Duration = Duration::from_secs(60);
-/// Readings left out before the last one with arrivals: the end screen,
-/// and the game going back to its menu.
+/// Readings left out before the last one at the game's usual rate: the
+/// last moments before the end screen.
 const END_TRIM: usize = 5;
+/// Readings of play before the game's usual rate and update interval are
+/// trusted; until then every reading with updates counts.
+const LEARN: usize = 10;
 
 type PortReadings = Vec<(u16, bpf_intf::port_rx)>;
 
 /// Which of the meter's readings the gap figures come from: play, not
 /// loading at the start or the end of the match. Until a minute in, and
 /// for matches that never get that far, it's the whole match.
+///
+/// From then on each reading (a second) is either at the game's usual
+/// rate, or not: Deadlock sends 32 updates a second instead of 64 while
+/// the player is dead and on the end screen, and every such stretch put
+/// the whole match's 99% gap at 32 ms whatever the network did. The half
+/// and 99% figures come from usual-rate readings only. Stalls and the
+/// longest gap cover all of play, up to END_TRIM readings before the last
+/// usual-rate one (a hiccup can make its second look slow).
 #[derive(Default)]
 struct Play {
     started: Option<Instant>,
     /// The reading play starts from, taken just after the meter's
     /// longest-gap figures were zeroed.
     base: Option<PortReadings>,
+    /// The previous reading, for each reading's own gaps.
+    prev: Option<PortReadings>,
     /// The last END_TRIM + 1 readings, oldest first.
     recent: VecDeque<PortReadings>,
-    /// Packets in the previous reading, to tell when arrivals stop.
-    last_pkts: u64,
-    /// The reading END_TRIM before the latest one with new arrivals.
+    /// The reading END_TRIM before the latest usual-rate one.
     good: Option<PortReadings>,
+    /// Updates in each reading of play that had any, and each one's median
+    /// gap (ms): what "usual" is.
+    rates: Vec<u64>,
+    intervals: Vec<u32>,
+    /// Usual-rate readings' gaps: counted, and the latest END_TRIM, which
+    /// are counted once later ones come.
+    counted: Option<Gaps>,
+    pending: VecDeque<Gaps>,
+}
+
+/// The middle value (the upper one of an even count); None if empty.
+fn median<T: Copy + Ord>(v: &[T]) -> Option<T> {
+    let mut v = v.to_vec();
+    if v.is_empty() {
+        return None;
+    }
+    let mid = v.len() / 2;
+    Some(*v.select_nth_unstable(mid).1)
 }
 
 impl Play {
@@ -359,30 +393,93 @@ impl Play {
     }
 
     fn settle(&mut self, ports: &[(u16, bpf_intf::port_rx)]) {
-        self.base = Some(ports.to_vec());
-        self.recent.clear();
-        self.good = None;
+        let started = self.started;
+        *self = Play {
+            started,
+            base: Some(ports.to_vec()),
+            prev: Some(ports.to_vec()),
+            ..Play::default()
+        };
     }
 
-    /// One reading; returns the readings the figures should cover now.
-    fn update(&mut self, ports: &[(u16, bpf_intf::port_rx)]) -> PortReadings {
-        let total: u64 = ports.iter().map(|(_, r)| r.pkts).sum();
-        let arrived = total > self.last_pkts;
-        self.last_pkts = total;
+    /// Is this reading at the game's usual rate: at least half its usual
+    /// updates, and gaps no longer than half as long again as usual?
+    fn usual(&self, d: &Gaps, interval: Option<u32>) -> bool {
+        if d.updates == 0 {
+            return false;
+        }
+        if self.rates.len() < LEARN {
+            return true;
+        }
+        let rate = median(&self.rates).unwrap_or(0);
+        let usual_ms = median(&self.intervals).unwrap_or(0);
+        d.updates * 2 >= rate && interval.is_some_and(|ms| ms * 2 <= usual_ms * 3)
+    }
+
+    /// One reading; returns the gap figures as they stand.
+    fn update(&mut self, ports: &[(u16, bpf_intf::port_rx)]) -> Option<Gaps> {
+        let delta = self
+            .prev
+            .replace(ports.to_vec())
+            .and_then(|p| Gaps::match_flows(&since(ports, &p)));
         self.recent.push_back(ports.to_vec());
         while self.recent.len() > END_TRIM + 1 {
             self.recent.pop_front();
         }
-        let Some(base) = &self.base else {
-            return ports.to_vec();
+        if self.base.is_none() {
+            return Gaps::match_flows(ports);
+        }
+        if let Some(d) = delta {
+            let interval = d.quantile_ms(0.5);
+            let usual = self.usual(&d, interval);
+            if d.updates > 0 {
+                self.rates.push(d.updates);
+            }
+            if let Some(ms) = interval {
+                self.intervals.push(ms);
+            }
+            if usual {
+                if self.recent.len() > END_TRIM {
+                    self.good = self.recent.front().cloned();
+                }
+                self.pending.push_back(d);
+                if self.pending.len() > END_TRIM {
+                    let done = self.pending.pop_front();
+                    self.count(done);
+                }
+            }
+        }
+        self.figures(ports)
+    }
+
+    fn count(&mut self, d: Option<Gaps>) {
+        let Some(d) = d else { return };
+        match self.counted.as_mut() {
+            None => self.counted = Some(d),
+            Some(c) => {
+                c.pkts += d.pkts;
+                c.updates += d.updates;
+                for (x, y) in c.hist.iter_mut().zip(d.hist.iter()) {
+                    *x += y;
+                }
+            }
+        }
+    }
+
+    /// Stalls and the longest gap over play so far; the half and 99%
+    /// figures from usual-rate readings. Before there's enough of either,
+    /// the whole match.
+    fn figures(&self, ports: &[(u16, bpf_intf::port_rx)]) -> Option<Gaps> {
+        let (Some(base), Some(good)) = (&self.base, &self.good) else {
+            return Gaps::match_flows(ports);
         };
-        if arrived && self.recent.len() > END_TRIM {
-            self.good = self.recent.front().cloned();
+        let mut g = Gaps::match_flows(&since(good, base))?;
+        if let Some(c) = self.counted.as_ref().filter(|c| c.count() > 0) {
+            g.pkts = c.pkts;
+            g.updates = c.updates;
+            g.hist = c.hist;
         }
-        match &self.good {
-            Some(g) => since(g, base),
-            None => ports.to_vec(),
-        }
+        Some(g)
     }
 }
 
@@ -395,6 +492,7 @@ fn since(now: &[(u16, bpf_intf::port_rx)], base: &[(u16, bpf_intf::port_rx)]) ->
             let mut d = *r;
             if let Some((_, b)) = base.iter().find(|(p, b)| p == port && b.pkts <= r.pkts) {
                 d.pkts = r.pkts - b.pkts;
+                d.updates = r.updates.saturating_sub(b.updates);
                 d.stalls = r.stalls.saturating_sub(b.stalls);
                 for (x, y) in d.hist.iter_mut().zip(b.hist.iter()) {
                     *x = x.saturating_sub(*y);
@@ -511,9 +609,8 @@ impl Tracker {
             self.busy_on = busy_polling_on();
         }
         let busy_polled = sys.busy_polled.filter(|n| self.busy_on || *n > 0);
-        let play = self.play.update(ports);
-        let main = Gaps::match_flows(&play);
-        let napi_id = main.as_ref().map_or(0, |g| g.napi_id);
+        let main = self.play.update(ports);
+        let napi_id = Gaps::match_flows(ports).map_or(0, |g| g.napi_id);
         if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
             // a netlink round trip, so only when the flow's queue changes
             self.rx_queue = Some(netdev::rx_queue(napi_id));
@@ -600,47 +697,81 @@ mod tests {
         r
     }
 
+    /// A game port's cumulative meter readings, a second at a time.
+    struct Port(bpf_intf::port_rx);
+
+    impl Port {
+        /// A second of `n` updates `ms` apart, each split into `split`
+        /// packets.
+        fn second(&mut self, n: u32, ms: usize, split: u64) -> PortReadings {
+            self.0.pkts += u64::from(n) * split;
+            self.0.updates += u64::from(n);
+            self.0.hist[ms] += n;
+            self.0.max_gap_ns = self.0.max_gap_ns.max(ms as u64 * 1_000_000);
+            vec![(27015, self.0)]
+        }
+
+        /// A hiccup: the flow paused for `ms`, then came back.
+        fn stall(&mut self, ms: u64) -> PortReadings {
+            self.0.stalls += 1;
+            self.0.hist[BUCKETS - 1] += 1;
+            self.0.max_gap_ns = self.0.max_gap_ns.max(ms * 1_000_000);
+            self.second(50, 15, 1)
+        }
+    }
+
     #[test]
-    fn play_leaves_out_loading_and_the_end_screen() {
+    fn play_is_the_usual_rate_between_loading_and_the_end_screen() {
         let mut p = Play::default();
         p.start();
-        // loading: a burst, then a 1 s stall
-        let loading = vec![(27015, port_rx(500, &[(2, 400), (63, 1)]))];
-        let mut l = loading.clone();
-        l[0].1.stalls = 1;
-        l[0].1.max_gap_ns = 1_000_000_000;
-        let got = p.update(&l);
-        assert_eq!(got[0].1.stalls, 1, "the whole match until play starts");
-        // play starts: the meter's longest gap was zeroed
-        let mut base = l.clone();
-        base[0].1.max_gap_ns = 0;
-        p.settle(&base);
-        // a minute of steady 64-tick play
-        let mut now = base.clone();
+        let mut port = Port(bpf_intf::port_rx::default());
+        // loading: bursts and a 1 s pause
+        p.update(&port.second(200, 2, 1));
+        let g = p.update(&port.stall(1000)).unwrap();
+        assert_eq!(g.stalls, 1, "the whole match until play starts");
+        // a minute in: the meter's longest gap is zeroed, play starts
+        port.0.max_gap_ns = 0;
+        p.settle(&[(27015, port.0)]);
+        // play: 64 updates a second, each split into 2 packets in fights
+        for i in 0..120 {
+            p.update(&port.second(64, 15, if i % 3 == 0 { 2 } else { 1 }));
+        }
+        // dead for 10 s: 32 a second
+        for _ in 0..10 {
+            p.update(&port.second(32, 31, 1));
+        }
+        // a hiccup mid-play, then play again
+        p.update(&port.stall(300));
         for _ in 0..60 {
-            now[0].1.pkts += 64;
-            now[0].1.hist[15] += 64;
-            now[0].1.max_gap_ns = 17_000_000;
-            p.update(&now);
+            p.update(&port.second(64, 15, 1));
         }
-        let playing = now.clone();
-        // the end screen: a stall, then nothing more arrives
-        now[0].1.pkts += 10;
-        now[0].1.stalls += 1;
-        now[0].1.hist[63] += 1;
-        now[0].1.max_gap_ns = 900_000_000;
-        p.update(&now);
-        for _ in 0..20 {
-            p.update(&now);
+        // the end screen at 32 a second for 12 s, the menu, then relay
+        // pings on the same port
+        for _ in 0..12 {
+            p.update(&port.second(32, 31, 1));
         }
-        let got = p.update(&now);
-        let g = Gaps::match_flows(&got).unwrap();
-        // play only: no loading burst, no stalls, 17 ms longest
-        assert_eq!(g.stalls, 0, "{g:?}");
-        assert!(g.max_gap_ns <= 17_000_000, "{g:?}");
-        assert_eq!(g.hist[2], 0);
-        assert_eq!(g.hist[63], 0);
-        assert!(g.pkts > 0 && g.pkts <= playing[0].1.pkts - base[0].1.pkts);
+        for _ in 0..14 {
+            p.update(&[(27015, port.0)]);
+        }
+        let g = p.update(&port.second(3, 2, 1)).unwrap();
+        // the half and 99% figures are the 64-a-second ones: no 32 ms
+        // stretches, no split packets halving the gaps
+        assert_eq!(g.quantile_ms(0.5), Some(16), "{g:?}");
+        assert_eq!(g.quantile_ms(0.99), Some(16), "{g:?}");
+        // the hiccup counts, loading doesn't; the longest gap is the hiccup
+        assert_eq!(g.stalls, 1, "{g:?}");
+        assert_eq!(g.max_gap_ns, 300_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn a_match_without_usual_rate_readings_yet_is_counted_whole() {
+        let mut p = Play::default();
+        p.start();
+        let mut port = Port(bpf_intf::port_rx::default());
+        port.0.max_gap_ns = 0;
+        p.settle(&[(27015, port.0)]);
+        let g = p.update(&port.second(64, 15, 1)).unwrap();
+        assert_eq!(g.updates, 64);
     }
 
     #[test]

@@ -20,8 +20,8 @@ show what reaches the machine, not what the game does with it.
 
 | Number | Meaning | Moved by |
 |---|---|---|
-| half ≤N ms | median gap between the game's incoming packets (1 ms buckets) | the server's update rate and how it packs them; shouldn't change within one kind of match |
-| 99% ≤N ms | the gap 99% of packets beat | jitter anywhere on the path: Wi-Fi, queues, the internet |
+| half ≤N ms | median gap between the game's incoming updates (1 ms buckets), while the game sends at its usual rate | the server's tick rate: about 16 ms at 64 a second |
+| 99% ≤N ms | the gap 99% of updates beat, while the game sends at its usual rate | jitter anywhere on the path: Wi-Fi, queues, the internet |
 | longest N ms | the longest gap counted (pauses of 2 s or more aren't) | one-off hiccups, Wi-Fi power save |
 | stalls | the flow went quiet for 100 ms to 2 s, then came back at game rate | what a player feels as rubber-banding |
 | socket buffer drops | a UDP receive buffer overflowed (`RcvbufErrors`), anywhere on the machine; "(N the game's)" is how many were the game's own sockets | socket buffers, a game that stopped reading |
@@ -34,26 +34,27 @@ show what reaches the machine, not what the game does with it.
 
 Limits to keep in mind:
 
-- **The gaps are between packets, not server updates.** A server that
-  splits each update over several packets shows the short gaps inside
-  each burst: a Deadlock bot match (about 32 updates a second, two
-  packets each) reads "half ≤3 ms", a match against people (64 a
-  second, one packet each) "half ≤14–16 ms"
-  ([findings.md](findings.md)). Matches against people split updates
-  too when there's a lot going on (2–3 packets each, 130–190 a second
-  for minutes at a time), so a short half-gap doesn't by itself mean a
-  bot match. Compare matches of the same kind.
-- **The 99% gap follows the game's update rate.** Deadlock drops to 32
-  updates a second for stretches of about 8–10 seconds; at 3–5% of a
-  match those alone put its 99% figure at ≤32 ms, against ≤17 ms while
-  it sends 64. A difference in the 99% figure between matches can be
-  time spent in those stretches, not the network.
+- **Gaps are between updates (0.11.0 and later).** A server splits a
+  big update into packets sent back to back; packets arriving within
+  4 ms of an update's first one count as part of it, and the gap is
+  timed from its first packet. No game sends 250 updates a second, so
+  this only merges split updates (and relay pings that happen to land
+  in one). Before 0.11.0 the gaps were between packets, so a Deadlock
+  fight, with updates split into 2–3 packets, read "half ≤2–3 ms".
+- **The half and 99% figures are taken at the game's usual rate (0.11.0
+  and later).** A second counts if it had at least half the match's
+  usual updates and its own median gap was at most half as long again
+  as usual. Deadlock sends 32 updates a second instead of 64 while the
+  player is dead and on the end screen; before 0.11.0 those stretches
+  alone put a match's 99% figure at ≤32 ms (at more than 1% of the
+  gaps), whatever the network did. A second with a hiccup still counts:
+  most of its gaps are usual.
 - **Play only (0.10.0 and later).** The gaps, stalls and longest gap
-  count from a minute into the match to a few seconds before the game's
-  traffic from outside stops, leaving out loading and the end screen,
-  where every stall and second-long gap fell before. Matches shorter
-  than a minute are counted whole. Don't compare stalls or the longest
-  gap across 0.10.0.
+  count from a minute into the match to five seconds before the last
+  second at the game's usual rate (from 0.11.0; 0.10.0 used the last
+  arrival, which a relay ping after the end screen could move),
+  leaving out loading and the end screen. Matches shorter than a minute
+  are counted whole. Don't compare gap figures across 0.10.0 or 0.11.0.
 
 - **1 ms resolution.** Changes of tens or hundreds of microseconds
   (interrupt coalescing, busy polling) can't show in the gap numbers.
