@@ -99,6 +99,11 @@ second with coalescing set to 0–10 µs, 114–192 at the NIC's default, 5
 matches each, no overlap ([findings.md](findings.md#match-comparisons)).
 Low coalescing lets the interrupt take packets first. The two settings
 do the same job, so test busy polling with coalescing at its default.
+With coalescing at 10 µs it still did something: 21–30 busy-polled
+packets a second in 3 "on" matches on 2026-11-03, against 4 and 0 in 2
+"off" ones. Sockets opened during an "on" match keep busy-polling after
+it (`busy_read` is copied at socket creation), so an "off" match right
+after an "on" one isn't fully off.
 
 ### 2. Do the socket buffer settings reach the game's socket?
 

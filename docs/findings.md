@@ -15,6 +15,20 @@ conditions, the number of matches on each side, and the medians.
 | Date | Setup | A vs B | Matches A / B | 99% gap (median) A / B | Longest (median) A / B | Stalls (median) A / B | Conclusion |
 |---|---|---|---|---|---|---|---|
 | 2026-11-02 | CachyOS, wired (`eno1`), bpfrag 0.9.2 tuning, Deadlock, ktorrent seeding and downloading throughout (marked LE) | NIC coalescing on (0–10 µs) / off (NIC default) | 5 / 5 | 32 / 31 ms | 1016 / 573 ms | 2 / 1 | No difference in the gaps (1 ms resolution can't show a microsecond effect, and every stall and long gap was loading or the end screen). Busy polling did far less with coalescing on: 31–37 busy-polled packets a second against 114–192, no overlap (permutation p = 0.047 on medians) |
+| 2026-11-03 | CachyOS, wired (`eno1`), bpfrag 0.11.1 tuning, Deadlock, coalescing at 10 µs in both arms, ktorrent seeding lightly (marked LE) | busy polling on (`busy_poll`/`busy_read` 25–50) / off | 3 / 2 | 18 / 17.5 ms | 41 / 38 ms | 0 / 0 | No difference in the gaps (1 ms resolution can't show it). Busy polling was active when on: 21–30 busy-polled packets a second, machine-wide, against 4 and then 0 when off. Too few matches; to be continued with coalescing at the NIC default |
+
+**2026-11-03: sockets keep busy polling after a match.** In the busy
+polling experiment, the first "off" match after an "on" one still had 4
+busy-polled packets a second, and the next "off" match had none. The
+kernel copies `busy_read` into a socket when it's created
+(`sock_init_data_uid()`, `net/core/sock.c`), so sockets opened during an
+"on" match keep busy-polling after bpfrag restores the sysctl, until
+they close. An "off" match straight after an "on" one isn't fully off;
+the effect fades as those sockets close. The same session confirmed
+0.11.1: every match stayed COMPETITIVE after a short CASUAL start, each
+ended 6 seconds after the menu came back, and every stall fell in the
+first 25 seconds (loading); during play the longest gaps were 38–41 ms,
+and 94 ms once, at a mid-game relay move.
 
 **2026-11-02 evening: six more Deadlock matches** (three on 0.10.0,
 three on 0.11.0; experiment: socket buffers). On 0.11.0 the meter counted
