@@ -88,10 +88,10 @@ just ci            # all of the below, as CI runs it
 |---|---|---|
 | `just fmt-check` | `cargo fmt --check` | |
 | `just lint` | `cargo clippy --locked --all-targets -- -D warnings` | |
-| `just test` | unit tests: detectors, classifier, config, journal, health, report, D-Bus, packaging (136) | |
+| `just test` | unit tests: detectors, classifier, config, journal, health, report, D-Bus, packaging (137) | |
 | `just build` | `cargo build --locked --release` | |
 | `just check-system` | `bpfrag --check`: what this machine and kernel support (never fails) | yes |
-| `just selftest` | `bpfrag --selftest`: BPF_PROG_TEST_RUN vectors through both tc programs (30 checks) | yes |
+| `just selftest` | `bpfrag --selftest`: BPF_PROG_TEST_RUN vectors through both tc programs (31 checks) | yes |
 | `just e2e` | real kernel: netns, fake Steam game, noise (150 checks) | yes |
 | `just e2e-unit` | the same, with only the systemd unit's capabilities | yes |
 | `just msrv` | `cargo +1.85 check` (the `rust-version` in Cargo.toml) | |

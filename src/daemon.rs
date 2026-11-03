@@ -578,7 +578,9 @@ impl<'a> Tuner<'a> {
             }
             Action::End { session, reason } => {
                 let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
-                self.health.update(&maps::read_port_rx(&self.skel));
+                let ports = maps::read_port_rx(&self.skel);
+                let reading = maps::next_reading(&mut self.skel);
+                self.health.update(&ports, reading, None);
                 let timeline = self.finish_timeline(&format!("match ended ({reason})"));
                 let mut health = self.health.finish();
                 if let Some(h) = health.as_mut() {
@@ -690,13 +692,17 @@ impl<'a> Tuner<'a> {
         let Some(s) = self.detector.session().cloned() else {
             return;
         };
+        let ports = maps::read_port_rx(&self.skel);
+        let reading = maps::next_reading(&mut self.skel);
         if self.health.settle_due() {
             // a minute in: the gap figures cover play from here
-            maps::reset_max_gap(&self.skel);
-            self.health.settle(&maps::read_port_rx(&self.skel));
+            self.health.settle(&ports);
         }
-        let ports = maps::read_port_rx(&self.skel);
-        self.health.update(&ports);
+        let game_tcp_rx = samples
+            .iter()
+            .find(|x| x.tgid == s.tgid)
+            .map(|x| x.tcp_rx_bytes);
+        self.health.update(&ports, reading, game_tcp_rx);
         let peers: Vec<_> = maps::read_game_peers(&self.skel)
             .into_iter()
             .map(|(p, r)| (p, r.pkts))

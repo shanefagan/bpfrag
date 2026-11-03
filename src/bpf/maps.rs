@@ -206,23 +206,16 @@ pub fn read_port_rx(skel: &BpfSkel) -> Vec<(u16, bpf_intf::port_rx)> {
         .collect()
 }
 
-/// Zero the longest gap on every game port, so it covers play from here
-/// on (`health::Tracker::settle`). A read and a write, so the meter can
-/// count a packet in between that the write then loses: one packet, once
-/// a match.
-pub fn reset_max_gap(skel: &BpfSkel) {
-    let map = &skel.maps.port_rx;
-    let keys: Vec<Vec<u8>> = map.keys().collect();
-    for k in keys {
-        let Some(mut v) = map.lookup(&k, MapFlags::ANY).ok().flatten() else {
-            continue;
-        };
-        let at = std::mem::offset_of!(bpf_intf::port_rx, max_gap_ns);
-        if let Some(field) = v.get_mut(at..at + 8) {
-            field.copy_from_slice(&0u64.to_ne_bytes());
-            let _ = map.update(&k, &v, MapFlags::EXIST);
-        }
-    }
+/// Start the next reading of the arrival meter; returns the one just
+/// finished: a game port's `reading_max_ns` is that reading's longest gap
+/// if its `reading` is this number, and none otherwise.
+pub fn next_reading(skel: &mut BpfSkel) -> u32 {
+    let Some(bss) = skel.maps.bss_data.as_deref_mut() else {
+        return 0;
+    };
+    let done = bss.rx_reading;
+    bss.rx_reading = done.wrapping_add(1);
+    done
 }
 
 /// Forget all arrival statistics, per port and per peer (between

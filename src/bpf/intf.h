@@ -73,11 +73,14 @@ struct port_rx {
 	__u64 updates;
 	__u64 last_ns;
 	__u64 max_gap_ns;	/* longest gap counted */
+	__u64 reading_max_ns;	/* longest gap counted in reading `reading` */
 	__u64 held_ns;		/* quiet stretch waiting for game-rate traffic */
 	__u64 resume_ns;	/* fast gaps since then */
 	__u32 resume_n;
 	__u32 stalls;		/* quiet stretches of GAP_STALL_MS .. GAP_IDLE_MS */
 	__u32 napi_id;		/* NAPI instance (receive queue) of the latest packet */
+	__u32 reading;		/* the reading reading_max_ns is for (rx_reading) */
+	__u32 _pad;
 	__u32 hist[GAP_BUCKETS];
 };
 

@@ -54,7 +54,11 @@ Limits to keep in mind:
   second at the game's usual rate (from 0.11.0; 0.10.0 used the last
   arrival, which a relay ping after the end screen could move),
   leaving out loading and the end screen. Matches shorter than a minute
-  are counted whole. Don't compare gap figures across 0.10.0 or 0.11.0.
+  are counted whole. From 0.12.0, seconds when the game is loading mid-
+  match are left out too: a second in which the game's own TCP brought in
+  a megabyte or more, and the three after it (Trackmania loads every map
+  that way while the session carries on). Don't compare gap figures
+  across 0.10.0, 0.11.0 or 0.12.0.
 
 - **1 ms resolution.** Changes of tens or hundreds of microseconds
   (interrupt coalescing, busy polling) can't show in the gap numbers.

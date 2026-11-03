@@ -462,6 +462,54 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
     ))
 }
 
+/// Each game port's longest gap per reading: after `check_meter`, its
+/// 6 ms gap belongs to reading 0; once userspace starts reading 1, the next
+/// gap starts that reading's longest afresh.
+fn check_readings(skel: &mut BpfSkel) -> Result<String, String> {
+    let game = |skel: &BpfSkel| {
+        crate::bpf::maps::read_port_rx(skel)
+            .into_iter()
+            .find(|(p, _)| *p == GAME_PORT)
+            .map(|(_, r)| r)
+            .ok_or("no arrivals on the game port")
+    };
+    let r = game(skel)?;
+    if r.reading != 0 || r.reading_max_ns != r.max_gap_ns || r.max_gap_ns < 5_000_000 {
+        return Err(format!(
+            "reading {} longest {} ns, overall {} ns: expected reading 0, both the 6 ms gap",
+            r.reading, r.reading_max_ns, r.max_gap_ns
+        ));
+    }
+    let first = r.reading_max_ns;
+    if crate::bpf::maps::next_reading(skel) != 0 {
+        return Err("the first reading wasn't 0".into());
+    }
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    let pkt = to_port(ipv4(0, OTHER_PORT, 0x4000, 0), GAME_PORT);
+    let input = ProgramInput {
+        data_in: Some(&pkt),
+        ..Default::default()
+    };
+    let res = skel
+        .progs
+        .bpfrag_rx
+        .test_run(input)
+        .map_err(|e| format!("test_run failed: {e}"))?;
+    check_verdict(res.return_value)?;
+    let r = game(skel)?;
+    if r.reading != 1 || r.reading_max_ns < 9_000_000 || r.max_gap_ns < r.reading_max_ns {
+        return Err(format!(
+            "reading {} longest {} ns, overall {} ns: expected reading 1's own gap of 10 ms or more",
+            r.reading, r.reading_max_ns, r.max_gap_ns
+        ));
+    }
+    Ok(format!(
+        "{} ms in reading 0, {} ms in reading 1",
+        first / 1_000_000,
+        r.reading_max_ns / 1_000_000
+    ))
+}
+
 /// On loopback (flagged local), game packets are counted against the
 /// interface but not timed or counted per sender: the game talking to
 /// itself isn't the match.
@@ -717,6 +765,14 @@ pub fn run(cfg: &Config) -> Result<bool> {
         Err(e) => {
             failed += 1;
             println!("  FAIL arrival meter: {e}");
+        }
+    }
+    total += 1;
+    match check_readings(&mut skel) {
+        Ok(what) => println!("  PASS longest gap per reading ({what})"),
+        Err(e) => {
+            failed += 1;
+            println!("  FAIL longest gap per reading: {e}");
         }
     }
     total += 1;

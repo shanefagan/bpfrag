@@ -51,6 +51,10 @@ const volatile __u8 bulk_dscp = 1;		/* LE: RFC 8622 lower effort */
 volatile bool count_tcp = false;
 volatile bool observe_on = false;
 volatile bool bulk_on = false;
+/* Which of userspace's readings (one a second) gaps fall in: each game
+ * port keeps its longest gap per reading as well as overall, so a reading
+ * userspace leaves out (loading a map) takes its long gaps with it. */
+volatile __u32 rx_reading = 0;
 
 struct {
 	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
@@ -567,6 +571,12 @@ static __always_inline void count_gap(struct port_rx *pr, __u64 gap)
 		pr->stalls++;
 	if (gap > pr->max_gap_ns)
 		pr->max_gap_ns = gap;
+	if (pr->reading != rx_reading) {
+		pr->reading = rx_reading;
+		pr->reading_max_ns = 0;
+	}
+	if (gap > pr->reading_max_ns)
+		pr->reading_max_ns = gap;
 	if (ms >= GAP_BUCKETS - 1)
 		ms = GAP_BUCKETS - 1;
 	pr->hist[ms & (GAP_BUCKETS - 1)]++;
