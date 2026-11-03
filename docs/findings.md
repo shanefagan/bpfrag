@@ -176,6 +176,21 @@ Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`
 their traffic looks like, before deciding whether and how to detect and
 tune them ([experiments.md](experiments.md#20-tcp-games)).
 
+**2026-11-03: Trackmania, an hour of online rooms.** CachyOS, wired,
+bpfrag 0.11.1, detected by its Steam app id and tuned at INTENSE: the
+client sends about 200 packets a second while racing, the server about
+90 (74 updates; half the gaps ≤11 ms, so roughly a 90-a-second server),
+dropping to about 50 a second (20 ms gaps) between races. One match from
+start to exit, with four server changes, three of them to another port
+on the same host (2401, 2402, 2403: moving between rooms) and one to
+another host and back. Unlike Deadlock it loads each map mid-session: UDP
+stops for 2 to 4 seconds while the game pulls 10 to 65 MB a second over
+its own TCP (2.4 GB over the hour). Six of the session's seven stalls
+were those loads, and so was its 1.8 s longest gap; from 0.12.0 seconds
+with that much of the game's own TCP are left out of the figures, which
+on this session would have left one stall: the server going from 50 to
+90 updates a second as a race started.
+
 **2026-10-29: Path of Exile 2 talks TCP.** CachyOS, wired, bpfrag 0.7.0,
 the game started from Steam (Proton) with `BPFRAG_OBSERVE=1 %command%`,
 about a minute and a half in the game, probably logging in and in town.
