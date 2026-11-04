@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.12.0
+Version:        0.12.1
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Wed Nov 04 2026 Shane Fagan <mail@shanefagan.com> - 0.12.1-1
+- A load lasts until the game is back at its usual rate
+
 * Tue Nov 03 2026 Shane Fagan <mail@shanefagan.com> - 0.12.0-1
 - Loading mid-match is left out of the gap figures
 

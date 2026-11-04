@@ -1,3 +1,9 @@
+bpfrag (0.12.1-1) unstable; urgency=medium
+
+  * A load lasts until the game is back at its usual rate
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 04 Nov 2026 15:43:00 +0000
+
 bpfrag (0.12.0-1) unstable; urgency=medium
 
   * Loading mid-match is left out of the gap figures
