@@ -176,6 +176,20 @@ Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`
 their traffic looks like, before deciding whether and how to detect and
 tune them ([experiments.md](experiments.md#20-tcp-games)).
 
+**2026-11-04 evening: a bad server, and a false start.** bpfrag 0.12.0,
+three Trackmania sessions and four Deadlock matches. In one Trackmania
+session the game moved to a server (D:2415, by bpfrag's letters) that
+sent about 35 updates a second instead of the usual 90, for six minutes,
+with 83 stalls, while the client kept sending its usual 170 a second; the
+game bounced between it and another server twice, and every other
+server that evening ran clean. That's the server or its route, not this
+machine: the kind of stretch the per-match figures exist to catch, but
+the end-of-match line only sums it into the match. One Deadlock start
+was a 10-second INTENSE "match" with no match: the game, just launched,
+pinged three of Steam's relays for two seconds while its menu ran at 128
+a second over loopback. 0.12.2 starts a match only when traffic from
+outside outweighs the game's own loopback traffic.
+
 **2026-11-04: Trackmania again, and five Deadlock matches on 0.12.0.**
 Trackmania (24 minutes, three server changes) loaded a map in bursts: at
 one server change the game's own TCP brought in 7.5 MB, then 850 and

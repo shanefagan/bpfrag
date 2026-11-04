@@ -765,19 +765,21 @@ impl Detector {
         } else {
             w.outside_since = None;
         }
-        // Traffic from outside in two of the last three windows: one
-        // window alone can be the game checking in with a server from its
-        // menu (Deadlock does when it starts), not a match.
+        // Traffic from outside in two of the last three windows, and more
+        // of it than the game sends itself over loopback: Deadlock checks
+        // in with Steam's relays as it starts, for a second or two, while
+        // its menu runs at 128 a second over loopback (a 10-second
+        // "match" on 2026-11-04). In a match the menu server is quiet.
         let outside_windows = self
             .paths
             .iter()
             .rev()
             .take(3)
-            .filter(|p| p.outside_pps >= idle)
+            .filter(|p| p.outside_pps >= idle && p.outside_pps >= p.local_pps)
             .count();
         let go = if w.local {
             // back from a menu: two windows in three from outside
-            where_now(&self.paths, 3, idle) == Where::Outside
+            outside_windows >= 2
         } else if outside_windows >= 2 {
             true
         } else if outside_windows == 1 {
@@ -794,7 +796,8 @@ impl Detector {
                 Where::Local => false,
                 // traffic the meter can't see at all: the old rule
                 Where::Unknown => w.windows >= UNSEEN_WINDOWS,
-                Where::Outside => true,
+                // some from outside, but less than over loopback
+                Where::Outside => false,
             }
         };
         if !go {
@@ -1547,6 +1550,25 @@ mod tests {
         let a = sim.run(25, &[(7, 128, 128, 220)]);
         assert!(has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
         assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
+    }
+
+    #[test]
+    fn relay_pings_while_the_menu_runs_arent_a_match() {
+        // the game starting: its menu over loopback, and for a few seconds
+        // pings to a few relays from outside
+        let mut sim = Sim::with_paths(&[7]);
+        sim.arrivals = local(128.0);
+        sim.run(4, &[(7, 128, 128, 220)]);
+        sim.arrivals = Arrivals {
+            outside_pps: 40.0,
+            local_pps: 128.0,
+        };
+        let a = sim.run(4, &[(7, 170, 170, 220)]);
+        assert!(starts(&a).is_empty(), "{a:?}");
+        // then a match: the menu server goes quiet
+        sim.arrivals = outside(64.0);
+        let a = sim.run(3, &[(7, 64, 64, 200)]);
+        assert_eq!(starts(&a).len(), 1, "{a:?}");
     }
 
     #[test]
