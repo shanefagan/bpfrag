@@ -337,10 +337,14 @@ const END_TRIM: usize = 5;
 const LEARN: usize = 10;
 /// The game's own TCP received in one reading that means it's loading
 /// (Trackmania pulls 10 to 65 MB a second of map and ghost data between
-/// maps, and 160 KB while racing), and readings after one that count as
-/// loading too: the stall is counted when its traffic comes back.
+/// maps, and 160 KB while racing). Loading then lasts until a reading at
+/// the usual rate (that one included: the stall is counted when the
+/// traffic comes back), at least LOADING_HOLD readings and at most
+/// LOADING_MAX: a load comes in bursts, with seconds of under a megabyte
+/// between them (2026-11-04: 680 KB, and a stall, mid-load).
 const LOADING_BYTES: u64 = 1_000_000;
 const LOADING_HOLD: u32 = 3;
+const LOADING_MAX: u32 = 60;
 
 type PortReadings = Vec<(u16, bpf_intf::port_rx)>;
 
@@ -358,10 +362,10 @@ struct Reading {
 /// it's the whole match.
 ///
 /// From then on each reading (a second) is judged on its own:
-/// - **Loading:** the game's own TCP brought in a megabyte or more in it
-///   or the LOADING_HOLD readings before (Trackmania loads each map while
-///   the session carries on, and every one of its stalls in an hour was
-///   one). Left out of everything.
+/// - **Loading:** from a reading in which the game's own TCP brought in a
+///   megabyte or more to the first one back at the usual rate (Trackmania
+///   loads each map while the session carries on, and six of its seven
+///   stalls in an hour were loads). Left out of everything.
 /// - **Usual rate:** Deadlock sends 32 updates a second instead of 64
 ///   while the player is dead and on the end screen; at more than 1% of
 ///   the gaps those stretches set the 99% figure. The half and 99% figures
@@ -379,7 +383,9 @@ struct Play {
     prev: Option<PortReadings>,
     /// The game's own TCP received, at the previous reading.
     prev_tcp: Option<u64>,
+    /// Readings the current load still lasts at least, and at most.
     loading_left: u32,
+    loading_max: u32,
     /// Every reading of play, and the last one the figures go up to
     /// (END_TRIM before the latest usual-rate one).
     readings: Vec<Reading>,
@@ -456,11 +462,11 @@ impl Play {
             self.prev_tcp = Some(now);
             d
         });
-        if tcp.is_some_and(|d| d >= LOADING_BYTES) {
+        let burst = tcp.is_some_and(|d| d >= LOADING_BYTES);
+        if burst {
             self.loading_left = LOADING_HOLD + 1;
+            self.loading_max = LOADING_MAX + 1;
         }
-        let loading = self.loading_left > 0;
-        self.loading_left = self.loading_left.saturating_sub(1);
 
         let Some(prev) = self.prev.replace(ports.to_vec()) else {
             return Gaps::match_flows(ports);
@@ -469,6 +475,20 @@ impl Play {
             return Gaps::match_flows(ports);
         }
         let delta = since(ports, &prev);
+        let gaps = Gaps::match_flows(&delta);
+        // Loading lasts its minimum, then until a reading at the usual
+        // rate, which is the last one.
+        let back = !burst
+            && gaps
+                .as_ref()
+                .is_some_and(|d| self.usual(d, d.quantile_ms(0.5)));
+        let loading = self.loading_max > 0;
+        self.loading_left = self.loading_left.saturating_sub(1);
+        self.loading_max = if self.loading_left == 0 && back {
+            0
+        } else {
+            self.loading_max.saturating_sub(1)
+        };
         // the match's ports this reading: a tenth of the busiest or more
         let busiest = delta.iter().map(|(_, r)| r.updates).max().unwrap_or(0);
         let mut rec = Reading {
@@ -485,7 +505,7 @@ impl Play {
             }
         }
         self.readings.push(rec);
-        if let Some(d) = Gaps::match_flows(&delta) {
+        if let Some(d) = gaps {
             let interval = d.quantile_ms(0.5);
             let usual = !loading && self.usual(&d, interval);
             if d.updates > 0 && !loading {
@@ -886,6 +906,16 @@ mod tests {
         port.tcp += 20_000_000;
         port.silent(&mut p);
         port.stall(&mut p, 1800);
+        // the load goes on in bursts: seconds slow, under a megabyte, and
+        // another stall (2026-11-04)
+        for _ in 0..4 {
+            port.tcp += 800_000;
+            port.second(&mut p, 20, 31, 1);
+        }
+        port.tcp += 680_000;
+        port.stall(&mut p, 900);
+        port.tcp += 30_000_000;
+        port.silent(&mut p);
         for _ in 0..120 {
             port.tcp += 160_000;
             port.second(&mut p, 90, 11, 1);

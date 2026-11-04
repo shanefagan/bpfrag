@@ -176,6 +176,20 @@ Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`
 their traffic looks like, before deciding whether and how to detect and
 tune them ([experiments.md](experiments.md#20-tcp-games)).
 
+**2026-11-04: Trackmania again, and five Deadlock matches on 0.12.0.**
+Trackmania (24 minutes, three server changes) loaded a map in bursts: at
+one server change the game's own TCP brought in 7.5 MB, then 850 and
+680 KB in the next seconds, then 4.7, 28 and 35 MB, with stalls
+throughout. 0.12.0 ended a load three seconds after the last megabyte,
+so the stall in the 680 KB second counted as play; 0.12.1 keeps a load
+going until the game is back at its usual rate. Two stalls remained
+while racing, with the game's TCP at its usual 115 KB a second: real
+hiccups. One more came as a race started (50 to 90 updates a second,
+with a pause in between), as on 2026-11-03. The Deadlock matches (10 to
+39 minutes, COMPETITIVE throughout) had every stall in their first 41
+seconds; during play the longest gaps were under 64 ms, except at two
+mid-game relay moves.
+
 **2026-11-03: Trackmania, an hour of online rooms.** CachyOS, wired,
 bpfrag 0.11.1, detected by its Steam app id and tuned at INTENSE: the
 client sends about 200 packets a second while racing, the server about
