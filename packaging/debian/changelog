@@ -1,3 +1,9 @@
+bpfrag (0.12.2-1) unstable; urgency=medium
+
+  * A match needs more traffic from outside than over loopback; Deadlock's relay pings at startup no longer start one.
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 04 Nov 2026 23:12:13 +0000
+
 bpfrag (0.12.1-1) unstable; urgency=medium
 
   * A load lasts until the game is back at its usual rate
