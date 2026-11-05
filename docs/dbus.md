@@ -130,8 +130,9 @@ recording, logging match times):
   again then. A stop mid-match sends `MatchEnded` and `StateChanged` with
   `end_reason` `bpfrag stopped` first.
 - **Cut by the timestamps, not the signal's arrival.** Starts are
-  declared a few seconds into the traffic and ends after `linger_secs`
-  (15 s by default) of quiet; `at_ms`, `MatchStartedAt` and
+  declared a few seconds into the traffic, and ends after `linger_secs`
+  (15 s by default) of quiet or 6 s of the game's traffic staying on
+  this machine (back in a menu with a server of its own); `at_ms`, `MatchStartedAt` and
   `match_ended_at_ms` say when it really happened. They come from the
   system clock, so they line up with a recording's timestamps.
 - **Several matches in one session are normal.** Back-to-back games end

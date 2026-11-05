@@ -15,7 +15,7 @@ alongside other tuners](#running-alongside-other-tuners)).
 
 ```
 $ sudo bpfrag
-20:14:02 INFO  bpfrag 0.3.0 started; waiting for game traffic
+20:14:02 INFO  bpfrag 0.12.2 started; waiting for game traffic
 20:15:10 INFO  Match detected: Counter-Strike 2 (pid 6230) at ~128 pkt/s (tx 64, rx 64) -> COMPETITIVE [Steam app 730]
 20:15:10 INFO  COMPETITIVE profile: net.core.busy_poll=50, net.core.busy_read=50, enp6s0 coalescing=10us, ..., dscp=CS4 on enp6s0
 20:52:47 INFO  Match ended after 37m37s (game exited); settings restored
@@ -91,12 +91,14 @@ small-packet UDP traffic at 25 packets/s or more, the shape of a game's
 netcode. A classifier then checks it really is a game: Steam app ids, a
 game library path, Wine/Proton, a launcher ancestor, gamemode or MangoHud,
 and allow and deny lists, so a Discord call or a browser's QUIC traffic
-doesn't count. The tier follows the packet rate (about twice the server's
-tick rate), with hysteresis. Only traffic that reaches the network counts:
-a game talking to a server of its own in its menus (Deadlock does) isn't
-a match. A match ends the moment the game exits, after 15 quiet seconds,
-or once its traffic stays on the machine for 15 seconds. Games that talk only TCP (World of Warcraft, older
-games) aren't tuned yet; `[detect] tcp = "observe"` logs what their
+doesn't count. The match starts once most of its traffic comes from
+outside: a game talking to a server of its own in its menus (Deadlock
+does), or checking in with relays as it starts, isn't a match. The tier
+follows the rate of updates (about twice the server's tick rate) and
+only goes up within a match. A match ends the moment the game exits,
+after 15 quiet seconds, or once its traffic stays on the machine for 6
+seconds. Games that talk only TCP (World of Warcraft, older games)
+aren't tuned yet; `[detect] tcp = "observe"` logs what their
 traffic looks like, to gather the data for that. To log one game's UDP and
 TCP, whatever they look like, put `BPFRAG_OBSERVE=1 %command%` in its Steam
 launch options.
@@ -117,8 +119,9 @@ Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 
 - **Packet gaps** are timed as packets arrive, on the game's main flow. A
   64-tick server gives gaps of about 16 ms; the 99% figure, the longest gap
   and stalls (the flow going quiet for 100 ms or more mid-match) show the
-  spikes you feel as rubber-banding. Lobbies and menus, where games send
-  only keepalives, aren't counted.
+  spikes you feel as rubber-banding. Only play counts: not the menus,
+  the first minute's loading, maps loading mid-session, or the end
+  screen.
 - **Drops** are the kernel counters that grow when the receive path can't
   keep up: socket buffers, the input backlog, the NIC's ring.
 - **The receive queue** is where the game's packets come in, and which IRQ

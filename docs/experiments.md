@@ -144,12 +144,14 @@ setting crosses 10 µs or leaves "dynamic" (`ixgbe_do_reset()`,
 `drivers/net/ethernet/intel/ixgbe/ixgbe_ethtool.c`), which interrupts
 traffic. bpfrag's tiers cross exactly that line. In the Deadlock sessions in
 [findings.md](findings.md), tiers switched 2 to 10 times a session, often
-twice within a minute.
+twice within a minute, before 0.10.0; since then the tier only goes up
+within a match, so a match has at most two changes, but each can still
+cross it.
 
 **How:** first a check: `ethtool -i <iface>` for the driver; on ixgbe,
 look for "Reset adapter" in `dmesg` after a match. Then compare the times
-of tier changes in the log with stall times, which needs stall timestamps
-(M5). If tier changes do cost something, an A/B+ with one arm pinned to
+of tier changes in the log with stall times: the match timeline has
+both, second by second (M5). If tier changes do cost something, an A/B+ with one arm pinned to
 a single tier (`detect.pin_tier`) settles it.
 
 **Read it:** stalls clustered within a second or two of tier changes.
@@ -301,8 +303,10 @@ games that don't do that:
 
 - **A new server.** A new match is usually a new game server, so the
   remote address or port the game receives from changes. bpfrag logs
-  that ("the game's server changed"); whether it ever happens mid-game
-  isn't known yet.
+  that ("the game's server changed"). It also happens mid-game, so it
+  can't mark a boundary on its own: Deadlock moves between Steam's
+  relays with no break, and a Trackmania session moved between two
+  servers and back twice on 2026-11-04 ([findings.md](findings.md)).
 - **A change of local socket** (port): Deadlock opened a new one for its
   second game on 2026-10-30. The timeline's `port` column shows it.
 
@@ -669,7 +673,7 @@ it.
 | M2 | The game's socket buffer sizes (`rb`, via sock_diag as `ss -m` does) | 2 |
 | M3 | Round-trip time to the gateway and a public anycast address, about once a second during a match. Arrival gaps measure jitter, not delay: a queue holding a steady 80 ms still delivers a steady 64 Hz stream, so only round-trip time shows it. Game servers and relays may not answer pings, which is why the gateway and a public address are the dependable targets; the server's own address needs M7 | 8, 10, 12, 18 |
 | M4 | Gaps between the game's outgoing packets (the egress marker sees them) to tell a game or host hiccup from a network one; on a server, a tick-loop hitch shows as every player's outgoing stream pausing at once | all, 23, 24 |
-| M5 | Timestamps of the last stalls in each match, to line them up with tier changes, scans and other events | 4, 7 |
+| M5 | Timestamps of the stalls in each match, to line them up with tier changes, scans and other events. Done: the match timeline (`[capture] timeline = true`) has stalls, tier and events per second | 4, 7 |
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
 | M7 | The game's peer address (or its network) per match. Partly done: the server is followed and named by a letter per address within a match ("server A:27031"), without the address itself; comparing servers across matches would need a stable name for one | 17, 22 |
 | M8 | Sub-millisecond arrival timing | 5, 13 |
