@@ -61,6 +61,11 @@ Limits to keep in mind:
   carries on; from 0.12.1, as 0.12.0 stopped after three seconds and a
   load comes in bursts). Don't compare gap figures
   across 0.10.0, 0.11.0 or 0.12.0.
+- **Pauses count as play.** A paused Deadlock match keeps its full 64
+  updates a second, each one tiny, so it's indistinguishable from play
+  by timing, and its gaps are as real as any. Pauses don't make a match
+  look worse; they add easy minutes. The timeline's `udp_rx_bytes_s`
+  shows them (a few KB a second instead of tens).
 
 - **1 ms resolution.** Changes of tens or hundreds of microseconds
   (interrupt coalescing, busy polling) can't show in the gap numbers.

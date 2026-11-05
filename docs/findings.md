@@ -176,6 +176,18 @@ Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`
 their traffic looks like, before deciding whether and how to detect and
 tune them ([experiments.md](experiments.md#20-tcp-games)).
 
+**2026-11-05: two clean Deadlock matches, with pauses.** bpfrag 0.12.2
+tuning, wired, backlog off in both (no comparison), matches against
+people of 41 and 52 minutes. Both ran at 64 updates a second throughout:
+99% gap 18 ms, longest 32 ms, no stalls in play; the one stall in each
+fell in the opening load, while the game's TCP brought in up to 660 KB a
+second. The second match had six long pauses of 20 to 90 seconds.
+During a pause the server keeps sending all 64 updates a second, each
+tiny (about 10 KB/s in, against 85–110 KB/s in play), unlike death or
+the end screen (32 a second), so bpfrag counts a pause as play; the
+timing didn't change through any of them. Both matches were in one
+session of the game, so the startup case 0.12.2 fixed didn't come up.
+
 **2026-11-04 evening: a bad server, and a false start.** bpfrag 0.12.0,
 three Trackmania sessions and four Deadlock matches. In one Trackmania
 session the game moved to a server (D:2415, by bpfrag's letters) that
