@@ -21,7 +21,7 @@
 //! | `server`, `server_pps` | who the game receives from ([`super::peers`]): a letter per address, and the port; its packets a second |
 //! | `peers` | remote addresses and ports that sent anything this second |
 //! | `port` | the game's local port that received the most this second |
-//! | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps this second on the ports carrying the match (1 ms buckets; 64 is over 63 ms) |
+//! | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps this second on the ports carrying the match (1 ms buckets; a longest gap over 63 ms is its exact length, or 64 if the meter didn't time it) |
 //! | `stalls` | stalls the meter finished counting this second |
 //! | `events` | match start and end, tier and server changes |
 //!
@@ -54,6 +54,9 @@ pub struct Row<'a> {
     /// The current server's label and packets a second.
     pub server: Option<(String, f64)>,
     pub peers: usize,
+    /// The meter's reading for this row (`maps::next_reading`), whose
+    /// longest gap each port carries.
+    pub reading: Option<u32>,
 }
 
 pub struct Timeline {
@@ -125,7 +128,7 @@ impl Timeline {
         if let Some(s) = r.sample {
             self.prev = Some(*s);
         }
-        let gaps = self.gaps_since_last(r.ports);
+        let gaps = self.gaps_since_last(r.ports, r.reading);
         let (server, server_pps) = match &r.server {
             Some((label, pps)) => (label.clone(), format!("{pps:.0}")),
             None => (String::new(), String::new()),
@@ -153,7 +156,11 @@ impl Timeline {
 
     /// "port,gaps,p50,p99,max,stalls" since the last row, over the ports
     /// that received at least a tenth of what the busiest did this second.
-    fn gaps_since_last(&mut self, ports: &[(u16, bpf_intf::port_rx)]) -> String {
+    fn gaps_since_last(
+        &mut self,
+        ports: &[(u16, bpf_intf::port_rx)],
+        reading: Option<u32>,
+    ) -> String {
         let mut now = HashMap::with_capacity(ports.len());
         let mut deltas = Vec::with_capacity(ports.len());
         for (port, r) in ports {
@@ -167,21 +174,32 @@ impl Timeline {
             for (x, (a, b)) in d.iter_mut().zip(g.hist.iter().zip(hist.iter())) {
                 *x = a.saturating_sub(*b);
             }
-            deltas.push((*port, g.pkts - pkts, d, g.stalls.saturating_sub(stalls)));
+            // this reading's longest gap, timed exactly, if the port had one
+            let longest = reading
+                .filter(|n| r.reading == *n)
+                .map_or(0, |_| r.reading_max_ns);
+            deltas.push((
+                *port,
+                g.pkts - pkts,
+                d,
+                g.stalls.saturating_sub(stalls),
+                longest,
+            ));
             now.insert(*port, (g.pkts, g.hist, g.stalls));
         }
         self.prev_ports = now;
-        let Some(&(port, most, _, _)) = deltas.iter().max_by_key(|d| d.1).filter(|d| d.1 > 0)
-        else {
+        let Some(&(port, most, ..)) = deltas.iter().max_by_key(|d| d.1).filter(|d| d.1 > 0) else {
             return ",0,,,,0".into();
         };
         let mut hist = [0u64; BUCKETS];
         let mut stalls = 0;
-        for (_, _, d, s) in deltas.iter().filter(|d| d.1.saturating_mul(10) >= most) {
+        let mut longest_ns = 0;
+        for (_, _, d, s, l) in deltas.iter().filter(|d| d.1.saturating_mul(10) >= most) {
             for (h, x) in hist.iter_mut().zip(d.iter()) {
                 *h += x;
             }
             stalls += s;
+            longest_ns = longest_ns.max(*l);
         }
         let this = Gaps {
             port,
@@ -194,10 +212,19 @@ impl Timeline {
         };
         let n: u64 = hist.iter().sum();
         let q = |v: Option<u32>| v.map(|x| x.to_string()).unwrap_or_default();
+        // The last bucket holds every gap over 63 ms: a relay change
+        // (about 70 ms) and a stall (100 ms+) read the same there, so
+        // use the meter's exact longest gap when it has one.
         let max = hist
             .iter()
             .rposition(|c| *c > 0)
-            .map(|i| (i + 1).to_string())
+            .map(|i| {
+                if i + 1 == BUCKETS && longest_ns > 63_000_000 {
+                    format!("{:.0}", longest_ns as f64 / 1e6)
+                } else {
+                    (i + 1).to_string()
+                }
+            })
             .unwrap_or_default();
         format!(
             "{port},{n},{},{},{max},{stalls}",
@@ -296,6 +323,7 @@ mod tests {
             ports: &[(27015, port(64, &[(15, 63)], 0))],
             server: Some(("A:27031".into(), 64.0)),
             peers: 2,
+            ..Default::default()
         })
         .unwrap();
         s.tx_pkts += 64;
@@ -308,6 +336,31 @@ mod tests {
             ports: &[(27015, port(125, &[(15, 123), (63, 1)], 1))],
             server: Some(("B:27031".into(), 61.0)),
             peers: 1,
+            ..Default::default()
+        })
+        .unwrap();
+        // a 72 ms gap the meter timed in this reading, and 62 more
+        let mut timed = port(188, &[(15, 185), (63, 2)], 1);
+        timed.reading = 9;
+        timed.reading_max_ns = 72_400_000;
+        t.row(&Row {
+            tier: "INTENSE",
+            sample: Some(&s),
+            ports: &[(27015, timed)],
+            reading: Some(9),
+            ..Default::default()
+        })
+        .unwrap();
+        // the same port, but the meter's longest is an older reading's
+        timed.pkts += 63;
+        timed.hist[15] += 62;
+        timed.hist[63] += 1;
+        t.row(&Row {
+            tier: "INTENSE",
+            sample: Some(&s),
+            ports: &[(27015, timed)],
+            reading: Some(10),
+            ..Default::default()
         })
         .unwrap();
         t.row(&Row::default()).unwrap();
@@ -335,7 +388,13 @@ mod tests {
         assert_eq!(at(&r2, "peers"), "1");
         assert_eq!(at(&r2, "port"), "27015");
         assert!(at(&r2, "udp_rx_pps").parse::<f64>().unwrap() > 0.0);
-        let r3 = cols(lines[4]);
+        assert_eq!(at(&cols(lines[4]), "gap_max_ms"), "72", "timed exactly");
+        assert_eq!(
+            at(&cols(lines[5]), "gap_max_ms"),
+            "64",
+            "not timed this reading"
+        );
+        let r3 = cols(lines[6]);
         assert_eq!(r3.len(), head.len(), "an empty row keeps its columns");
         let _ = fs::remove_dir_all(&dir);
     }

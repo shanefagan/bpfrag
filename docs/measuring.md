@@ -234,7 +234,7 @@ bpfrag version, the game and the experiment arm, then a row a second:
 | `server`, `server_pps` | the server it receives from (a letter per address, and the port) and its packets a second |
 | `peers` | addresses and ports that sent the game anything that second (relay pings included) |
 | `port` | the game's local port that received the most that second |
-| `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps that second on the ports carrying the match; 64 is over 63 ms |
+| `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps that second on the ports carrying the match; 64 is over 63 ms, except that from 0.12.3 a `gap_max_ms` over 63 ms is the gap's exact length |
 | `stalls` | stalls that finished that second |
 | `events` | match start and end, tier changes, server changes |
 

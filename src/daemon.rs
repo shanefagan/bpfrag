@@ -717,6 +717,7 @@ impl<'a> Tuner<'a> {
                 ports: &ports,
                 server: self.health.server(),
                 peers: self.health.active_peers(),
+                reading: Some(reading),
             };
             if let Err(e) = t.row(&row) {
                 warn!("Capture: can't write {}: {e}", t.path().display());
