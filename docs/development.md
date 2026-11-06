@@ -57,6 +57,7 @@ dist/                        systemd unit, man page, /etc/default file, example 
 packaging/arch/              PKGBUILD (bpfrag-git) + install hook
 packaging/debian/            changelog + postinst for cargo-deb ([package.metadata.deb])
 packaging/rpm/               spec, build.sh (vendored, offline), rpmlintrc
+packaging/release-files.md   what each release file is for (CI adds it to the release notes)
 packaging/bump-version.sh    set a new version everywhere it is recorded (just bump)
 justfile                     build, test, install, package and release recipes;
                              CI runs the same ones

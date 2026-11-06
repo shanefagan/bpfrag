@@ -164,6 +164,8 @@ jobs:
             echo "::error::the tag message contains an old signature; re-tag with the notes from a file (git tag -s -f -F notes.md $GITHUB_REF_NAME)"
             exit 1
           fi
+          printf '\n' >> notes.md
+          cat packaging/release-files.md >> notes.md
           mkdir release
           find artifacts -type f -exec mv -t release/ {} +
           (cd release && sha256sum -- * > SHA256SUMS)

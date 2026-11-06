@@ -252,6 +252,20 @@ Every [release](https://github.com/shanefagan/bpfrag/releases) has a `.deb`
 that runs on any x86-64 distro with glibc 2.35 or newer and libdbus, all on
 kernel 6.6 or newer.
 
+Which file to download:
+
+- **Debian, Ubuntu and derivatives:** `bpfrag_<version>-1_amd64.deb`
+- **Fedora, Nobara, Bazzite:** `bpfrag-<version>-1.fc<NN>.x86_64.rpm`
+  (`rpm-ostree install` it on Bazzite)
+- **Anything else** (Arch, CachyOS, openSUSE...):
+  `bpfrag-<version>-x86_64-linux.tar.gz`, then copy the files into
+  place and run `sudo systemctl enable --now bpfrag` yourself
+
+The rest are for checking downloads (`SHA256SUMS`), debugging
+(`-debuginfo`, `-debugsource`) and rebuilding (`.src.rpm`, the vendored
+crates); [packaging/release-files.md](packaging/release-files.md), which
+every release page repeats, says what each one is.
+
 The packages enable and start the service when first installed. It does
 nothing until a game's match is detected. To see what this machine supports
 and follow what bpfrag does:
@@ -260,9 +274,6 @@ and follow what bpfrag does:
 sudo bpfrag --check && sudo bpfrag --selftest
 journalctl -u bpfrag -f
 ```
-
-With the binary tarball, copy the files into place and run
-`sudo systemctl enable --now bpfrag` yourself.
 
 **Building it yourself** needs Rust 1.85 or newer, clang, libclang (for
 bindgen), libelf, libdbus and zlib. Packaging files are in

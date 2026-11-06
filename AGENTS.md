@@ -135,6 +135,9 @@ container). bpfrag itself must keep building with plain `cargo build
   page, D-Bus policy, default config). A new shipped file goes there, in
   `[package.metadata.deb]` assets, the RPM spec, the PKGBUILD and
   `just tarball`.
+- `packaging/release-files.md` says what each release file is for, and
+  CI appends it to every release's notes. A new or renamed release file
+  goes there and in the README's Install section.
 - makepkg rewrites `pkgver` in the PKGBUILD on every build; don't commit
   that change on its own.
 - Packages built on CachyOS carry its CPU-specific flags (AVX-512 on
