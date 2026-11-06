@@ -19,8 +19,8 @@ Deadlock, with some Trackmania.
   matches (5 each way), as expected at 1 ms resolution. It does change
   busy polling: with coalescing at 0–10 µs, busy polling handled about a
   quarter as many packets.
-- **Busy polling:** no difference in the gaps over 8 matches (5 on, 3
-  off). It runs when on (20–30 packets a second, machine-wide). Sockets
+- **Busy polling:** no difference in the gaps over 12 Deadlock matches
+  (7 on, 5 off). It runs when on (20–30 packets a second, machine-wide). Sockets
   opened during an "on" match keep busy-polling after it, until they
   close, so an "off" match straight after an "on" one isn't fully off.
 - **Socket buffers:** the game's own sockets never dropped a packet,
@@ -68,6 +68,10 @@ On this line, almost none come from the machine:
   these. The figures now cover play only.
 - **Relay changes** (Deadlock): sometimes one gap of 64–100 ms, a couple
   of seconds before bpfrag logs the change; sometimes nothing.
+- **A lost connection:** twice in about 40 Deadlock matches, the server
+  went silent mid-match; the game sent into nothing for ten seconds, went
+  to its menu for five, and came back through a new relay, about 20
+  seconds in all. From 0.12.4 the health line counts these.
 - **A bad server:** a Trackmania server sent 35 updates a second instead
   of 90, with 83 stalls in six minutes, while every other server that
   evening ran clean.
@@ -87,7 +91,7 @@ conditions, the number of matches on each side, and the medians.
 |---|---|---|---|---|---|---|---|
 | 2026-11-02 | CachyOS, wired (`eno1`), bpfrag 0.9.2 tuning, Deadlock, ktorrent seeding and downloading throughout (marked LE) | NIC coalescing on (0–10 µs) / off (NIC default) | 5 / 5 | 32 / 31 ms | 1016 / 573 ms | 2 / 1 | No difference in the gaps (1 ms resolution can't show a microsecond effect, and every stall and long gap was loading or the end screen). Busy polling did far less with coalescing on: 31–37 busy-polled packets a second against 114–192, no overlap (permutation p = 0.047 on medians) |
 | 2026-11-03 | CachyOS, wired (`eno1`), bpfrag 0.11.1 tuning, Deadlock, coalescing at 10 µs in both arms, ktorrent seeding lightly (marked LE) | busy polling on (`busy_poll`/`busy_read` 25–50) / off | 3 / 2 | 18 / 17.5 ms | 41 / 38 ms | 0 / 0 | No difference in the gaps (1 ms resolution can't show it). Busy polling was active when on: 21–30 busy-polled packets a second, machine-wide, against 4 and then 0 when off |
-| 2026-11-06 | CachyOS, wired (`eno1`), bpfrag 0.12.2 tuning, Deadlock, from timelines | busy polling on / off | 2 / 1 | 17.5 / 17 ms | over 63 / over 63 ms (relay changes) | 0 / 0 | No difference. With 2026-11-03: 5 on, 3 off, the same gaps either way |
+| 2026-11-06 | CachyOS, wired (`eno1`), bpfrag 0.12.2 tuning, Deadlock, from timelines | busy polling on / off | 4 / 3 | 17.5 / 18 ms | over 63 / over 63 ms (relay changes) | 0 / 0 | No difference. With 2026-11-03: 7 on, 5 off, the same gaps either way |
 
 ## Open questions
 
@@ -117,6 +121,19 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-06 evening** (0.12.2, five Deadlock matches and two
+  Trackmania sessions): the 19:42 match lost its server at 19 minutes:
+  the game sent for ten seconds with nothing back, went to its menu for
+  five, and came back through a new relay 20 seconds after it stopped
+  hearing the server. The same happened at 17:12 on 2026-11-04. The
+  health line showed only two 64 ms gaps (the old flow never came back,
+  so its gap never ended); 0.12.4 counts such stretches. Both times, about
+  two minutes after reconnecting, the game pinged a handful of relays
+  for half a minute, sending 80 packets a second instead of 64, and the
+  tier went to INTENSE for the rest of the match; 0.12.4 judges the tier
+  on the server's traffic only. A 2-minute game at 18:57 (a match that
+  ended early) was detected and ended cleanly. Trackmania's stalls were
+  all map loads.
 - **2026-11-06** (0.12.2, three Deadlock matches, each from a fresh
   launch): no false start from the relay pings, so 0.12.2's start rule
   held. Clean play (99% 17–18 ms, no stalls). Five relay changes: three
