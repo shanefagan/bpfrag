@@ -28,6 +28,7 @@
 
 pub mod counters;
 pub mod peers;
+pub mod silence;
 pub mod timeline;
 
 use std::collections::{HashMap, VecDeque};
@@ -217,6 +218,13 @@ pub struct Health {
     /// game moving mid-match (Steam's relays route through new ones).
     #[serde(default)]
     pub server_changes: u32,
+    /// Times nothing came from the server for seconds while the game kept
+    /// sending, until it came back (a lost connection the game got back),
+    /// and the longest, in seconds.
+    #[serde(default)]
+    pub silences: u32,
+    #[serde(default)]
+    pub silence_longest_secs: f64,
 }
 
 /// "412 MB", "1.3 GB".
@@ -272,6 +280,22 @@ impl Health {
             1 => s += "; the game's server changed once",
             n => s += &format!("; the game's server changed {n} times"),
         }
+        match self.silences {
+            0 => {}
+            1 => {
+                s += &format!(
+                    "; nothing from the server for {:.0} s once, while the game kept sending",
+                    self.silence_longest_secs
+                )
+            }
+            n => {
+                s += &format!(
+                    "; nothing from the server {n} times while the game kept sending, \
+                     longest {:.0} s",
+                    self.silence_longest_secs
+                )
+            }
+        }
         if self.game_tcp_bytes >= 1_000_000 {
             s += &format!("; the game's own TCP: {}", size(self.game_tcp_bytes));
         }
@@ -323,6 +347,9 @@ pub struct Tracker {
     servers: Servers,
     /// The part of the match the gap figures cover.
     play: Play,
+    /// Lost connections, and the game's UDP counts at the last reading.
+    silence: silence::Silence,
+    udp_prev: Option<(u64, u64)>,
 }
 
 /// Seconds after a match starts before its gaps count. Loading a map
@@ -642,6 +669,8 @@ impl Tracker {
         self.rx_queue = None;
         self.busy_on = false;
         self.servers = Servers::default();
+        self.silence = silence::Silence::default();
+        self.udp_prev = None;
         self.play.start();
         self.watch(ifaces);
     }
@@ -708,8 +737,36 @@ impl Tracker {
             rx_queue: self.rx_queue.clone(),
             busy_polled,
             server_changes: self.servers.changes(),
+            silences: self.silence.count(),
+            silence_longest_secs: self.silence.longest(),
             ..Default::default()
         });
+    }
+
+    /// One reading of the game's UDP packet counts so far (`udp`: sent,
+    /// received, loopback included) and what reached its ports from
+    /// outside, per second (None without the meter), `dt` seconds after
+    /// the last. Returns a lost connection's length when the server comes
+    /// back.
+    pub fn connection(
+        &mut self,
+        now: f64,
+        dt: f64,
+        udp: (u64, u64),
+        outside_rx: Option<f64>,
+    ) -> Option<f64> {
+        self.base?;
+        let dt = dt.max(0.001);
+        let prev = self.udp_prev.replace(udp);
+        let (tx0, rx0) = prev.filter(|p| p.0 <= udp.0 && p.1 <= udp.1)?;
+        let tx = (udp.0 - tx0) as f64 / dt;
+        let rx = (udp.1 - rx0) as f64 / dt;
+        let d = self.silence.step(now, tx, rx, outside_rx);
+        if let Some(h) = self.latest.as_mut() {
+            h.silences = self.silence.count();
+            h.silence_longest_secs = self.silence.longest();
+        }
+        d
     }
 
     /// One reading of packets per peer (`game_peers`), `dt` seconds after
@@ -754,8 +811,12 @@ impl Tracker {
         self.play = Play::default();
         let changes = self.servers.changes();
         self.servers = Servers::default();
+        let silence = std::mem::take(&mut self.silence);
+        self.udp_prev = None;
         self.latest.take().map(|mut h| {
             h.server_changes = changes;
+            h.silences = silence.count();
+            h.silence_longest_secs = silence.longest();
             h
         })
     }

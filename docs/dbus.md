@@ -114,6 +114,8 @@ report, and the dict is empty when bpfrag stopped:
 | `squeezed` | t | times receive processing ran out of budget |
 | `game_tcp_bytes` | t | TCP the game itself moved during the match (map or replay downloads, say) |
 | `server_changes` | t | times the game moved to another server without going quiet: back-to-back games seen as one match, or one game moving mid-match (Steam's relays) |
+| `silences` | t | times nothing came from the server for 3 s or more while the game kept sending, until it came back: a lost connection the game got back (0.12.4) |
+| `silence_longest_s` | d | the longest of those, in seconds |
 | `busy_polled` | t | packets received by busy polling, machine-wide; only present when busy polling was on during the match (or the count moved) |
 
 ## Writing a client

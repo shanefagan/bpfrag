@@ -212,6 +212,8 @@ pub struct Tuner<'a> {
     /// The meter's game packets per interface at the last reading, for
     /// [`Arrivals`].
     meter_prev: HashMap<u32, u64>,
+    /// The last reading's [`Arrivals`], if the meter was read.
+    last_paths: Option<Arrivals>,
 }
 
 impl<'a> Tuner<'a> {
@@ -285,6 +287,7 @@ impl<'a> Tuner<'a> {
             arm: None,
             timeline: None,
             meter_prev: HashMap::new(),
+            last_paths: None,
             bus,
             started_unix: 0,
             det_clock: (0.0, Instant::now()),
@@ -703,6 +706,20 @@ impl<'a> Tuner<'a> {
             .find(|x| x.tgid == s.tgid)
             .map(|x| x.tcp_rx_bytes);
         self.health.update(&ports, reading, game_tcp_rx);
+        if let Some(x) = samples.iter().find(|x| x.tgid == s.tgid) {
+            let outside = self.last_paths.map(|p| p.outside_pps);
+            let udp = (x.tx_pkts, x.rx_pkts);
+            if let Some(d) = self.health.connection(self.det_clock.0, dt, udp, outside) {
+                info!(
+                    "{}: nothing from the server for {d:.0} s while the game kept sending; \
+                     receiving again",
+                    s.name
+                );
+                if let Some(t) = self.timeline.as_mut() {
+                    t.event(format!("nothing from the server for {d:.0} s"));
+                }
+            }
+        }
         let peers: Vec<_> = maps::read_game_peers(&self.skel)
             .into_iter()
             .map(|(p, r)| (p, r.pkts))
@@ -1420,8 +1437,10 @@ impl<'a> Tuner<'a> {
             next = now + tick;
 
             let samples = maps::read_proc_stats(&self.skel);
+            self.last_paths = None;
             if self.detector.wants_paths() {
                 let p = self.read_paths(dt);
+                self.last_paths = Some(p);
                 self.detector.paths(p);
             }
             if self.detector.session().is_some() {

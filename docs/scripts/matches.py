@@ -46,13 +46,18 @@ BULK = re.compile(r"bulk: (.*?)( marked \w+| \(not marked\))(?:;|$)")
 GAME_TCP = re.compile(r"the game's own TCP: ([^;]+)")
 BUSY = re.compile(r"busy-polled packets: (\d+)")
 SERVERS = re.compile(r"the game's server changed (once|\d+ times)")
+SILENT = re.compile(
+    r"nothing from the server (?:for (\d+) s once|(\d+) times while the game kept sending, "
+    r"longest (\d+) s)"
+)
 EXPERIMENT = re.compile(r"; experiment: (\S+) (on|off)\b")
 
 FIELDS = [
     "label", "started", "game", "mode", "version", "start_tier", "peak_tier",
     "duration_s", "end_reason", "start_pps", "gap_p50_ms", "gap_p99_ms",
     "gap_longest_ms", "stalls", "socket_drops", "game_socket_drops", "backlog_drops",
-    "nic_drops", "squeezed", "busy_polled", "server_changes", "rx_queue", "game_tcp", "bulk",
+    "nic_drops", "squeezed", "busy_polled", "server_changes", "silences",
+    "silence_longest_s", "rx_queue", "game_tcp", "bulk",
     "bulk_marked",
     "experiment", "arm", "reason",
 ]
@@ -121,6 +126,13 @@ def parse(lines, label):
                 cur["server_changes"] = 0
             if c := SERVERS.search(line):
                 cur["server_changes"] = 1 if c.group(1) == "once" else int(c.group(1).split()[0])
+            # 0 when the server was never lost; blank before 0.12.4
+            if vtuple(version) >= (0, 12, 4):
+                cur["silences"] = 0
+            if s := SILENT.search(line):
+                once, n, longest = s.groups()
+                cur["silences"] = 1 if once else int(n)
+                cur["silence_longest_s"] = once or longest
             if q := QUEUE.search(line):
                 cur["rx_queue"] = q.group(1).strip()
             if g := GAME_TCP.search(line):

@@ -198,7 +198,11 @@ and `--compare mode` (tuned against dry-run) work the same way.
 
 For a spreadsheet instead, leave out `--compare`; label sessions with
 `--label`. A `gap_p99_ms` of 64 means "over 63 ms", the histogram's last
-bucket. A `server_changes` above 0 means the game moved to another
+bucket. `silences` counts times nothing came from the server for 3
+seconds or more while the game kept sending, until it came back (from
+0.12.4): a lost connection the game got back, which the gap figures can't
+show, since the old flow never resumes and the new one starts fresh.
+A `server_changes` above 0 means the game moved to another
 server mid-match: either several games the detector saw as one, or one
 game moving (Deadlock does, through Steam's relays, with no break). The
 match's timeline tells them apart ([detection.md](detection.md)); leave

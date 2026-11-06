@@ -223,6 +223,12 @@ pub fn health_dict(h: Option<&Health>) -> PropMap {
         "server_changes",
         Box::new(u64::from(h.server_changes)),
     );
+    put(&mut m, "silences", Box::new(u64::from(h.silences)));
+    put(
+        &mut m,
+        "silence_longest_s",
+        Box::new(h.silence_longest_secs),
+    );
     m
 }
 
