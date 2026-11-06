@@ -1,3 +1,9 @@
+bpfrag (0.12.3-1) unstable; urgency=medium
+
+  * Timelines give the exact length of a longest gap over 63 ms; bpfrag says plainly when kernel lockdown's confidentiality mode keeps it from loading, and --check shows the lockdown mode; the README and every release page say what each release file is for.
+
+ -- Shane Fagan <mail@shanefagan.com>  Fri, 06 Nov 2026 14:47:09 +0000
+
 bpfrag (0.12.2-1) unstable; urgency=medium
 
   * A match needs more traffic from outside than over loopback; Deadlock's relay pings at startup no longer start one.
