@@ -264,69 +264,26 @@ journalctl -u bpfrag -f
 With the binary tarball, copy the files into place and run
 `sudo systemctl enable --now bpfrag` yourself.
 
-Building it yourself needs Rust 1.85 or newer, clang, libclang (for
-bindgen), libelf, libdbus and zlib.
+**Building it yourself** needs Rust 1.85 or newer, clang, libclang (for
+bindgen), libelf, libdbus and zlib. Packaging files are in
+`packaging/`:
 
-**Arch, CachyOS, EndeavourOS.** Build a package from the checkout. It builds
-whatever is committed:
+- **Arch, CachyOS, EndeavourOS:** `cd packaging/arch && makepkg -si`
+  builds a package from what's committed.
+- **Debian, Ubuntu:** `cargo deb --locked` (with
+  [cargo-deb](https://github.com/kornelski/cargo-deb)), then
+  `sudo apt install ./target/debian/bpfrag_*.deb`.
+- **Fedora, Nobara, Bazzite:** `packaging/rpm/build.sh` builds an RPM
+  offline from the committed tree (on Bazzite, in a toolbox, then
+  `rpm-ostree install` it).
+- **Anything else:** `just build` and `sudo just install` (DESTDIR and
+  PREFIX work as usual), then `sudo systemctl daemon-reload` and
+  `sudo systemctl reload dbus`.
 
-```sh
-cd packaging/arch && makepkg -si
-```
-
-makepkg compiles with the flags in `/etc/makepkg.conf`. CachyOS sets those
-for the build machine's CPU (AVX-512 on Zen 4, for example), so a package
-built there crashes with SIGILL on older CPUs. To build one to share, use
-portable flags:
-
-```sh
-RUSTFLAGS="-C target-cpu=x86-64-v2" CFLAGS="-O2 -march=x86-64-v2 -mtune=generic" makepkg -f
-```
-
-**Debian 12+, Ubuntu 22.04+.** Build a `.deb` with
-[cargo-deb](https://github.com/kornelski/cargo-deb). Debian 13's own cargo
-is new enough; on older releases and Ubuntu, use [rustup](https://rustup.rs).
-The package needs the glibc it was built against or newer, so build on the
-oldest release you'll install it on.
-
-```sh
-sudo apt install clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config
-cargo install cargo-deb --locked
-cargo deb --locked
-sudo apt install ./target/debian/bpfrag_*.deb
-```
-
-**Fedora, Nobara.** `packaging/rpm/build.sh` packs the committed tree and
-its vendored crates into source tarballs, then runs `rpmbuild` on
-`packaging/rpm/bpfrag.spec`, which builds offline. `--srpm` stops at the
-`.src.rpm`, which COPR or mock can build. On Bazzite and other image-based
-Fedoras, build in a toolbox and layer the RPM with `rpm-ostree install`.
-
-```sh
-sudo dnf install rpm-build git && sudo dnf builddep packaging/rpm/bpfrag.spec
-packaging/rpm/build.sh
-sudo dnf install ./target/rpm/RPMS/*/bpfrag-[0-9]*.rpm
-```
-
-On removal, every package stops the service while `/usr/bin/bpfrag` is
-still installed, so any settings changed mid-match are restored first.
-Edits to `/etc/default/bpfrag` and `/etc/bpfrag/bpfrag.toml` survive
-upgrades.
-
-**Anything else.** Unpack the release tarball (binary, systemd unit, man
-page, example config, D-Bus policy), or install the build dependencies and
-[just](https://github.com/casey/just), then:
-
-```sh
-just build                    # cargo build --locked --release
-sudo just install             # DESTDIR and PREFIX work as usual
-sudo systemctl daemon-reload
-sudo systemctl reload dbus    # loads the D-Bus policy
-```
-
-The BPF object needs no vmlinux.h or bpftool at build time.
-`src/bpf/vmlinux_lite.h` declares only the kernel fields used, and CO-RE
-relocates them against your running kernel when the object loads.
+[docs/development.md](docs/development.md) has the details for each, and
+for packagers. Removing a package stops the service first, so any
+settings changed mid-match are restored, and edits to
+`/etc/default/bpfrag` and `/etc/bpfrag/bpfrag.toml` survive upgrades.
 
 ### Checking it on your hardware
 

@@ -192,6 +192,26 @@ and `just install` (with `DESTDIR` and `PREFIX`, or `SYSCONFDIR`, `UNITDIR`
 and `DBUSDIR`) is the list of files a package ships. `install` and
 `uninstall` ask before they run; `just --yes install` doesn't.
 
+The BPF object needs no vmlinux.h or bpftool at build time:
+`src/bpf/vmlinux_lite.h` declares only the kernel fields used, and CO-RE
+relocates them against the running kernel when the object loads.
+
+Notes per distribution:
+
+- **Debian, Ubuntu:** the build dependencies are `clang libclang-dev
+  libelf-dev libdbus-1-dev zlib1g-dev pkg-config`. Debian 13's cargo is
+  new enough; older releases need [rustup](https://rustup.rs). A .deb
+  needs the glibc it was built against or newer, so build on the oldest
+  release it's for.
+- **Fedora:** `sudo dnf install rpm-build git && sudo dnf builddep
+  packaging/rpm/bpfrag.spec`. `packaging/rpm/build.sh --srpm` stops at
+  the `.src.rpm`, for COPR or mock.
+- **Arch, CachyOS:** makepkg compiles with `/etc/makepkg.conf`'s flags,
+  and CachyOS's are for the build machine's CPU (AVX-512 on Zen 4), so a
+  package built there crashes with SIGILL on older CPUs. For one to share:
+  `RUSTFLAGS="-C target-cpu=x86-64-v2" CFLAGS="-O2 -march=x86-64-v2
+  -mtune=generic" makepkg -f`.
+
 
 ## Releasing
 

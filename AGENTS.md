@@ -138,7 +138,8 @@ container). bpfrag itself must keep building with plain `cargo build
 - makepkg rewrites `pkgver` in the PKGBUILD on every build; don't commit
   that change on its own.
 - Packages built on CachyOS carry its CPU-specific flags (AVX-512 on
-  Zen 4) and crash on older CPUs; see README for portable flags.
+  Zen 4) and crash on older CPUs; see docs/development.md ("Packages")
+  for portable flags.
 
 ## Commits
 
