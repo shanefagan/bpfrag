@@ -1,3 +1,9 @@
+bpfrag (0.12.4-1) unstable; urgency=medium
+
+  * A match's tier leaves out relay pings, which moved two 64-tick Deadlock matches to INTENSE; match health counts lost connections (nothing from the server for 3 s or more while the game kept sending), which the gap figures couldn't show.
+
+ -- Shane Fagan <mail@shanefagan.com>  Fri, 06 Nov 2026 22:34:44 +0000
+
 bpfrag (0.12.3-1) unstable; urgency=medium
 
   * Timelines give the exact length of a longest gap over 63 ms; bpfrag says plainly when kernel lockdown's confidentiality mode keeps it from loading, and --check shows the lockdown mode; the README and every release page say what each release file is for.

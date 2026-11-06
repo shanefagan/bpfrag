@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.12.3
+Version:        0.12.4
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Fri Nov 06 2026 Shane Fagan <mail@shanefagan.com> - 0.12.4-1
+- A match's tier leaves out relay pings, which moved two 64-tick Deadlock matches to INTENSE; match health counts lost connections (nothing from the server for 3 s or more while the game kept sending), which the gap figures couldn't show.
+
 * Fri Nov 06 2026 Shane Fagan <mail@shanefagan.com> - 0.12.3-1
 - Timelines give the exact length of a longest gap over 63 ms; bpfrag says plainly when kernel lockdown's confidentiality mode keeps it from loading, and --check shows the lockdown mode; the README and every release page say what each release file is for.
 
