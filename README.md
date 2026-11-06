@@ -359,6 +359,11 @@ Tiers, classifier lists and detector thresholds go in
   counted with the `sock_send_length` and `sock_recv_length` tracepoints
   (6.4), and the tc programs attach as tcx links (6.6). `--check` tells
   you whether this machine qualifies.
+- **Kernel lockdown, if it's on, in integrity mode.** That's the mode
+  Secure Boot turns on, and the one Easy Anti-Cheat's Linux v2 asks for;
+  bpfrag loads no kernel modules and only reads kernel memory, which
+  integrity allows. Confidentiality mode stops BPF programs reading
+  kernel memory, so bpfrag can't start there. `--check` shows the mode.
 - **Root.** Under the hood it uses `CAP_BPF`, `CAP_PERFMON` and
   `CAP_NET_ADMIN`, plus `CAP_SYS_PTRACE` to read a game's
   `/proc/<pid>/environ` when the game runs as your user. The systemd unit

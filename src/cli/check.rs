@@ -60,6 +60,18 @@ pub fn run(cfg: &Config) -> bool {
         }
     }
 
+    match crate::bpf::lockdown().as_deref() {
+        // confidentiality fails "kernel hooks" above, with the reason
+        Some("confidentiality") => {}
+        Some("integrity") => line(
+            None,
+            "kernel lockdown",
+            "integrity (fine: bpfrag loads no modules and only reads kernel memory)",
+        ),
+        Some(m) => line(None, "kernel lockdown", m),
+        None => line(None, "kernel lockdown", "not available (no lockdown LSM)"),
+    }
+
     let ifaces = net::default_route_ifaces();
     if ifaces.is_empty() {
         line(

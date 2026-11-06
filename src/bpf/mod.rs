@@ -43,8 +43,32 @@ pub fn check_kernel() -> Result<()> {
     if !btf_has(&btf, "tcx_entry") {
         bail!("this kernel has no tcx links (needs {MIN_KERNEL}+)");
     }
+    // Confidentiality mode takes bpf_probe_read_kernel() away from
+    // tracing programs (bpf_tracing_func_proto(), kernel/trace/bpf_trace.c),
+    // and the socket tracepoints read the socket with it (BPF_CORE_READ).
+    // Integrity mode, the one Secure Boot turns on, leaves it.
+    if lockdown().as_deref() == Some("confidentiality") {
+        bail!(
+            "kernel lockdown is in confidentiality mode, which stops BPF programs \
+             reading kernel memory, so the socket tracepoints can't load \
+             (integrity mode is fine)"
+        );
+    }
     debug!("kernel has the socket tracepoints and tcx");
     Ok(())
+}
+
+/// The kernel lockdown mode ("none", "integrity" or "confidentiality"),
+/// or None without the lockdown LSM.
+pub fn lockdown() -> Option<String> {
+    let text = std::fs::read_to_string("/sys/kernel/security/lockdown").ok()?;
+    lockdown_mode(&text).map(str::to_string)
+}
+
+/// The bracketed word in "none [integrity] confidentiality".
+fn lockdown_mode(text: &str) -> Option<&str> {
+    text.split_whitespace()
+        .find_map(|w| w.strip_prefix('[')?.strip_suffix(']'))
 }
 
 /// Copy a map key or value into a bindgen'd struct.
@@ -78,5 +102,27 @@ pub fn bump_memlock() {
             "could not raise RLIMIT_MEMLOCK: {}",
             std::io::Error::last_os_error()
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_the_lockdown_mode() {
+        assert_eq!(
+            lockdown_mode("none [integrity] confidentiality\n"),
+            Some("integrity")
+        );
+        assert_eq!(
+            lockdown_mode("[none] integrity confidentiality"),
+            Some("none")
+        );
+        assert_eq!(
+            lockdown_mode("none integrity [confidentiality]"),
+            Some("confidentiality")
+        );
+        assert_eq!(lockdown_mode(""), None);
     }
 }
