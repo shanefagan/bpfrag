@@ -176,6 +176,19 @@ Games logged with `BPFRAG_OBSERVE=1` or `tcp = "observe"`
 their traffic looks like, before deciding whether and how to detect and
 tune them ([experiments.md](experiments.md#20-tcp-games)).
 
+**2026-11-06: three Deadlock matches from a fresh start, and relay
+changes.** bpfrag 0.12.2 tuning, wired, matches against people of 35 to
+41 minutes; the busy polling experiment, on in two and off in one. The
+game was launched fresh for each, and none started a "match" while it
+pinged Steam's relays from the menu: 0.12.2's start rule held. All three
+ran at 64 updates a second, 99% gap 17–18 ms over play, no stalls; on
+and off look the same, as on 2026-11-03 (five on, three off between the
+two days). Deadlock moved relays five times; three of the moves cost one
+gap over 63 ms, under 100 ms, two to three seconds before bpfrag logged
+the change (it names a server by its packet rate, which takes a moment
+to move), and two cost nothing. The 1 ms histogram can't say how much
+over 63 ms; from 0.12.3 the timeline gives such a gap's exact length.
+
 **2026-11-05: two clean Deadlock matches, with pauses.** bpfrag 0.12.2
 tuning, wired, backlog off in both (no comparison), matches against
 people of 41 and 52 minutes. Both ran at 64 updates a second throughout:
