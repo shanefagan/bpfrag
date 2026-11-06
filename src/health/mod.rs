@@ -734,6 +734,12 @@ impl Tracker {
         self.servers.active()
     }
 
+    /// Packets a second from peers other than the server, in the last
+    /// reading ([`peers::Servers::others_pps`]).
+    pub fn others_pps(&self) -> f64 {
+        self.servers.others_pps()
+    }
+
     pub fn latest(&self) -> Option<&Health> {
         self.latest.as_ref()
     }

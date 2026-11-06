@@ -214,6 +214,20 @@ impl Servers {
     pub fn active(&self) -> usize {
         self.active
     }
+
+    /// Packets a second, in the last reading, from every peer but the
+    /// server: relay pings and the like, which the game answers one for
+    /// one. Nothing until there is a server to tell them apart from.
+    pub fn others_pps(&self) -> f64 {
+        let Some(main) = self.main else {
+            return 0.0;
+        };
+        self.rates
+            .iter()
+            .filter(|(p, _)| **p != main)
+            .map(|(_, r)| r.back().copied().unwrap_or(0.0))
+            .sum()
+    }
 }
 
 #[cfg(test)]

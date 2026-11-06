@@ -100,6 +100,9 @@ pub struct Window {
     pub tx_pps: f64,
     pub rx_pps: f64,
     pub avg_size: f64,
+    /// Of those, received from peers other than the game's server (and
+    /// as many sent back): relay pings. Known only during a match.
+    pub others_pps: f64,
 }
 
 impl Window {
@@ -206,11 +209,20 @@ impl Track {
     /// the history: a game pinging Steam's relays every couple of minutes
     /// sends 100 more packets a second for a second or two, which raised
     /// the mean enough to move a 64-tick game to INTENSE (2026-11-02).
+    /// Traffic with peers other than the server is left out too: Deadlock
+    /// sometimes pings a handful of relays for half a minute, 20 more
+    /// packets a second each way, longer than the median can ride out
+    /// (two 64-tick matches went INTENSE that way, 2026-11-04 and -06).
     fn tick_rate(&self) -> f64 {
         let mut v: Vec<f64> = self
             .hist
             .iter()
-            .map(|w| tick_pps((w.tx_pps, w.rx_pps)))
+            .map(|w| {
+                tick_pps((
+                    (w.tx_pps - w.others_pps).max(0.0),
+                    (w.rx_pps - w.others_pps).max(0.0),
+                ))
+            })
             .collect();
         if v.is_empty() {
             return 0.0;
@@ -406,6 +418,9 @@ pub struct Detector {
     /// The watched game's or the match's recent paths.
     paths: VecDeque<Arrivals>,
     pending_paths: Option<Arrivals>,
+    /// The match's traffic with peers other than its server, for the
+    /// next window ([`Detector::others`]).
+    pending_others: f64,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -430,6 +445,7 @@ impl Detector {
             watched: None,
             paths: VecDeque::new(),
             pending_paths: None,
+            pending_others: 0.0,
         }
     }
 
@@ -455,6 +471,13 @@ impl Detector {
     /// Does the detector want this window's [`Arrivals`]?
     pub fn wants_paths(&self) -> bool {
         self.check_paths && (self.session.is_some() || self.watched.is_some())
+    }
+
+    /// Packets a second the match exchanged with peers other than its
+    /// server ([`crate::health::Tracker::others_pps`]), before
+    /// [`Detector::tick`]: left out of the rate its tier is judged on.
+    pub fn others(&mut self, pps: f64) {
+        self.pending_others = pps;
     }
 
     /// This window's paths for the watched game or the match, before
@@ -546,6 +569,11 @@ impl Detector {
                 rx_pps: drx as f64 / dt,
                 avg_size: if pkts > 0 {
                     dbytes as f64 / pkts as f64
+                } else {
+                    0.0
+                },
+                others_pps: if self.session.as_ref().is_some_and(|x| x.info.tgid == s.tgid) {
+                    std::mem::take(&mut self.pending_others)
                 } else {
                     0.0
                 },
@@ -1017,6 +1045,8 @@ mod tests {
         procs: FakeProcs,
         /// What the arrival meter reports each window, when asked.
         arrivals: Arrivals,
+        /// What the match exchanges with peers other than its server.
+        others: f64,
     }
 
     impl Sim {
@@ -1031,6 +1061,7 @@ mod tests {
                     dead: vec![],
                 },
                 arrivals: Arrivals::default(),
+                others: 0.0,
             }
         }
 
@@ -1057,6 +1088,9 @@ mod tests {
             let samples: Vec<Sample> = self.counters.values().copied().collect();
             if self.det.wants_paths() {
                 self.det.paths(self.arrivals);
+            }
+            if self.det.session().is_some() {
+                self.det.others(self.others);
             }
             self.det.tick(self.now, 1.0, &samples, &mut self.procs)
         }
@@ -1248,6 +1282,28 @@ mod tests {
         a.extend(sim.run(2, &[(5, 164, 220, 120)]));
         a.extend(sim.run(10, &[(5, 64, 130, 300)]));
         assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
+    }
+
+    #[test]
+    fn pinging_relays_for_half_a_minute_doesnt_raise_the_tier() {
+        // Deadlock, 2026-11-06: in a 64-tick match, the client pinged a
+        // handful of relays for half a minute, 80 packets a second out
+        // instead of 64, and each answered
+        let mut sim = Sim::new(&[5]);
+        let a = sim.run(4, &[(5, 64, 140, 150)]);
+        assert_eq!(starts(&a)[0].tier, Tier::Competitive);
+        sim.run(10, &[(5, 64, 140, 150)]);
+        sim.others = 18.0;
+        let mut a = sim.run(40, &[(5, 82, 210, 150)]);
+        sim.others = 0.0;
+        a.extend(sim.run(10, &[(5, 64, 140, 150)]));
+        assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
+        // the same rates with nothing to tell the server apart: INTENSE,
+        // as before
+        let mut sim = Sim::new(&[6]);
+        sim.run(14, &[(6, 64, 140, 150)]);
+        let a = sim.run(40, &[(6, 82, 210, 150)]);
+        assert!(has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
     }
 
     #[test]

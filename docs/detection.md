@@ -60,7 +60,11 @@ The tier comes from the game's update rate: twice the smaller of its
 smoothed send and receive rates, about twice the server's tick rate. (The
 total would count a server that splits big updates into several packets
 as a faster one: Deadlock, a 64-tick game, receives 50 to 150 packets a
-second as fights come and go.)
+second as fights come and go.) It's the median over the last 8 windows,
+and from 0.12.4 leaves out traffic with peers other than the game's
+server: Deadlock pings a handful of Steam's relays for half a minute at a
+time, 20 more packets a second each way, which twice moved a 64-tick
+match to INTENSE.
 
 - **INTENSE** at ≥ 155 pkt/s: 128-tick servers.
 - **COMPETITIVE** at ≥ 85 pkt/s: 64-tick servers.

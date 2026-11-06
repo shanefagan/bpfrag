@@ -1424,6 +1424,10 @@ impl<'a> Tuner<'a> {
                 let p = self.read_paths(dt);
                 self.detector.paths(p);
             }
+            if self.detector.session().is_some() {
+                // last reading's: health reads its peers after the tick
+                self.detector.others(self.health.others_pps());
+            }
             self.det_clock = (now.duration_since(t0).as_secs_f64(), now);
             let actions = self
                 .detector
