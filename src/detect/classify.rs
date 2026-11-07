@@ -490,6 +490,25 @@ impl ProcessLookup for ProcfsLookup {
     fn alive(&mut self, tgid: u32) -> bool {
         Path::new(&format!("/proc/{tgid}")).exists()
     }
+
+    fn age_secs(&mut self, tgid: u32) -> Option<f64> {
+        process_age(Path::new("/proc"), tgid)
+    }
+}
+
+/// Seconds since the process started: its starttime (clock ticks since
+/// boot) against the system's uptime.
+pub fn process_age(root: &Path, pid: u32) -> Option<f64> {
+    let start = start_time(root, pid)?;
+    let uptime: f64 = fs::read_to_string(root.join("uptime"))
+        .ok()?
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()?;
+    // SAFETY: sysconf has no preconditions
+    let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    (hz > 0).then(|| uptime - start as f64 / hz as f64)
 }
 
 #[cfg(test)]
@@ -850,5 +869,12 @@ mod tests {
         assert_eq!(c.read(50).unwrap().program(), "randomd");
         assert!(!c.classify(999).0.is_game());
         assert_eq!(start_time(&fp.dir, 20), Some(4242));
+        // started 4242 ticks after boot
+        let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+        let up = 4242.0 / hz + 7.5;
+        fs::write(fp.dir.join("uptime"), format!("{up:.2} 99.0\n")).unwrap();
+        let age = process_age(&fp.dir, 20).unwrap();
+        assert!((age - 7.5).abs() < 0.02, "{age}");
+        assert_eq!(process_age(&fp.dir, 999), None);
     }
 }

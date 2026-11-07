@@ -54,6 +54,8 @@ interfaces = ["bpfrag0"]
 [detect]
 linger_secs = 6
 dwell_secs = 3
+# the fake game starts its match the moment it launches
+launch_secs = 0
 EOT
 ip netns add bpfrag-srv
 ip link add bpfrag0 type veth peer name bpfrag1

@@ -41,7 +41,9 @@ and counts where its packets arrive. Traffic from outside in two of three
 one-second windows, and more of it than over loopback, starts the match
 (usually two seconds in); a game checking in with servers from its menu
 sends some too (Deadlock pings Steam's relays for a second or two as it
-starts, while its menu runs over loopback). Some games talk to a server of their own in
+starts, while its menu runs over loopback, or sometimes before the menu
+is up, so from 0.12.5 nothing in a game's first 20 seconds,
+`launch_secs`, starts a match). Some games talk to a server of their own in
 their menus, over loopback: Deadlock does, about 128 packets a second each
 way, which by rate alone looks like an INTENSE match. If after three
 seconds the game's traffic arrives on loopback and not from outside, no

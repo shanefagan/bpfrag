@@ -138,6 +138,10 @@ pub struct Detect {
     pub linger_secs: u64,
     /// Minimum seconds between tier changes.
     pub dwell_secs: u64,
+    /// A game launched less than this many seconds ago can't start a
+    /// match: Deadlock pings Steam's relays as it launches, sometimes
+    /// before its menu is up, and no game is in a match that soon.
+    pub launch_secs: u64,
     /// Use this tier for every match instead of following the tick rate.
     pub pin_tier: Option<Tier>,
     /// Games that talk TCP (MMOs, older games): "off", or "observe" to log
@@ -169,6 +173,7 @@ impl Default for Detect {
             max_avg_packet: 1100,
             linger_secs: 15,
             dwell_secs: 5,
+            launch_secs: 20,
             pin_tier: None,
             tcp: TcpMode::Off,
         }

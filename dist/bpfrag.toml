@@ -19,6 +19,7 @@
 # intense_pps = 140
 # margin = 15
 # linger_secs = 15       # quiet time before the match is over
+# launch_secs = 20       # no match in a game's first seconds (launch pings)
 # pin_tier = "competitive"   # ignore the tick rate, always use this tier
 # Games that talk TCP (World of Warcraft, older games) aren't detected as
 # matches. "observe" logs what their traffic looks like (rates, message

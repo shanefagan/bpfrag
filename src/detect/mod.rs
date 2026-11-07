@@ -360,6 +360,10 @@ pub trait ProcessLookup {
     fn verdict(&mut self, tgid: u32) -> (Verdict, String);
     /// Does the process still exist?
     fn alive(&mut self, tgid: u32) -> bool;
+    /// Seconds since the process started, if known.
+    fn age_secs(&mut self, _tgid: u32) -> Option<f64> {
+        None
+    }
 }
 
 /// Edges of the hysteresis bands, in smoothed pkt/s: a tier is entered at
@@ -831,6 +835,16 @@ impl Detector {
         if !go {
             return Vec::new();
         }
+        // Deadlock pings a few of Steam's relays for a few seconds as it
+        // launches, sometimes before its menu server is up, so there's
+        // no loopback to outweigh them (a 10-second "match" at 11:18 on
+        // 2026-11-06). No game is in a match seconds after starting.
+        if procs
+            .age_secs(tgid)
+            .is_some_and(|a| a < self.cfg.launch_secs as f64)
+        {
+            return Vec::new();
+        }
         let w = self.watched.take().expect("watched");
         // Traffic from outside began with this run of windows; a game the
         // meter can't see began when its steady traffic did.
@@ -1020,6 +1034,9 @@ mod tests {
         games: Vec<u32>,
         excluded: Vec<u32>,
         dead: Vec<u32>,
+        /// When each process started, in the simulation's seconds.
+        started: HashMap<u32, f64>,
+        now: f64,
     }
 
     impl ProcessLookup for FakeProcs {
@@ -1034,6 +1051,9 @@ mod tests {
         }
         fn alive(&mut self, tgid: u32) -> bool {
             !self.dead.contains(&tgid)
+        }
+        fn age_secs(&mut self, tgid: u32) -> Option<f64> {
+            self.started.get(&tgid).map(|s| self.now - s)
         }
     }
 
@@ -1059,6 +1079,8 @@ mod tests {
                     games: games.to_vec(),
                     excluded: vec![],
                     dead: vec![],
+                    started: HashMap::new(),
+                    now: 0.0,
                 },
                 arrivals: Arrivals::default(),
                 others: 0.0,
@@ -1085,6 +1107,7 @@ mod tests {
                 c.rx_bytes += rx * size;
             }
             self.now += 1.0;
+            self.procs.now = self.now;
             let samples: Vec<Sample> = self.counters.values().copied().collect();
             if self.det.wants_paths() {
                 self.det.paths(self.arrivals);
@@ -1282,6 +1305,29 @@ mod tests {
         a.extend(sim.run(2, &[(5, 164, 220, 120)]));
         a.extend(sim.run(10, &[(5, 64, 130, 300)]));
         assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
+    }
+
+    #[test]
+    fn relay_pings_as_a_game_launches_arent_a_match() {
+        // Deadlock, 2026-11-06 11:18: just launched, it pinged Steam's
+        // relays for a few seconds before its menu server was up
+        let mut sim = Sim::with_paths(&[5]);
+        sim.procs.started.insert(5, 0.0);
+        sim.arrivals = Arrivals {
+            outside_pps: 13.0,
+            local_pps: 0.0,
+        };
+        let a = sim.run(6, &[(5, 12, 13, 120)]);
+        assert!(starts(&a).is_empty(), "{a:?}");
+        // then the menu, over loopback
+        sim.arrivals = local(128.0);
+        let a = sim.run(20, &[(5, 128, 128, 200)]);
+        assert!(starts(&a).is_empty(), "{a:?}");
+        // a real match, minutes later: starts as usual
+        sim.run(60, &[(5, 128, 128, 200)]);
+        sim.arrivals = outside(64.0);
+        let a = sim.run(3, &[(5, 64, 140, 150)]);
+        assert_eq!(starts(&a).len(), 1, "{a:?}");
     }
 
     #[test]
