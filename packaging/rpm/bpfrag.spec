@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.12.4
+Version:        0.12.5
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Sat Nov 07 2026 Shane Fagan <mail@shanefagan.com> - 0.12.5-1
+- Nothing in a game's first 20 seconds starts a match (launch_secs): Deadlock sometimes pings Steam's relays as it launches before its menu is up.
+
 * Fri Nov 06 2026 Shane Fagan <mail@shanefagan.com> - 0.12.4-1
 - A match's tier leaves out relay pings, which moved two 64-tick Deadlock matches to INTENSE; match health counts lost connections (nothing from the server for 3 s or more while the game kept sending), which the gap figures couldn't show.
 
