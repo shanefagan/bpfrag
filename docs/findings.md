@@ -24,7 +24,7 @@ Deadlock, with some Trackmania.
   opened during an "on" match keep busy-polling after it, until they
   close, so an "off" match straight after an "on" one isn't fully off.
 - **Socket buffers:** the game's own sockets never dropped a packet,
-  with or without bigger buffers. The machine-wide count (about one
+  with or without bigger buffers (9 matches, 2026-11-02 and -07). The machine-wide count (about one
   drop a second) belongs to something else and didn't change either way.
 - **DSCP, bulk demotion, Wi-Fi power save:** not measured yet. On a
   wired line with no queue (as here), there's nothing for them to do.
@@ -91,7 +91,7 @@ conditions, the number of matches on each side, and the medians.
 |---|---|---|---|---|---|---|---|
 | 2026-11-02 | CachyOS, wired (`eno1`), bpfrag 0.9.2 tuning, Deadlock, ktorrent seeding and downloading throughout (marked LE) | NIC coalescing on (0–10 µs) / off (NIC default) | 5 / 5 | 32 / 31 ms | 1016 / 573 ms | 2 / 1 | No difference in the gaps (1 ms resolution can't show a microsecond effect, and every stall and long gap was loading or the end screen). Busy polling did far less with coalescing on: 31–37 busy-polled packets a second against 114–192, no overlap (permutation p = 0.047 on medians) |
 | 2026-11-03 | CachyOS, wired (`eno1`), bpfrag 0.11.1 tuning, Deadlock, coalescing at 10 µs in both arms, ktorrent seeding lightly (marked LE) | busy polling on (`busy_poll`/`busy_read` 25–50) / off | 3 / 2 | 18 / 17.5 ms | 41 / 38 ms | 0 / 0 | No difference in the gaps (1 ms resolution can't show it). Busy polling was active when on: 21–30 busy-polled packets a second, machine-wide, against 4 and then 0 when off |
-| 2026-11-06 | CachyOS, wired (`eno1`), bpfrag 0.12.2 tuning, Deadlock, from timelines | busy polling on / off | 4 / 3 | 17.5 / 18 ms | over 63 / over 63 ms (relay changes) | 0 / 0 | No difference. With 2026-11-03: 7 on, 5 off, the same gaps either way |
+| 2026-11-06 | CachyOS, wired (`eno1`), bpfrag 0.12.2 tuning, Deadlock, coalescing not recorded | busy polling on / off | 4 / 3 | 18 / 18 ms | 80 / 70 ms (relay changes) | 0 / 0 | No difference. Busy polling ran when on (90,000–300,000 busy-polled packets a match against 50–100 off). With 2026-11-03: 7 on, 5 off, the same gaps either way |
 
 ## Open questions
 
@@ -126,8 +126,9 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
   the game sent for ten seconds with nothing back, went to its menu for
   five, and came back through a new relay 20 seconds after it stopped
   hearing the server. The same happened at 17:12 on 2026-11-04. The
-  health line showed only two 64 ms gaps (the old flow never came back,
-  so its gap never ended); 0.12.4 counts such stretches. Both times, about
+  health line showed two stalls, the longest 2 seconds, as the new flow
+  started; the 20 seconds didn't show (the old flow never came back, so
+  its gap never ended). 0.12.4 counts such stretches. Both times, about
   two minutes after reconnecting, the game pinged a handful of relays
   for half a minute, sending 80 packets a second instead of 64, and the
   tier went to INTENSE for the rest of the match; 0.12.4 judges the tier
@@ -135,8 +136,11 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
   ended early) was detected and ended cleanly. Trackmania's stalls were
   all map loads.
 - **2026-11-06** (0.12.2, three Deadlock matches, each from a fresh
-  launch): no false start from the relay pings, so 0.12.2's start rule
-  held. Clean play (99% 17–18 ms, no stalls). Five relay changes: three
+  launch): no false start from the relay pings in these three. But an
+  earlier launch, at 11:18, was a 10-second "match": the game pinged
+  relays before its menu server was up, so there was no loopback for them
+  to outweigh. From 0.12.5 nothing in a game's first 20 seconds starts a
+  match. Clean play (99% 17–18 ms, no stalls). Five relay changes: three
   cost one gap over 63 ms, two cost nothing. From 0.12.3 the timeline
   gives such a gap's exact length.
 - **2026-11-05** (0.12.2, two Deadlock matches, 41 and 52 min): clean
