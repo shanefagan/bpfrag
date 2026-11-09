@@ -507,7 +507,9 @@ EOT
   grep -q "member=MatchStarted" $W/mon.log && ok "MatchStarted signal" || bad "no MatchStarted"
   grep -A4 "member=TierChanged" $W/mon.log | grep -q 'string "intense"' && ok "TierChanged to intense" || bad "no TierChanged"
   grep -A4 "member=MatchEnded" $W/mon.log | grep -q 'string "game exited"' && ok "MatchEnded says the game exited" || bad "MatchEnded: $(grep -A8 member=MatchEnded $W/mon.log)"
-  grep -A60 "member=MatchEnded" $W/mon.log | grep -q 'string "gap_p50_ms"' && ok "MatchEnded carries the match health" || bad "no health in MatchEnded"
+  # the whole signal, up to the next one: the health dict's keys come in
+  # any order, and there are more of them than a fixed number of lines
+  awk '/member=MatchEnded/{on=1; next} on && /^signal /{on=0} on' $W/mon.log | grep -q 'string "gap_p50_ms"' && ok "MatchEnded carries the match health" || bad "no health in MatchEnded"
   grep -q "member=PropertiesChanged" $W/mon.log && ok "PropertiesChanged signals" || bad "no PropertiesChanged"
   [ "$(asuser get-property $OBJ $IFC State 2>&1)" = 's "idle"' ] && ok "State=idle after the match" || bad "State after: $(asuser get-property $OBJ $IFC State 2>&1)"
   grep -A1 "member=StateChanged" $W/mon.log | grep -q 'string "match"' && grep -A30 "member=StateChanged" $W/mon.log | grep -q 'string "at_ms"' && ok "StateChanged to match, with at_ms" || bad "StateChanged match: $(grep -A20 member=StateChanged $W/mon.log | head -40)"
