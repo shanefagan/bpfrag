@@ -107,6 +107,7 @@ report, and the dict is empty when bpfrag stopped:
 | `gap_p50_ms`, `gap_p99_ms` | u | half, and 99%, of the gaps between them were at most this long; 64 means over 63 ms |
 | `gap_max_ms` | d | the longest gap |
 | `stalls` | t | times the game's traffic went quiet for 100 ms to 2 s mid-match and came back (lobbies and loading aren't counted) |
+| `send_longest_ms`, `send_stalls` | d, t | the game's own sending over play, timed as it sends: its longest gap and its stalls (0.13.0). A stall in `stalls` with none here was the network or the server |
 | `jitter_us` | d | how much each gap between updates differed from the one before, on average, in microseconds, over play (0.13.0; absent before the first) |
 | `socket_drops` | t | UDP receive buffer overflows, anywhere on the machine |
 | `game_socket_drops` | t | of those, on the game's own sockets |

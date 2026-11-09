@@ -697,6 +697,7 @@ impl<'a> Tuner<'a> {
             return;
         };
         let ports = maps::read_port_rx(&self.skel);
+        let sends = maps::read_port_tx(&self.skel);
         let reading = maps::next_reading(&mut self.skel);
         if self.health.settle_due() {
             // a minute in: the gap figures cover play from here
@@ -709,6 +710,7 @@ impl<'a> Tuner<'a> {
             crate::health::Game {
                 tcp_rx: game.map(|x| x.tcp_rx_bytes),
                 udp_tx: game.map(|x| x.tx_pkts),
+                send: send_reading(&sends, reading),
             },
         );
         if let Some(x) = samples.iter().find(|x| x.tgid == s.tgid) {
@@ -733,6 +735,7 @@ impl<'a> Tuner<'a> {
                 server: self.health.server(),
                 peers: self.health.active_peers(),
                 reading: Some(reading),
+                send: send_reading(&sends, reading),
             };
             if let Err(e) = t.row(&row) {
                 warn!("Capture: can't write {}: {e}", t.path().display());
@@ -1596,6 +1599,22 @@ fn profile_is_empty(p: &Profile) -> bool {
 /// Tier names on the bus are lower case, like Waybar's `class`.
 fn tier_name(t: Tier) -> String {
     t.name().to_lowercase()
+}
+
+/// The game's sending as `port_tx` has it: stalls so far over every port,
+/// and the longest gap in `reading` on any. None if it hasn't sent.
+fn send_reading(sends: &[(u16, bpf_intf::port_tx)], reading: u32) -> Option<(u64, u64)> {
+    if sends.is_empty() {
+        return None;
+    }
+    let stalls = sends.iter().map(|(_, t)| u64::from(t.stalls)).sum();
+    let max = sends
+        .iter()
+        .filter(|(_, t)| t.reading == reading)
+        .map(|(_, t)| t.reading_max_ns)
+        .max()
+        .unwrap_or(0);
+    Some((stalls, max))
 }
 
 #[cfg(test)]

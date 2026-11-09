@@ -210,6 +210,10 @@ pub fn health_dict(h: Option<&Health>) -> PropMap {
             put(&mut m, "jitter_us", Box::new(j));
         }
     }
+    if let Some(t) = &h.send {
+        put(&mut m, "send_longest_ms", Box::new(t.longest_ms));
+        put(&mut m, "send_stalls", Box::new(t.stalls));
+    }
     put(&mut m, "socket_drops", Box::new(h.socket_drops));
     if let Some(d) = h.game_socket_drops {
         put(&mut m, "game_socket_drops", Box::new(d));
@@ -974,6 +978,7 @@ mod tests {
         assert_eq!(d["gap_max_ms"].0.as_f64(), Some(84.5));
         assert_eq!(d["stalls"].0.as_u64(), Some(2));
         assert_eq!(d["jitter_us"].0.as_f64(), Some(210.4));
+        assert!(!d.contains_key("send_stalls"), "not measured, not there");
         assert_eq!(d["nic_drops"].0.as_u64(), Some(3));
         assert!(d.contains_key("game_socket_drops"));
         // Not about the game's connection, so not on the bus.

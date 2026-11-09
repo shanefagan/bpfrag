@@ -24,6 +24,8 @@ show what reaches the machine, not what the game does with it.
 | 99% ≤N ms | the gap 99% of updates beat, while the game sends at its usual rate | jitter anywhere on the path: Wi-Fi, queues, the internet |
 | longest N ms | the longest gap counted (pauses of 2 s or more aren't) | one-off hiccups, Wi-Fi power save |
 | stalls | the flow went quiet for 100 ms to 2 s, then came back at game rate | what a player feels as rubber-banding |
+| jitter N µs | how much each gap at game rate differed from the one before, on average, to the microsecond (0.13.0) | the path and the server mostly; settings on this machine by microseconds |
+| the game's own sending | its longest gap between sends and its stalls over play, timed as it calls send (0.13.0) | the game or this machine: a freeze, a hitch. A stall coming in with none going out was the network or the server |
 | socket buffer drops | a UDP receive buffer overflowed (`RcvbufErrors`), anywhere on the machine; "(N the game's)" is how many were the game's own sockets | socket buffers, a game that stopped reading |
 | backlog drops | per-CPU input queue overflowed | `netdev_max_backlog` (RPS or virtual devices only) |
 | NIC drops | the NIC's receive ring overflowed | coalescing, ring size, very high rates |
@@ -246,6 +248,7 @@ bpfrag version, the game and the experiment arm, then a row a second:
 | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps that second on the ports carrying the match; 64 is over 63 ms, except that from 0.12.3 a `gap_max_ms` over 63 ms is the gap's exact length |
 | `stalls` | stalls that finished that second |
 | `jitter_us` | how much each gap at game rate differed from the one before, on average, in µs (0.13.0) |
+| `send_gap_max_ms`, `send_stalls` | the game's own sending that second: its longest gap between sends and the stalls (100 ms to 2 s) that ended in it (0.13.0) |
 | `events` | match start and end, tier changes, server changes |
 
 There are no addresses in it, so it can be attached to a "Share match

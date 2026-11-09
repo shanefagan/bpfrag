@@ -672,7 +672,7 @@ it.
 | M1 | Busy-polled packets (`BusyPollRxPackets`) during the match, in the health line. Done: "busy-polled packets: N" | 1 |
 | M2 | The game's socket buffer sizes (`rb`, via sock_diag as `ss -m` does) | 2 |
 | M3 | Round-trip time to the gateway and a public anycast address, about once a second during a match. Arrival gaps measure jitter, not delay: a queue holding a steady 80 ms still delivers a steady 64 Hz stream, so only round-trip time shows it. Game servers and relays may not answer pings, which is why the gateway and a public address are the dependable targets; the server's own address needs M7 | 8, 10, 12, 18 |
-| M4 | Gaps between the game's outgoing packets (the egress marker sees them) to tell a game or host hiccup from a network one; on a server, a tick-loop hitch shows as every player's outgoing stream pausing at once | all, 23, 24 |
+| M4 | Gaps between the game's outgoing packets to tell a game or host hiccup from a network one; on a server, a tick-loop hitch shows as every player's outgoing stream pausing at once. Done in 0.13.0 for the client: timed at send, in the health line and the timeline | all, 23, 24 |
 | M5 | Timestamps of the stalls in each match, to line them up with tier changes, scans and other events. Done: the match timeline (`[capture] timeline = true`) has stalls, tier and events per second | 4, 7 |
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
 | M7 | The game's peer address (or its network) per match. Partly done: the server is followed and named by a letter per address within a match ("server A:27031"), without the address itself; comparing servers across matches would need a stable name for one | 17, 22 |

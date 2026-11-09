@@ -206,6 +206,17 @@ pub fn read_port_rx(skel: &BpfSkel) -> Vec<(u16, bpf_intf::port_rx)> {
         .collect()
 }
 
+/// The game's own sending per local port (`port_tx`).
+pub fn read_port_tx(skel: &BpfSkel) -> Vec<(u16, bpf_intf::port_tx)> {
+    let map = &skel.maps.port_tx;
+    map.keys()
+        .filter_map(|key| {
+            let v = map.lookup(&key, MapFlags::ANY).ok().flatten()?;
+            Some((from_bytes::<u32>(&key) as u16, from_bytes(&v)))
+        })
+        .collect()
+}
+
 /// Start the next reading of the arrival meter; returns the one just
 /// finished: a game port's `reading_max_ns` is that reading's longest gap
 /// if its `reading` is this number, and none otherwise.
@@ -221,7 +232,11 @@ pub fn next_reading(skel: &mut BpfSkel) -> u32 {
 /// Forget all arrival statistics, per port and per peer (between
 /// matches).
 pub fn clear_port_rx(skel: &BpfSkel) {
-    for map in [&skel.maps.port_rx, &skel.maps.game_peers] {
+    for map in [
+        &skel.maps.port_rx,
+        &skel.maps.port_tx,
+        &skel.maps.game_peers,
+    ] {
         let keys: Vec<Vec<u8>> = map.keys().collect();
         for k in keys {
             let _ = map.delete(&k);

@@ -93,6 +93,23 @@ struct port_rx {
 	__u32 hist[GAP_BUCKETS];
 };
 
+/*
+ * The game's own sending on one of its ports, timed as it calls send:
+ * updates (sends within GAP_BURST_US of the first are one), the longest
+ * gap overall and in the current reading, and gaps of GAP_STALL_MS up to
+ * GAP_IDLE_MS. A stall here is the game itself going quiet (a freeze,
+ * loading), not the network.
+ */
+struct port_tx {
+	__u64 pkts;
+	__u64 updates;
+	__u64 last_ns;
+	__u64 max_gap_ns;
+	__u64 reading_max_ns;
+	__u32 reading;		/* the reading reading_max_ns is for (rx_reading) */
+	__u32 stalls;
+};
+
 /* An interface the DSCP marker or the arrival meter is attached to. */
 struct mark_iface {
 	__u32 l2_len;		/* 14 for Ethernet/Wi-Fi/loopback, 0 for L3 tunnels */

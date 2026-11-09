@@ -122,6 +122,14 @@ struct {
 	__type(value, struct port_rx);
 } port_rx SEC(".maps");
 
+/* the game's own sending per local port, timed at send */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, MAX_PORTS);
+	__type(key, __u32);
+	__type(value, struct port_tx);
+} port_tx SEC(".maps");
+
 /* processes tagged BPFRAG_OBSERVE=1: their TCP is counted at any time */
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
@@ -218,6 +226,45 @@ static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short fami
 	bpf_map_update_elem(&bulk_flows, &k, &v, BPF_ANY);
 }
 
+/* The game sending on `port`: time it as the arrival meter times what it
+ * receives, without the stall-and-resume bookkeeping (the game's own
+ * sending has no keepalive lobby to tell apart). */
+static __always_inline void record_departure(__u32 port)
+{
+	struct port_tx *pt = bpf_map_lookup_elem(&port_tx, &port);
+	__u64 now = bpf_ktime_get_ns(), last, gap;
+
+	if (!pt) {
+		struct port_tx zero = {};
+
+		bpf_map_update_elem(&port_tx, &port, &zero, BPF_NOEXIST);
+		pt = bpf_map_lookup_elem(&port_tx, &port);
+		if (!pt)
+			return;
+	}
+	pt->pkts++;
+	last = pt->last_ns;
+	if (last && now >= last && now - last < (__u64)GAP_BURST_US * 1000)
+		return;
+	pt->updates++;
+	pt->last_ns = now;
+	if (!last || now <= last)
+		return;
+	gap = now - last;
+	if (gap >= (__u64)GAP_IDLE_MS * 1000000)
+		return; /* paused: a menu, a long load */
+	if (gap >= (__u64)GAP_STALL_MS * 1000000)
+		pt->stalls++;
+	if (gap > pt->max_gap_ns)
+		pt->max_gap_ns = gap;
+	if (pt->reading != rx_reading) {
+		pt->reading = rx_reading;
+		pt->reading_max_ns = 0;
+	}
+	if (gap > pt->reading_max_ns)
+		pt->reading_max_ns = gap;
+}
+
 static __always_inline void account(struct sock *sk, long ret, bool tx)
 {
 	struct proc_stats *st;
@@ -288,13 +335,15 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	st->tx_pkts++;
 	st->tx_bytes += ret;
 
-	/* learn the local port of a game socket so tc can mark it */
+	/* learn the local port of a game socket so tc can mark it, and time
+	 * the game's sending on it */
 	if (bpf_map_lookup_elem(&game_tgids, &tgid)) {
 		__u32 port = BPF_CORE_READ(sk, __sk_common.skc_num);
 		struct game_port *cur;
 
 		if (!port)
 			return;
+		record_departure(port);
 		cur = bpf_map_lookup_elem(&game_ports, &port);
 		if (cur && cur->tgid == tgid)
 			return; /* already known: a lookup is far cheaper than an update */

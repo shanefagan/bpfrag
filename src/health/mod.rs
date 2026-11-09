@@ -189,6 +189,13 @@ pub struct GapSummary {
     pub mean_gap_us: Option<f64>,
 }
 
+/// The game's own sending over play.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SendSummary {
+    pub longest_ms: f64,
+    pub stalls: u64,
+}
+
 /// "≤16 ms", or "over 63 ms" for the histogram's last bucket.
 fn at_most(ms: u32) -> String {
     if ms as usize >= BUCKETS {
@@ -220,6 +227,11 @@ impl GapSummary {
 pub struct Health {
     /// None if the meter couldn't attach (no tcx) or nothing arrived yet.
     pub gaps: Option<GapSummary>,
+    /// The game's own sending over play, timed at send (0.13.0): its
+    /// longest gap and its stalls. A stall here is the game going quiet
+    /// itself; one in `gaps` with none here is the network or the server.
+    #[serde(default)]
+    pub send: Option<SendSummary>,
     /// UDP socket receive buffers overflowed, anywhere on the machine.
     pub socket_drops: u64,
     /// Of those, drops on the game's own sockets; None if they couldn't
@@ -305,7 +317,16 @@ impl Health {
             Some(g) => format!("packet gaps {}", g.describe()),
             None => "packet gaps not measured".into(),
         };
-        let mut s = format!("{gaps}; {}", self.drops_text());
+        let mut s = gaps;
+        if let Some(t) = &self.send {
+            s += &format!(
+                "; the game's own sending: longest gap {:.0} ms, {} stall{}",
+                t.longest_ms,
+                t.stalls,
+                if t.stalls == 1 { "" } else { "s" }
+            );
+        }
+        s += &format!("; {}", self.drops_text());
         if self.squeezed > 0 {
             s += &format!("; receive processing ran out of budget {}x", self.squeezed);
         }
@@ -430,6 +451,9 @@ struct Reading {
     stalls: u64,
     max_ns: u64,
     loading: bool,
+    /// The game's own sending: stalls that ended in it, its longest gap.
+    send_stalls: u64,
+    send_max_ns: u64,
 }
 
 /// Which of the meter's readings the gap figures come from: play, not
@@ -463,6 +487,10 @@ struct Play {
     /// UDP packets the game sent in each reading of play: what its usual
     /// sending is.
     sent: Vec<u64>,
+    /// The game's send stalls so far, at the previous reading, and its
+    /// sending over the whole match (for one too short for play).
+    prev_send_stalls: Option<u64>,
+    send_whole: Option<SendSummary>,
     /// Readings in a row sending with nothing back, and at the usual rate.
     unanswered: u32,
     usual_run: u32,
@@ -489,6 +517,9 @@ struct Play {
 pub struct Game {
     pub tcp_rx: Option<u64>,
     pub udp_tx: Option<u64>,
+    /// Its sending as timed at send: stalls so far, and this reading's
+    /// longest gap (ns).
+    pub send: Option<(u64, u64)>,
 }
 
 /// The middle value (the upper one of an even count); None if empty.
@@ -514,11 +545,19 @@ impl Play {
     }
 
     fn settle(&mut self, ports: &[(u16, bpf_intf::port_rx)]) {
-        let (started, prev_tcp, prev_tx) = (self.started, self.prev_tcp, self.prev_tx);
+        let (started, prev_tcp, prev_tx, prev_send_stalls, send_whole) = (
+            self.started,
+            self.prev_tcp,
+            self.prev_tx,
+            self.prev_send_stalls,
+            self.send_whole,
+        );
         *self = Play {
             started,
             prev_tcp,
             prev_tx,
+            prev_send_stalls,
+            send_whole,
             base: Some(ports.to_vec()),
             prev: Some(ports.to_vec()),
             ..Play::default()
@@ -559,6 +598,16 @@ impl Play {
             self.prev_tx = Some(now);
             d
         });
+        let (send_stalls, send_max_ns) = game.send.map_or((0, 0), |(stalls, max_ns)| {
+            let d = stalls.saturating_sub(self.prev_send_stalls.unwrap_or(stalls));
+            self.prev_send_stalls = Some(stalls);
+            (d, max_ns)
+        });
+        if game.send.is_some() {
+            let w = self.send_whole.get_or_insert_with(SendSummary::default);
+            w.stalls += send_stalls;
+            w.longest_ms = w.longest_ms.max(send_max_ns as f64 / 1e6);
+        }
         let Some(prev) = self.prev.replace(ports.to_vec()) else {
             return Gaps::match_flows(ports);
         };
@@ -619,6 +668,8 @@ impl Play {
         let busiest = delta.iter().map(|(_, r)| r.updates).max().unwrap_or(0);
         let mut rec = Reading {
             loading,
+            send_stalls,
+            send_max_ns,
             ..Reading::default()
         };
         for ((_, d), (_, r)) in delta.iter().zip(ports) {
@@ -653,6 +704,20 @@ impl Play {
             }
         }
         self.figures(ports)
+    }
+
+    /// The game's own sending over the same readings as the stalls and
+    /// longest gap: play, loading left out; before there's play, the whole
+    /// match, as for the gaps.
+    fn send(&self) -> Option<SendSummary> {
+        let Some(upto) = self.upto else {
+            return self.send_whole;
+        };
+        let play = self.readings[..=upto].iter().filter(|r| !r.loading);
+        Some(SendSummary {
+            stalls: play.clone().map(|r| r.send_stalls).sum(),
+            longest_ms: play.map(|r| r.send_max_ns).max().unwrap_or(0) as f64 / 1e6,
+        })
     }
 
     fn count(&mut self, d: Option<Gaps>) {
@@ -833,6 +898,7 @@ impl Tracker {
         }
         self.latest = Some(Health {
             gaps: main.and_then(|g| g.summary()),
+            send: self.play.send(),
             socket_drops: sys.udp_rcvbuf,
             game_socket_drops: self.game.as_ref().and_then(GameSockets::drops),
             backlog_drops: sys.backlog_drops,
@@ -959,6 +1025,10 @@ mod tests {
         tcp: u64,
         /// UDP packets the game has sent.
         tx: u64,
+        /// Its send stalls so far, and the next reading's longest send gap
+        /// if not the usual 16 ms.
+        send_stalls: u64,
+        send_max_ns: std::cell::Cell<Option<u64>>,
     }
 
     impl Port {
@@ -968,6 +1038,8 @@ mod tests {
                 reading: 0,
                 tcp: 0,
                 tx: 0,
+                send_stalls: 0,
+                send_max_ns: std::cell::Cell::new(None),
             }
         }
 
@@ -975,6 +1047,11 @@ mod tests {
             Game {
                 tcp_rx: Some(self.tcp),
                 udp_tx: Some(self.tx),
+                // the game's sending this reading: stalls so far, longest
+                send: Some((
+                    self.send_stalls,
+                    self.send_max_ns.take().unwrap_or(16_000_000),
+                )),
             }
         }
 
@@ -1149,6 +1226,31 @@ mod tests {
         assert!((j - 200.0).abs() < 1.0, "{j}");
         let m = g.mean_gap_us().unwrap();
         assert!((m - 11_000.0).abs() < 1.0, "{m}");
+    }
+
+    #[test]
+    fn the_games_own_sending_over_play() {
+        let (mut p, mut port) = racing();
+        // the game froze for 400 ms mid-race: its own sending stalled, and
+        // so did what came back
+        port.send_stalls += 1;
+        port.send_max_ns.set(Some(400_000_000));
+        port.stall(&mut p, 420);
+        for _ in 0..30 {
+            port.second(&mut p, 90, 11, 1);
+        }
+        // a load: the game stops sending, a long gap that isn't play
+        port.tcp += 30_000_000;
+        port.send_stalls += 1;
+        port.send_max_ns.set(Some(1_500_000_000));
+        port.silent(&mut p);
+        for _ in 0..30 {
+            port.second(&mut p, 90, 11, 1);
+        }
+        port.silent(&mut p);
+        let s = p.send().unwrap();
+        assert_eq!(s.stalls, 1, "{s:?}");
+        assert_eq!(s.longest_ms, 400.0, "{s:?}");
     }
 
     #[test]
@@ -1403,6 +1505,17 @@ mod tests {
         assert!(
             j.summary()
                 .contains("1 stall (100 ms+), jitter 213 µs; no drops"),
+            "{}",
+            j.summary()
+        );
+        j.send = Some(SendSummary {
+            longest_ms: 17.4,
+            stalls: 0,
+        });
+        assert!(
+            j.summary().contains(
+                "jitter 213 µs; the game's own sending: longest gap 17 ms, 0 stalls; no drops"
+            ),
             "{}",
             j.summary()
         );
