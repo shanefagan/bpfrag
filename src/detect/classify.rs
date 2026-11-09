@@ -610,6 +610,72 @@ mod tests {
         Classifier::with_root(&Classify::default(), &fp.dir)
     }
 
+    /// Strings a hostile process might carry: multi-byte characters just
+    /// before ".exe" or "/steamapps/", separators, and noise.
+    fn hostile(r: &mut u64) -> String {
+        let mut next = || {
+            *r ^= *r << 13;
+            *r ^= *r >> 7;
+            *r ^= *r << 17;
+            *r
+        };
+        let bits = [
+            "ゼ",
+            "é",
+            "\u{202e}",
+            "\n",
+            "\t",
+            ")",
+            "(",
+            " ",
+            "/",
+            "\\",
+            ".exe",
+            ".EXE",
+            "x.exe",
+            "/steamapps/",
+            "/steamapps",
+            "steamapps/common/",
+            "Z:",
+            "=",
+            "\"",
+            "\u{0}",
+            "SteamAppId=",
+            "12",
+            "appmanifest_",
+            ".acf",
+            "A",
+        ];
+        (0..next() % 12)
+            .map(|_| bits[(next() % bits.len() as u64) as usize])
+            .collect()
+    }
+
+    #[test]
+    fn hostile_process_data_never_panics() {
+        let fp = FakeProc::new("hostile");
+        let mut r = 0x9e37_79b9_7f4a_7c15u64;
+        for pid in 1000..3000u32 {
+            let comm = hostile(&mut r).replace(['\n', '\u{0}'], "");
+            let exe = format!("/{}", hostile(&mut r)).replace('\u{0}', "");
+            let args: Vec<String> = (0..3).map(|_| hostile(&mut r)).collect();
+            let env = [format!("SteamAppId={}", hostile(&mut r)), hostile(&mut r)];
+            let argv: Vec<&str> = args.iter().map(String::as_str).collect();
+            let envv: Vec<&str> = env.iter().map(String::as_str).collect();
+            fp.add(pid, 1, &comm, &exe, &argv, &envv);
+            let c = classifier(&fp);
+            let _ = c.classify(pid);
+            if let Some(info) = c.read(pid) {
+                let name = info.display_name();
+                assert!(!name.chars().any(char::is_control), "{name:?}");
+                assert!(name.chars().count() <= NAME_MAX, "{name:?}");
+                let _ = info.list_names();
+            }
+            let _ = start_time(&fp.dir, pid);
+            let _ = process_age(&fp.dir, pid);
+        }
+    }
+
     #[test]
     fn steam_proton_game() {
         let fp = FakeProc::new("steam");
