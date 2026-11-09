@@ -201,6 +201,9 @@ kill $G; sleep 2
 H=$(grep "fakeshooter: packet gaps" $W/d6b.log); echo "  ($H)"
 echo "$H" | grep -q ", 2 stalls (100 ms+)" && ok "two hiccups, two stalls; the lobby isn't one" || bad "stalls: $H"
 echo "$H" | grep -Eq "longest (2[5-9][0-9]|3[0-9][0-9]|4[0-4][0-9]) ms" && ok "longest gap is the hiccup, not a keepalive" || bad "longest: $H"
+# the fake game pauses its own sending for each hiccup, and keeps a
+# keepalive a second in the lobby: the same two stalls going out
+echo "$H" | grep -Eq "the game's own sending: longest gap (2[5-9][0-9]|3[0-9][0-9]|4[0-4][0-9]) ms, 2 stalls" && ok "its own sending: the same two, the lobby isn't one" || bad "sending: $H"
 kill -INT $D; wait $D; D=
 same "after stall match"
 

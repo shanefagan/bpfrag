@@ -226,9 +226,24 @@ static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short fami
 	bpf_map_update_elem(&bulk_flows, &k, &v, BPF_ANY);
 }
 
-/* The game sending on `port`: time it as the arrival meter times what it
- * receives, without the stall-and-resume bookkeeping (the game's own
- * sending has no keepalive lobby to tell apart). */
+static __always_inline void count_send_gap(struct port_tx *pt, __u64 gap)
+{
+	if (gap >= (__u64)GAP_STALL_MS * 1000000)
+		pt->stalls++;
+	if (gap > pt->max_gap_ns)
+		pt->max_gap_ns = gap;
+	if (pt->reading != rx_reading) {
+		pt->reading = rx_reading;
+		pt->reading_max_ns = 0;
+	}
+	if (gap > pt->reading_max_ns)
+		pt->reading_max_ns = gap;
+}
+
+/* The game sending on `port`: timed as the arrival meter times what it
+ * receives, slow gaps held until GAP_RESUME fast ones say the game is
+ * back at its rate (a lobby sends a keepalive a second: none of those
+ * gaps is a stall). */
 static __always_inline void record_departure(__u32 port)
 {
 	struct port_tx *pt = bpf_map_lookup_elem(&port_tx, &port);
@@ -251,18 +266,24 @@ static __always_inline void record_departure(__u32 port)
 	if (!last || now <= last)
 		return;
 	gap = now - last;
-	if (gap >= (__u64)GAP_IDLE_MS * 1000000)
-		return; /* paused: a menu, a long load */
-	if (gap >= (__u64)GAP_STALL_MS * 1000000)
-		pt->stalls++;
-	if (gap > pt->max_gap_ns)
-		pt->max_gap_ns = gap;
-	if (pt->reading != rx_reading) {
-		pt->reading = rx_reading;
-		pt->reading_max_ns = 0;
+	if (gap >= (__u64)GAP_STALL_MS * 1000000) {
+		pt->held_ns += pt->resume_ns + gap;
+		pt->resume_ns = 0;
+		pt->resume_n = 0;
+		return;
 	}
-	if (gap > pt->reading_max_ns)
-		pt->reading_max_ns = gap;
+	if (!pt->held_ns) {
+		count_send_gap(pt, gap);
+		return;
+	}
+	pt->resume_ns += gap;
+	if (++pt->resume_n < GAP_RESUME)
+		return;
+	if (pt->held_ns < (__u64)GAP_IDLE_MS * 1000000)
+		count_send_gap(pt, pt->held_ns);
+	pt->held_ns = 0;
+	pt->resume_ns = 0;
+	pt->resume_n = 0;
 }
 
 static __always_inline void account(struct sock *sk, long ret, bool tx)
