@@ -26,7 +26,8 @@ TIERS = ["CASUAL", "COMPETITIVE", "INTENSE"]
 # short-iso journal, the default journal format ("Oct 28 10:02:38"), or the
 # daemon's own stderr ("10:02:38")
 STAMP = re.compile(
-    r"^(\d{4}-\d\d-\d\dT[\d:]+[+-]\d{4}|[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d"
+    r"^(\d{4}-\d\d-\d\dT[\d:]+(?:\.\d+)?(?:Z|[+-]\d\d:?\d\d)"
+    r"|[A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d"
     r"|\d\d:\d\d:\d\d(?:\.\d+)?)"
 )
 STARTED = re.compile(r"bpfrag (\S+) started( in dry-run mode)?")
@@ -121,8 +122,10 @@ def parse(lines, label):
             # blank when busy polling was off all match, or in older versions
             if p := BUSY.search(line):
                 cur["busy_polled"] = p.group(1)
-            # 0 when the server never changed; blank before 0.8.0
-            if vtuple(version) >= (0, 8):
+            # 0 when the server never changed; blank before 0.8.0. Without
+            # the "started" line (a journal slice), the rx queue (0.9.0)
+            # says it's recent enough.
+            if vtuple(version) >= (0, 8) or (not version and "arrives on" in line):
                 cur["server_changes"] = 0
             if c := SERVERS.search(line):
                 cur["server_changes"] = 1 if c.group(1) == "once" else int(c.group(1).split()[0])
