@@ -23,9 +23,12 @@ Deadlock, with some Trackmania.
   (7 on, 5 off). It runs when on (20–30 packets a second, machine-wide). Sockets
   opened during an "on" match keep busy-polling after it, until they
   close, so an "off" match straight after an "on" one isn't fully off.
-- **Socket buffers:** the game's own sockets never dropped a packet,
-  with or without bigger buffers (9 matches, 2026-11-02 and -07). The machine-wide count (about one
-  drop a second) belongs to something else and didn't change either way.
+- **Socket buffers:** the game's own sockets never dropped a packet in
+  play, with or without bigger buffers (15 matches, 2026-11-02 to -08).
+  The one time they did, 4 packets with the kernel's default buffers,
+  Trackmania was closing: it stopped reading its socket for two seconds
+  while the server kept sending. The machine-wide count (about one drop a
+  second) belongs to something else and didn't change either way.
 - **DSCP, bulk demotion, Wi-Fi power save:** not measured yet. On a
   wired line with no queue (as here), there's nothing for them to do.
 
@@ -121,6 +124,17 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-07 and -08** (0.12.5, Deadlock and Trackmania, socket
+  buffers on and off): Deadlock clean (99% 18 ms, no stalls). Trackmania
+  changed rooms up to nine times a session; around each change the client
+  stops sending while the old room's server trickles in, then the new map
+  arrives over TCP. Gaps there counted as stalls when the load hadn't yet
+  started by TCP's measure, and a single second at the race's gap in the
+  countdown ended a load early; twice a 16-second pause for a map load
+  ended the match, and the session went on as a new one ten seconds later.
+  0.12.6 tells loading from play by what the game does (sending, TCP,
+  sending with nothing back) and doesn't end a match on quiet while the
+  game is loading. Two hiccups while racing (185 and 101 ms) were real.
 - **2026-11-06 evening** (0.12.2, five Deadlock matches and two
   Trackmania sessions): the 19:42 match lost its server at 19 minutes:
   the game sent for ten seconds with nothing back, went to its menu for
