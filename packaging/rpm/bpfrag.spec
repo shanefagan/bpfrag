@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.13.0
+Version:        0.14.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.14.0-1
+- Hardening: process-supplied names made safe to log, no spreadsheet formulas in timelines, IPv6 prefixes redacted in reports, a packet fuzzer in the selftest (just fuzz), cargo-deny and a unit sandboxing gate in CI; the game's send stalls no longer count a lobby's keepalives; --check doesn't touch debugfs under lockdown.
+
 * Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.13.0-1
 - Jitter to the microsecond (how much each gap differs from the one before) and the game's own sending (its longest gap and stalls, timed at send) in the health line, the timeline, D-Bus and matches.py.
 
