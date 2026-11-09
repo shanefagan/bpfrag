@@ -235,6 +235,13 @@ fn redact_home(s: &str) -> String {
 /// A token is an address if it is (an address followed by) a `/prefix`:
 /// four dotted decimal octets, or hex groups joined by colons.
 fn redact_token(t: &str) -> String {
+    // An IPv6 prefix ends in "::" (2001:db8:1::), which the punctuation
+    // trim below would cut to a single colon and let through.
+    let dotless = t.trim_end_matches('.');
+    let v6 = dotless.split(['/', '%']).next().unwrap_or("");
+    if v6.ends_with("::") && v6 != "::" && is_ipv6_or_mac(v6) {
+        return format!("<addr>{}", &t[dotless.len()..]);
+    }
     // Leading/trailing dots and colons are punctuation, not address.
     let core = t.trim_end_matches(['.', ':']);
     let tail = &t[core.len()..];
@@ -290,6 +297,82 @@ fn is_ipv6_or_mac(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// xorshift64* for the property test below: reproducible by seed.
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        }
+        fn below(&mut self, n: u64) -> u64 {
+            self.next() % n
+        }
+    }
+
+    fn some_address(r: &mut Rng) -> String {
+        let h = |r: &mut Rng| format!("{:x}", r.below(0x10000));
+        match r.below(7) {
+            0 => format!(
+                "{}.{}.{}.{}",
+                1 + r.below(223),
+                r.below(256),
+                r.below(256),
+                1 + r.below(254)
+            ),
+            1 => format!(
+                "{}.{}.{}.{}:{}",
+                1 + r.below(223),
+                r.below(256),
+                r.below(256),
+                1 + r.below(254),
+                r.below(65536)
+            ),
+            2 => (0..8).map(|_| h(r)).collect::<Vec<_>>().join(":"),
+            3 => format!("2{:03x}:{}:{}::{}", r.below(0x1000), h(r), h(r), h(r)),
+            4 => format!("fe80::{}:{}%eno1", h(r), h(r)),
+            5 => format!("2{:03x}:{}:{}::", r.below(0x1000), h(r), h(r)),
+            _ => (0..6)
+                .map(|_| format!("{:02x}", r.below(256)))
+                .collect::<Vec<_>>()
+                .join(":"),
+        }
+    }
+
+    #[test]
+    fn no_address_survives_redaction() {
+        let seps = [
+            " ", ", ", "=", "\t", "(", ")", "[", "]", "/24 ", "/64\n", ". ", ": ", "\"", "'",
+            " via ", "\n",
+        ];
+        let mut r = Rng(0x5eed_0fb9_f7a6);
+        for round in 0..3000 {
+            let mut text = String::new();
+            let mut addrs = Vec::new();
+            for _ in 0..1 + r.below(6) {
+                text += seps[r.below(seps.len() as u64) as usize];
+                let a = some_address(&mut r);
+                text += &a;
+                addrs.push(a);
+                text += seps[r.below(seps.len() as u64) as usize];
+            }
+            let out = redact(&text, "myhost");
+            for a in &addrs {
+                // the address itself, without a port or zone after it
+                let core = a.split(['%']).next().unwrap();
+                let core = core
+                    .rsplit_once(':')
+                    .filter(|_| core.contains('.'))
+                    .map_or(core, |(ip, _)| ip);
+                assert!(
+                    !out.contains(core),
+                    "round {round}: {core} survived in {out:?} (from {text:?})"
+                );
+            }
+        }
+    }
 
     #[test]
     fn addresses_and_names_are_replaced() {
