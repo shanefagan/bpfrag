@@ -584,7 +584,8 @@ impl<'a> Tuner<'a> {
                 let ports = maps::read_port_rx(&self.skel);
                 let reading = maps::next_reading(&mut self.skel);
                 self.health.update(&ports, reading, Default::default());
-                let timeline = self.finish_timeline(&format!("match ended ({reason})"));
+                let timeline = self
+                    .finish_timeline(&format!("match ended ({reason})"), Some((ports, reading)));
                 let mut health = self.health.finish();
                 if let Some(h) = health.as_mut() {
                     h.bulk = self.bulk.moved();
@@ -723,13 +724,6 @@ impl<'a> Tuner<'a> {
                     t.event(format!("nothing from the server for {d:.0} s"));
                 }
             }
-        }
-        let peers: Vec<_> = maps::read_game_peers(&self.skel)
-            .into_iter()
-            .map(|(p, r)| (p, r.pkts))
-            .collect();
-        for e in self.health.servers(dt, &peers) {
-            self.log_server(&s.name, &e);
         }
         if let Some(t) = self.timeline.as_mut() {
             let row = health::timeline::Row {
@@ -1088,15 +1082,26 @@ impl<'a> Tuner<'a> {
 
     /// Close this match's timeline with a last row for `event`; its path
     /// if it was written.
-    fn finish_timeline(&mut self, event: &str) -> Option<PathBuf> {
+    /// The timeline's last row and the file. `last`: the meter's final
+    /// reading, if health just took it (its number gives each port's
+    /// longest gap in it); otherwise the ports are read here.
+    fn finish_timeline(
+        &mut self,
+        event: &str,
+        last: Option<(Vec<(u16, bpf_intf::port_rx)>, u32)>,
+    ) -> Option<PathBuf> {
         let mut t = self.timeline.take()?;
         t.event(event);
-        let ports = maps::read_port_rx(&self.skel);
+        let (ports, reading) = match last {
+            Some((p, r)) => (p, Some(r)),
+            None => (maps::read_port_rx(&self.skel), None),
+        };
         let row = health::timeline::Row {
             tier: "",
             ports: &ports,
             server: self.health.server(),
             peers: self.health.active_peers(),
+            reading,
             ..Default::default()
         };
         let path = t.path().to_path_buf();
@@ -1447,8 +1452,17 @@ impl<'a> Tuner<'a> {
                 self.last_paths = Some(p);
                 self.detector.paths(p);
             }
-            if self.detector.session().is_some() {
-                // last reading's: health reads its peers after the tick
+            if let Some(name) = self.detector.session().map(|s| s.name.clone()) {
+                // the game's peers this second, before the tick, so the
+                // window the detector judges the tier on gets its own
+                // relay traffic
+                let peers: Vec<_> = maps::read_game_peers(&self.skel)
+                    .into_iter()
+                    .map(|(p, r)| (p, r.pkts))
+                    .collect();
+                for e in self.health.servers(dt, &peers) {
+                    self.log_server(&name, &e);
+                }
                 self.detector.others(self.health.others_pps());
             }
             self.det_clock = (now.duration_since(t0).as_secs_f64(), now);
@@ -1487,7 +1501,7 @@ impl Drop for Tuner<'_> {
         let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
         let session = self.detector.take_session();
         if let Some(s) = &session {
-            if let Some(p) = self.finish_timeline("bpfrag stopped") {
+            if let Some(p) = self.finish_timeline("bpfrag stopped", None) {
                 info!("{}: timeline written to {}", s.name, p.display());
             }
         }
