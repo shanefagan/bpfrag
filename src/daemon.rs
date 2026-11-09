@@ -583,7 +583,7 @@ impl<'a> Tuner<'a> {
                 let secs = self.session_start.map_or(0, |t| t.elapsed().as_secs());
                 let ports = maps::read_port_rx(&self.skel);
                 let reading = maps::next_reading(&mut self.skel);
-                self.health.update(&ports, reading, None);
+                self.health.update(&ports, reading, Default::default());
                 let timeline = self.finish_timeline(&format!("match ended ({reason})"));
                 let mut health = self.health.finish();
                 if let Some(h) = health.as_mut() {
@@ -701,11 +701,15 @@ impl<'a> Tuner<'a> {
             // a minute in: the gap figures cover play from here
             self.health.settle(&ports);
         }
-        let game_tcp_rx = samples
-            .iter()
-            .find(|x| x.tgid == s.tgid)
-            .map(|x| x.tcp_rx_bytes);
-        self.health.update(&ports, reading, game_tcp_rx);
+        let game = samples.iter().find(|x| x.tgid == s.tgid);
+        self.health.update(
+            &ports,
+            reading,
+            crate::health::Game {
+                tcp_rx: game.map(|x| x.tcp_rx_bytes),
+                udp_tx: game.map(|x| x.tx_pkts),
+            },
+        );
         if let Some(x) = samples.iter().find(|x| x.tgid == s.tgid) {
             let outside = self.last_paths.map(|p| p.outside_pps);
             let udp = (x.tx_pkts, x.rx_pkts);

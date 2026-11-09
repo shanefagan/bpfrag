@@ -370,7 +370,15 @@ const LEARN: usize = 10;
 /// LOADING_MAX: a load comes in bursts, with seconds of under a megabyte
 /// between them (2026-11-04: 680 KB, and a stall, mid-load).
 const LOADING_BYTES: u64 = 1_000_000;
+/// A game sending under a quarter of its usual UDP a second is loading
+/// too: Trackmania stops sending a second or two before a new map's data
+/// arrives, while the old room's server still trickles in with its gaps
+/// (2026-11-07: a 124 ms "stall" before the load).
+const QUIET_SENDING: u64 = 4;
 const LOADING_HOLD: u32 = 3;
+/// Readings in a row of the game sending with nothing coming back that
+/// mean its server is gone (as in silence.rs).
+const SILENT_READINGS: u32 = 3;
 const LOADING_MAX: u32 = 60;
 
 type PortReadings = Vec<(u16, bpf_intf::port_rx)>;
@@ -408,8 +416,16 @@ struct Play {
     base: Option<PortReadings>,
     /// The previous reading, for each reading's own gaps.
     prev: Option<PortReadings>,
-    /// The game's own TCP received, at the previous reading.
+    /// The game's own TCP received, and UDP packets sent, at the previous
+    /// reading.
     prev_tcp: Option<u64>,
+    prev_tx: Option<u64>,
+    /// UDP packets the game sent in each reading of play: what its usual
+    /// sending is.
+    sent: Vec<u64>,
+    /// Readings in a row sending with nothing back, and at the usual rate.
+    unanswered: u32,
+    usual_run: u32,
     /// Readings the current load still lasts at least, and at most.
     loading_left: u32,
     loading_max: u32,
@@ -425,6 +441,14 @@ struct Play {
     /// are counted once later ones come.
     counted: Option<Gaps>,
     pending: VecDeque<Gaps>,
+}
+
+/// What the game itself did since the match started, for telling
+/// loading from play: its own TCP received (bytes) and UDP sent (packets).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Game {
+    pub tcp_rx: Option<u64>,
+    pub udp_tx: Option<u64>,
 }
 
 /// The middle value (the upper one of an even count); None if empty.
@@ -450,10 +474,11 @@ impl Play {
     }
 
     fn settle(&mut self, ports: &[(u16, bpf_intf::port_rx)]) {
-        let (started, prev_tcp) = (self.started, self.prev_tcp);
+        let (started, prev_tcp, prev_tx) = (self.started, self.prev_tcp, self.prev_tx);
         *self = Play {
             started,
             prev_tcp,
+            prev_tx,
             base: Some(ports.to_vec()),
             prev: Some(ports.to_vec()),
             ..Play::default()
@@ -476,25 +501,24 @@ impl Play {
 
     /// One reading: the meter's per-port statistics, which reading of the
     /// meter it was (`reading`, for each port's longest gap in it), and the
-    /// game's own TCP received so far. Returns the gap figures as they
-    /// stand.
+    /// game's own TCP received and UDP packets sent so far. Returns the gap
+    /// figures as they stand.
     fn update(
         &mut self,
         ports: &[(u16, bpf_intf::port_rx)],
         reading: u32,
-        game_tcp_rx: Option<u64>,
+        game: Game,
     ) -> Option<Gaps> {
-        let tcp = game_tcp_rx.map(|now| {
+        let tcp = game.tcp_rx.map(|now| {
             let d = now.saturating_sub(self.prev_tcp.unwrap_or(now));
             self.prev_tcp = Some(now);
             d
         });
-        let burst = tcp.is_some_and(|d| d >= LOADING_BYTES);
-        if burst {
-            self.loading_left = LOADING_HOLD + 1;
-            self.loading_max = LOADING_MAX + 1;
-        }
-
+        let sent = game.udp_tx.map(|now| {
+            let d = now.saturating_sub(self.prev_tx.unwrap_or(now));
+            self.prev_tx = Some(now);
+            d
+        });
         let Some(prev) = self.prev.replace(ports.to_vec()) else {
             return Gaps::match_flows(ports);
         };
@@ -503,12 +527,47 @@ impl Play {
         }
         let delta = since(ports, &prev);
         let gaps = Gaps::match_flows(&delta);
-        // Loading lasts its minimum, then until a reading at the usual
-        // rate, which is the last one.
-        let back = !burst
-            && gaps
-                .as_ref()
-                .is_some_and(|d| self.usual(d, d.quantile_ms(0.5)));
+        let learned = self.rates.len() >= LEARN;
+        let usual_now = gaps
+            .as_ref()
+            .is_some_and(|d| self.usual(d, d.quantile_ms(0.5)));
+
+        // What starts (or keeps up) a load:
+        // - the game's own TCP bringing in a megabyte or more, unless its
+        //   UDP carries on at the usual rate through it: Trackmania fetches
+        //   other players' skins and ghosts mid-race, and a hiccup then is
+        //   play;
+        // - the game sending under a quarter of its usual UDP;
+        // - the game sending with nothing coming back for SILENT_READINGS
+        //   in a row: a lost server, which health counts on its own
+        //   (silence.rs), and the handshake with the next one isn't play.
+        let sent_now = sent.unwrap_or(0);
+        let updates_now = gaps.as_ref().map_or(0, |d| d.updates);
+        self.unanswered = if sent_now > 0 && updates_now == 0 {
+            self.unanswered + 1
+        } else {
+            0
+        };
+        let quiet = learned
+            && self.sent.len() >= LEARN
+            && sent
+                .is_some_and(|d| d.saturating_mul(QUIET_SENDING) < median(&self.sent).unwrap_or(0));
+        let big_tcp = tcp.is_some_and(|d| d >= LOADING_BYTES) && !(learned && usual_now);
+        let burst = quiet || big_tcp || self.unanswered >= SILENT_READINGS;
+        if burst {
+            self.loading_left = LOADING_HOLD + 1;
+            self.loading_max = LOADING_MAX + 1;
+        }
+        // Loading lasts its minimum, then until two readings in a row at
+        // the usual rate, the second of which ends it: one can be a fluke
+        // (Trackmania's countdown, at 55 updates a second against 90 in a
+        // race, dipped to the usual gap for a second, 2026-11-08).
+        self.usual_run = if usual_now && !burst {
+            self.usual_run + 1
+        } else {
+            0
+        };
+        let back = self.usual_run >= 2;
         let loading = self.loading_max > 0;
         self.loading_left = self.loading_left.saturating_sub(1);
         self.loading_max = if self.loading_left == 0 && back {
@@ -536,6 +595,9 @@ impl Play {
             let interval = d.quantile_ms(0.5);
             let usual = !loading && self.usual(&d, interval);
             if d.updates > 0 && !loading {
+                if let Some(n) = sent {
+                    self.sent.push(n);
+                }
                 self.rates.push(d.updates);
                 if let Some(ms) = interval {
                     self.intervals.push(ms);
@@ -699,12 +761,7 @@ impl Tracker {
     /// Recompute from the meter's per-port statistics (`reading`: which of
     /// the meter's readings they are, see `maps::next_reading`), the game's
     /// own TCP received so far, and the counters.
-    pub fn update(
-        &mut self,
-        ports: &[(u16, bpf_intf::port_rx)],
-        reading: u32,
-        game_tcp_rx: Option<u64>,
-    ) {
+    pub fn update(&mut self, ports: &[(u16, bpf_intf::port_rx)], reading: u32, game: Game) {
         let Some(base) = self.base else {
             return;
         };
@@ -721,7 +778,7 @@ impl Tracker {
             self.busy_on = busy_polling_on();
         }
         let busy_polled = sys.busy_polled.filter(|n| self.busy_on || *n > 0);
-        let main = self.play.update(ports, reading, game_tcp_rx);
+        let main = self.play.update(ports, reading, game);
         let napi_id = Gaps::match_flows(ports).map_or(0, |g| g.napi_id);
         if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
             // a netlink round trip, so only when the flow's queue changes
@@ -853,6 +910,8 @@ mod tests {
         r: bpf_intf::port_rx,
         reading: u32,
         tcp: u64,
+        /// UDP packets the game has sent.
+        tx: u64,
     }
 
     impl Port {
@@ -861,6 +920,14 @@ mod tests {
                 r: bpf_intf::port_rx::default(),
                 reading: 0,
                 tcp: 0,
+                tx: 0,
+            }
+        }
+
+        fn game(&self) -> Game {
+            Game {
+                tcp_rx: Some(self.tcp),
+                udp_tx: Some(self.tx),
             }
         }
 
@@ -885,10 +952,12 @@ mod tests {
         fn second(&mut self, p: &mut Play, n: u32, ms: usize, split: u64) -> Option<Gaps> {
             self.r.pkts += u64::from(n) * split;
             self.r.updates += u64::from(n);
+            // the game sends as it plays
+            self.tx += 64;
             self.r.hist[ms] += n;
             self.gap(ms as u64 * 1_000_000);
             let (ports, reading) = self.next();
-            p.update(&ports, reading, Some(self.tcp))
+            p.update(&ports, reading, self.game())
         }
 
         /// A hiccup: the flow paused for `ms`, then came back.
@@ -902,13 +971,13 @@ mod tests {
         /// A second with nothing from the game's server.
         fn silent(&mut self, p: &mut Play) -> Option<Gaps> {
             let (ports, reading) = self.next();
-            p.update(&ports, reading, Some(self.tcp))
+            p.update(&ports, reading, self.game())
         }
 
         fn settle(&mut self, p: &mut Play) {
             let (ports, reading) = self.next();
             p.settle(&ports);
-            p.update(&ports, reading, Some(self.tcp));
+            p.update(&ports, reading, self.game());
         }
     }
 
@@ -952,6 +1021,116 @@ mod tests {
         // the hiccup counts, loading doesn't; the longest gap is the hiccup
         assert_eq!(g.stalls, 1, "{g:?}");
         assert_eq!(g.max_gap_ns, 300_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn a_game_that_stops_sending_is_loading() {
+        // Trackmania, 2026-11-07 15:24: the client stopped sending; the old
+        // room's server trickled in for three seconds, with a 124 ms gap,
+        // and only then did the new map's data come over TCP
+        let mut p = Play::default();
+        p.start();
+        let mut port = Port::new();
+        port.second(&mut p, 90, 11, 1);
+        port.settle(&mut p);
+        for _ in 0..120 {
+            port.tcp += 160_000;
+            port.second(&mut p, 90, 11, 1);
+        }
+        for _ in 0..2 {
+            port.tx += 1;
+            let (ports, reading) = port.next();
+            p.update(&ports, reading, port.game());
+        }
+        port.r.stalls += 1;
+        port.r.hist[BUCKETS - 1] += 1;
+        port.gap(124_000_000);
+        port.r.updates += 12;
+        port.r.pkts += 12;
+        let (ports, reading) = port.next();
+        p.update(&ports, reading, port.game());
+        port.tcp += 18_000_000;
+        port.silent(&mut p);
+        for _ in 0..60 {
+            port.tcp += 160_000;
+            port.second(&mut p, 90, 11, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 0, "{g:?}");
+        assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+    }
+
+    /// Settled, then two minutes racing at 90 updates a second.
+    fn racing() -> (Play, Port) {
+        let mut p = Play::default();
+        p.start();
+        let mut port = Port::new();
+        port.second(&mut p, 90, 11, 1);
+        port.settle(&mut p);
+        for _ in 0..120 {
+            port.tcp += 160_000;
+            port.second(&mut p, 90, 11, 1);
+        }
+        (p, port)
+    }
+
+    #[test]
+    fn a_download_during_a_race_is_play() {
+        // Trackmania fetches other players' skins and ghosts mid-race: 30
+        // MB over TCP while UDP carries on at the usual rate
+        let (mut p, mut port) = racing();
+        port.tcp += 30_000_000;
+        port.second(&mut p, 88, 11, 1);
+        port.stall(&mut p, 180);
+        for _ in 0..30 {
+            port.second(&mut p, 90, 11, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 1, "{g:?}");
+        assert_eq!(g.max_gap_ns, 180_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn reconnecting_after_losing_the_server_isnt_play() {
+        // Deadlock, 2026-11-06 19:42: ten seconds sending into nothing,
+        // then a new relay with two long gaps as it got going
+        let (mut p, mut port) = racing();
+        for _ in 0..10 {
+            // 14 to 82 a second: not quiet enough to look like loading
+            port.tx += 40;
+            let (ports, reading) = port.next();
+            p.update(&ports, reading, port.game());
+        }
+        port.stall(&mut p, 950);
+        port.stall(&mut p, 310);
+        for _ in 0..30 {
+            port.second(&mut p, 90, 11, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 0, "{g:?}");
+        assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn one_reading_at_the_usual_rate_doesnt_end_a_load() {
+        // Trackmania, 2026-11-08: a map load, then the countdown at 55
+        // updates a second (gaps of 18 ms against 11 in a race), one
+        // second of which came in at 16 ms; the race then starts with a
+        // 91 ms gap as the server steps up
+        let (mut p, mut port) = racing();
+        port.tcp += 25_000_000;
+        port.silent(&mut p);
+        for i in 0..12 {
+            let ms = if i == 3 { 16 } else { 18 };
+            port.second(&mut p, 55, ms, 1);
+        }
+        port.gap(91_000_000);
+        port.second(&mut p, 76, 11, 1);
+        for _ in 0..30 {
+            port.second(&mut p, 90, 11, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert!(g.max_gap_ns < 91_000_000, "{g:?}");
     }
 
     #[test]
