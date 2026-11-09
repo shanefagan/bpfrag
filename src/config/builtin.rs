@@ -67,6 +67,8 @@ pub const BUILTIN_DENY: &[&str] = &[
     "teams-for-linux",
     "skypeforlinux",
     "whatsapp*",
+    // desktop apps on Electron that can stream UDP (calls, QUIC)
+    "claude-desktop*",
     "obs",
     // RGB / peripheral software (SignalRGB under Wine streams steady UDP)
     "signalrgb*",
