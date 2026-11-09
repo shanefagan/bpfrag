@@ -28,6 +28,10 @@ ProtectHostname=yes
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
 RestrictNamespaces=yes
+# Nor load kernel modules, read the kernel log or change cgroups.
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
 ProtectSystem=full
 ProtectHome=read-only
 PrivateTmp=yes

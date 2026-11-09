@@ -1,0 +1,34 @@
+# cargo deny check: what bpfrag's dependencies may be (`just deny`, CI).
+
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
+
+[advisories]
+# RustSec: known vulnerabilities fail; unmaintained crates are reported
+# only for what bpfrag uses directly.
+unmaintained = "workspace"
+yanked = "deny"
+
+[licenses]
+# bpfrag is MIT; its BPF object is GPL-2.0-only OR MIT. Everything it
+# links must allow that: permissive licences only.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+# crates.io only: no git dependencies, no other registries
+unknown-registry = "deny"
+unknown-git = "deny"

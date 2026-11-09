@@ -46,6 +46,15 @@ test:
 build:
     cargo build --locked --release
 
+# Dependencies: known vulnerabilities, licences, sources (needs cargo-deny)
+deny:
+    cargo deny --locked check
+
+# The unit's sandboxing must not get weaker: systemd's exposure score, 0 to 10,
+# may not rise above 5.1 (needs systemd-analyze 250+)
+unit-security:
+    systemd-analyze security --offline=yes --threshold=51 dist/bpfrag.service
+
 # What this machine and kernel support; informational, never fails (root)
 check-system: build
     -{{ sudo }} {{ bin }} --check

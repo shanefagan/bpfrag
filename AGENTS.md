@@ -47,7 +47,9 @@ just e2e-unit     # same, with only the unit's capabilities (sudo)
 just ci           # all of the above, in CI's order
 ```
 
-CI runs `just ci`'s steps, plus `just msrv` (Rust 1.85), the .deb
+CI runs `just ci`'s steps, plus `just deny` (advisories, licences,
+sources), `just unit-security` (the unit's sandboxing may not weaken),
+`just msrv` (Rust 1.85), the .deb
 (`just deb`, Ubuntu 22.04 container) and the .rpm (`just rpm`, Fedora
 container). bpfrag itself must keep building with plain `cargo build
 --release`: distributions build it their own way.

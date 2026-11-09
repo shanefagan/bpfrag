@@ -93,6 +93,8 @@ just ci            # all of the below, as CI runs it
 | `just build` | `cargo build --locked --release` | |
 | `just check-system` | `bpfrag --check`: what this machine and kernel support (never fails) | yes |
 | `just selftest` | `bpfrag --selftest`: BPF_PROG_TEST_RUN vectors through both tc programs, then 2,000 random and damaged packets each way (32 checks) | yes |
+| `just deny` | `cargo deny check` against `deny.toml`: RustSec advisories, permissive licences only, crates.io only (needs cargo-deny) | no |
+| `just unit-security` | `systemd-analyze security` on `dist/bpfrag.service`: fails if its exposure rises above 5.1 | no |
 | `just fuzz [packets] [seed]` | the selftest with 200,000 random packets; a failure prints the seed that repeats it | yes |
 | `just e2e` | real kernel: netns, fake Steam game, noise (150 checks) | yes |
 | `just e2e-unit` | the same, with only the systemd unit's capabilities | yes |

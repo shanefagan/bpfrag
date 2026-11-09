@@ -17,6 +17,25 @@ permissions:
   contents: read
 
 jobs:
+  supply-chain:
+    # Known vulnerabilities, licences and sources of every dependency, and
+    # the systemd unit's sandboxing.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install cargo-deny and just
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y just
+          cargo install --locked cargo-deny
+
+      - name: Dependencies
+        run: just deny
+
+      - name: Unit sandboxing
+        run: just unit-security
+
   test:
     # GitHub's Ubuntu runners have kernel BTF, the sock_*_length tracepoints
     # and tcx (bpfrag needs 6.6+) and passwordless sudo, so the BPF side runs for
