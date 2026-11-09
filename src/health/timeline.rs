@@ -93,7 +93,14 @@ impl Timeline {
         fs::create_dir_all(dir)?;
         let path = dir.join(file_name(unix, game));
         let mut out = BufWriter::new(File::create(&path)?);
-        writeln!(out, "# {}", about.replace('\n', " "))?;
+        // One cell starting with '#', whatever the game is called: a comma
+        // would split it, and a cell starting with = is a formula to a
+        // spreadsheet.
+        writeln!(
+            out,
+            "# {}",
+            about.replace(['\n', '\r'], " ").replace(',', ";")
+        )?;
         writeln!(out, "{HEADER}")?;
         out.flush()?;
         prune(dir, keep);
@@ -314,10 +321,17 @@ fn prune(dir: &Path, keep: usize) {
 
 /// Quote a field if it needs it.
 fn csv_field(s: &str) -> String {
+    // A spreadsheet runs a cell starting with one of these as a formula
+    // (OWASP's CSV injection); a leading ' keeps it text.
+    let s = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    };
     if s.contains([',', '"', '\n']) {
         format!("\"{}\"", s.replace('"', "\"\"").replace('\n', " "))
     } else {
-        s.to_string()
+        s
     }
 }
 
@@ -341,6 +355,23 @@ mod tests {
             r.hist[i] = n;
         }
         r
+    }
+
+    #[test]
+    fn cells_are_never_formulas() {
+        assert_eq!(csv_field("=HYPERLINK(\"x\")"), "\"'=HYPERLINK(\"\"x\"\")\"");
+        assert_eq!(csv_field("-2+3"), "'-2+3");
+        assert_eq!(csv_field("@SUM(A1)"), "'@SUM(A1)");
+        assert_eq!(
+            csv_field("server A:27031 -> B:27031"),
+            "server A:27031 -> B:27031"
+        );
+        let dir = std::env::temp_dir().join(format!("bpfrag-tl-formula-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let t = Timeline::create(&dir, 3, 1, "x", "bpfrag 1; a,=1+1,b (pid 2)").unwrap();
+        let text = std::fs::read_to_string(t.path()).unwrap();
+        assert_eq!(text.lines().next().unwrap(), "# bpfrag 1; a;=1+1;b (pid 2)");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
