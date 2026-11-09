@@ -39,6 +39,13 @@ trap cleanup EXIT
 for c in tcpdump python3 ip tc; do
   command -v $c >/dev/null || { echo "needs $c"; exit 1; }
 done
+# An installed bpfrag would see the fake game too, tune the system under
+# the test and write its matches into the real captures (2026-11-09).
+if command -v systemctl >/dev/null && systemctl is-active --quiet bpfrag 2>/dev/null; then
+  echo "bpfrag.service is running: it would tune for the fake game too."
+  echo "Stop it first (sudo systemctl stop bpfrag), and start it again after."
+  exit 1
+fi
 cp "$HERE/client.py" "$HERE/server.py" "$HERE/bulk.py" "$HERE/tcpgame.py" $W/
 mkdir -p $W/steamapps/common/FakeShooter $W/steamapps/common/FakeMMO $W/apps
 ln -s "$(command -v python3)" $W/steamapps/common/FakeShooter/fakeshooter
