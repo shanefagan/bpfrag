@@ -64,6 +64,10 @@ const UNSEEN_WINDOWS: u32 = 2;
 /// counted as one when the menu was quicker than 15 s). Relay changes
 /// mid-game don't go through loopback at all.
 const LOCAL_END_SECS: f64 = 6.0;
+/// The game's own TCP in a second that means it's loading, and how long
+/// after the last such second quiet UDP doesn't end the match.
+const LOAD_BPS: f64 = 1_000_000.0;
+const LOAD_GRACE_SECS: f64 = 30.0;
 
 /// Consecutive windows that must agree on a higher tier before it is
 /// applied. Tiers only go up within a match.
@@ -103,6 +107,8 @@ pub struct Window {
     /// Of those, received from peers other than the game's server (and
     /// as many sent back): relay pings. Known only during a match.
     pub others_pps: f64,
+    /// The game's own TCP received, bytes a second.
+    pub tcp_rx_bps: f64,
 }
 
 impl Window {
@@ -328,6 +334,9 @@ struct Session {
     confidence: u32,
     last_change: f64,
     quiet_secs: f64,
+    /// When the game last loaded something over TCP (a megabyte or more
+    /// in a second), on the detector's clock.
+    last_load: f64,
     /// Seconds the match's traffic has stayed on this machine.
     local_secs: f64,
     /// Traffic from outside has been measured in this match, so it's what
@@ -581,6 +590,7 @@ impl Detector {
                 } else {
                     0.0
                 },
+                tcp_rx_bps: s.tcp_rx_bytes.saturating_sub(prev.tcp_rx_bytes) as f64 / dt,
             };
             t.prev = *s;
             if s.ifindex != 0 {
@@ -756,6 +766,7 @@ impl Detector {
             confidence: 1,
             last_change: now,
             quiet_secs: 0.0,
+            last_load: f64::NEG_INFINITY,
             local_secs: 0.0,
             saw_outside: false,
         });
@@ -960,10 +971,20 @@ impl Detector {
         if idle && !procs.alive(tgid) {
             return self.end("game exited".into());
         }
+        if t.last().tcp_rx_bps >= LOAD_BPS {
+            sess.last_load = now;
+        }
         if t.recent_median(QUIET_WINDOWS) <= self.cfg.idle_pps as f64 {
-            sess.quiet_secs += dt;
+            // the median lags: a window with traffic again doesn't add
+            if t.last().total() < self.cfg.idle_pps as f64 {
+                sess.quiet_secs += dt;
+            }
             let quiet = sess.quiet_secs;
-            if quiet >= self.cfg.linger_secs as f64 {
+            // A game loading a map over TCP isn't gone: Trackmania went 16
+            // seconds without UDP after a 49 MB load, and the session was
+            // cut in two (2026-11-07 11:09:18, 2026-11-08 13:44:54).
+            let loading = now - sess.last_load < LOAD_GRACE_SECS;
+            if quiet >= self.cfg.linger_secs as f64 && !loading {
                 return self.end(format!("netcode quiet for {}s", quiet.round()));
             }
             return None;
@@ -1067,6 +1088,8 @@ mod tests {
         arrivals: Arrivals,
         /// What the match exchanges with peers other than its server.
         others: f64,
+        /// TCP bytes each game receives a second.
+        tcp_rx: u64,
     }
 
     impl Sim {
@@ -1084,6 +1107,7 @@ mod tests {
                 },
                 arrivals: Arrivals::default(),
                 others: 0.0,
+                tcp_rx: 0,
             }
         }
 
@@ -1105,6 +1129,7 @@ mod tests {
                 c.rx_pkts += rx;
                 c.tx_bytes += tx * size;
                 c.rx_bytes += rx * size;
+                c.tcp_rx_bytes += self.tcp_rx;
             }
             self.now += 1.0;
             self.procs.now = self.now;
@@ -1160,6 +1185,25 @@ mod tests {
         let a = sim.run(20, &[(7, 1, 1, 80)]);
         assert!(a.iter().any(|x| matches!(x, Action::End { .. })), "{a:?}");
         assert!(sim.det.session().is_none());
+    }
+
+    #[test]
+    fn loading_a_map_over_tcp_doesnt_end_the_match() {
+        // Trackmania, 2026-11-08 13:44: a 49 MB map, then 16 seconds
+        // without UDP while it loaded
+        let mut sim = Sim::new(&[7]);
+        let a = sim.run(4, &[(7, 190, 90, 120)]);
+        assert_eq!(starts(&a).len(), 1, "{a:?}");
+        sim.tcp_rx = 49_000_000;
+        let mut a = sim.run(1, &[(7, 0, 0, 0)]);
+        sim.tcp_rx = 0;
+        a.extend(sim.run(16, &[(7, 0, 0, 0)]));
+        a.extend(sim.run(2, &[(7, 1, 11, 80)]));
+        a.extend(sim.run(30, &[(7, 190, 90, 120)]));
+        assert!(!has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
+        // gone for good, with nothing loading: over after the usual wait
+        let a = sim.run(40, &[(7, 0, 0, 0)]);
+        assert!(has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
     }
 
     #[test]
