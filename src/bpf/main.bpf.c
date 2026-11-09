@@ -582,6 +582,21 @@ static __always_inline void count_gap(struct port_rx *pr, __u64 gap)
 	pr->hist[ms & (GAP_BUCKETS - 1)]++;
 }
 
+/* A gap at game rate, to the nanosecond: its length, and how far it was
+ * from the one before. */
+static __always_inline void count_fine(struct port_rx *pr, __u64 gap)
+{
+	__u64 prev = pr->prev_gap_ns;
+
+	pr->fine_n++;
+	pr->sum_gap_ns += gap;
+	if (prev) {
+		pr->jitter_n++;
+		pr->sum_jitter_ns += gap > prev ? gap - prev : prev - gap;
+	}
+	pr->prev_gap_ns = gap;
+}
+
 static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 {
 	struct port_rx *pr = bpf_map_lookup_elem(&port_rx, &port);
@@ -621,6 +636,7 @@ static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 	 * about one a second), and isn't counted at all.
 	 */
 	if (ms >= GAP_STALL_MS) {
+		pr->prev_gap_ns = 0;
 		pr->held_ns += pr->resume_ns + gap;
 		pr->resume_ns = 0;
 		pr->resume_n = 0;
@@ -628,6 +644,7 @@ static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 	}
 	if (!pr->held_ns) {
 		count_gap(pr, gap);
+		count_fine(pr, gap);
 		return;
 	}
 	pr->resume_ns += gap;

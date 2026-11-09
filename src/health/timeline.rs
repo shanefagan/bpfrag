@@ -23,6 +23,7 @@
 //! | `port` | the game's local port that received the most this second |
 //! | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps this second on the ports carrying the match (1 ms buckets; a longest gap over 63 ms is its exact length, or 64 if the meter didn't time it) |
 //! | `stalls` | stalls the meter finished counting this second |
+//! | `jitter_us` | how much each gap at game rate differed from the one before, on average, to the microsecond |
 //! | `events` | match start and end, tier and server changes |
 //!
 //! Addresses aren't written, only letters, so a timeline can be shared.
@@ -39,9 +40,13 @@ use super::{BUCKETS, Gaps};
 use crate::bpf_intf;
 use crate::detect::Sample;
 
+/// A port's counters at the last row: packets, histogram, stalls, and
+/// the jitter count and sum.
+type PortSoFar = (u64, [u64; BUCKETS], u64, u64, u64);
+
 const HEADER: &str = "t,unix,tier,udp_tx_pps,udp_rx_pps,udp_tx_bytes_s,udp_rx_bytes_s,\
 tcp_tx_bytes_s,tcp_rx_bytes_s,server,server_pps,peers,port,gaps,gap_p50_ms,gap_p99_ms,\
-gap_max_ms,stalls,events";
+gap_max_ms,stalls,jitter_us,events";
 
 /// What one row reports, besides the time.
 #[derive(Default)]
@@ -66,7 +71,7 @@ pub struct Timeline {
     last: Instant,
     prev: Option<Sample>,
     /// Each port's packets, histogram and stall count at the last row.
-    prev_ports: HashMap<u16, (u64, [u64; BUCKETS], u64)>,
+    prev_ports: HashMap<u16, PortSoFar>,
     events: Vec<String>,
 }
 
@@ -154,7 +159,7 @@ impl Timeline {
         Ok(self.path)
     }
 
-    /// "port,gaps,p50,p99,max,stalls" since the last row, over the ports
+    /// "port,gaps,p50,p99,max,stalls,jitter" since the last row, over the ports
     /// that received at least a tenth of what the busiest did this second.
     fn gaps_since_last(
         &mut self,
@@ -165,10 +170,10 @@ impl Timeline {
         let mut deltas = Vec::with_capacity(ports.len());
         for (port, r) in ports {
             let g = Gaps::from_bpf(*port, r);
-            let (pkts, hist, stalls) = match self.prev_ports.get(port) {
+            let (pkts, hist, stalls, jn, js) = match self.prev_ports.get(port) {
                 // an entry the LRU map dropped and made again starts over
-                Some(&(p, h, s)) if p <= g.pkts => (p, h, s),
-                _ => (0, [0u64; BUCKETS], 0),
+                Some(&(p, h, s, jn, js)) if p <= g.pkts => (p, h, s, jn, js),
+                _ => (0, [0u64; BUCKETS], 0, 0, 0),
             };
             let mut d = [0u64; BUCKETS];
             for (x, (a, b)) in d.iter_mut().zip(g.hist.iter().zip(hist.iter())) {
@@ -184,22 +189,32 @@ impl Timeline {
                 d,
                 g.stalls.saturating_sub(stalls),
                 longest,
+                (
+                    g.jitter_n.saturating_sub(jn),
+                    g.sum_jitter_ns.saturating_sub(js),
+                ),
             ));
-            now.insert(*port, (g.pkts, g.hist, g.stalls));
+            now.insert(
+                *port,
+                (g.pkts, g.hist, g.stalls, g.jitter_n, g.sum_jitter_ns),
+            );
         }
         self.prev_ports = now;
         let Some(&(port, most, ..)) = deltas.iter().max_by_key(|d| d.1).filter(|d| d.1 > 0) else {
-            return ",0,,,,0".into();
+            return ",0,,,,0,".into();
         };
         let mut hist = [0u64; BUCKETS];
         let mut stalls = 0;
         let mut longest_ns = 0;
-        for (_, _, d, s, l) in deltas.iter().filter(|d| d.1.saturating_mul(10) >= most) {
+        let (mut jitter_n, mut jitter_ns) = (0, 0);
+        for (_, _, d, s, l, (jn, js)) in deltas.iter().filter(|d| d.1.saturating_mul(10) >= most) {
             for (h, x) in hist.iter_mut().zip(d.iter()) {
                 *h += x;
             }
             stalls += s;
             longest_ns = longest_ns.max(*l);
+            jitter_n += jn;
+            jitter_ns += js;
         }
         let this = Gaps {
             port,
@@ -209,7 +224,15 @@ impl Timeline {
             max_gap_ns: 0,
             stalls,
             napi_id: 0,
+            fine_n: 0,
+            sum_gap_ns: 0,
+            jitter_n,
+            sum_jitter_ns: jitter_ns,
         };
+        let jitter = this
+            .jitter_us()
+            .map(|j| format!("{j:.0}"))
+            .unwrap_or_default();
         let n: u64 = hist.iter().sum();
         let q = |v: Option<u32>| v.map(|x| x.to_string()).unwrap_or_default();
         // The last bucket holds every gap over 63 ms: a relay change
@@ -227,7 +250,7 @@ impl Timeline {
             })
             .unwrap_or_default();
         format!(
-            "{port},{n},{},{},{max},{stalls}",
+            "{port},{n},{},{},{max},{stalls},{jitter}",
             q(this.quantile_ms(0.5)),
             q(this.quantile_ms(0.99))
         )

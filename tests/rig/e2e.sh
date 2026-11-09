@@ -121,6 +121,7 @@ grep -q "COMPETITIVE -> INTENSE" $W/d.log && ok "rate increase -> INTENSE" || ba
 kill $G; sleep 2
 grep -q "Match ended" $W/d.log && ok "game exit ends the match immediately" || bad "match did not end"
 grep -q "fakeshooter: packet gaps half" $W/d.log && ok "match health logged when it ends" || bad "no health line at match end"
+grep -Eq "fakeshooter: packet gaps half .*\(100 ms\+\), jitter [0-9]+ µs" $W/d.log && ok "and its jitter, to the microsecond" || bad "no jitter: $(grep 'packet gaps' $W/d.log)"
 "$B" -c $W/cfg.toml --waybar | grep -q '"alt":"idle".*Last match: fakeshooter INTENSE' && ok "waybar idle with last match" || bad "waybar idle: $("$B" -c $W/cfg.toml --waybar)"
 same "after game exit"
 kill $N1 $N2 $N3
@@ -415,6 +416,7 @@ if [ -n "$CSV" ]; then
   sed -n 2p "$CSV" | grep -q "^t,unix,tier,udp_tx_pps,udp_rx_pps," && ok "timeline columns" || bad "columns: $(sed -n 2p "$CSV")"
   [ "$(grep -vc '^#' "$CSV")" -ge 15 ] && ok "about a row a second" || bad "rows: $(grep -vc '^#' "$CSV")"
   awk -F, 'NR > 2 && $10 == "B:27015" && $4 >= 50' "$CSV" | grep -q . && ok "rows name the new server, with the game's rates" || bad "rows: $(tail -3 "$CSV")"
+  awk -F, 'NR > 2 && $19 ~ /^[0-9]+$/' "$CSV" | grep -q . && ok "rows carry jitter in µs" || bad "jitter column: $(cut -d, -f14-19 "$CSV" | tail -3)"
   grep -q "server A:27015 -> B:27015" "$CSV" && grep -q "match ended (game exited)" "$CSV" && ok "server change and match end are events" || bad "events: $(cut -d, -f18- "$CSV" | sort -u)"
   grep -q "10\.99\." "$CSV" && bad "addresses in the timeline" || ok "no addresses in the timeline"
 else

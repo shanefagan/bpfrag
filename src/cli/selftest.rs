@@ -440,6 +440,15 @@ fn check_meter(skel: &BpfSkel) -> Result<String, String> {
             r.pkts, r.updates
         ));
     }
+    // The same gap to the nanosecond, and no jitter yet: there's no gap
+    // before it to differ from.
+    if r.fine_n != 1 || r.sum_gap_ns != r.max_gap_ns || r.jitter_n != 0 {
+        return Err(format!(
+            "fine timing: {} gaps summing {} ns (longest {} ns), {} jitter samples; \
+             expected 1 gap equal to the longest, none",
+            r.fine_n, r.sum_gap_ns, r.max_gap_ns, r.jitter_n
+        ));
+    }
     // Who sent them: three from 10.99.0.1, one from fd00:99::1, both from
     // OTHER_PORT; the ignored packets count for nobody.
     let mut peers: Vec<(String, u16, u16, u64)> = crate::bpf::maps::read_game_peers(skel)
@@ -501,6 +510,14 @@ fn check_readings(skel: &mut BpfSkel) -> Result<String, String> {
         return Err(format!(
             "reading {} longest {} ns, overall {} ns: expected reading 1's own gap of 10 ms or more",
             r.reading, r.reading_max_ns, r.max_gap_ns
+        ));
+    }
+    // the second gap differs from the first by exactly their difference
+    let want = r.reading_max_ns.abs_diff(first);
+    if r.fine_n != 2 || r.jitter_n != 1 || r.sum_jitter_ns != want {
+        return Err(format!(
+            "fine timing: {} gaps, {} jitter samples summing {} ns; expected 2, 1 of {want} ns",
+            r.fine_n, r.jitter_n, r.sum_jitter_ns
         ));
     }
     Ok(format!(

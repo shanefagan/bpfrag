@@ -63,6 +63,12 @@ pub struct Gaps {
     pub stalls: u64,
     /// NAPI instance of the latest packet; 0 if unknown.
     pub napi_id: u32,
+    /// Gaps at game rate to the nanosecond: count and sum, and the count
+    /// and sum of how much each differed from the one before.
+    pub fine_n: u64,
+    pub sum_gap_ns: u64,
+    pub jitter_n: u64,
+    pub sum_jitter_ns: u64,
 }
 
 impl Gaps {
@@ -79,7 +85,28 @@ impl Gaps {
             max_gap_ns: r.max_gap_ns,
             stalls: u64::from(r.stalls),
             napi_id: r.napi_id,
+            fine_n: r.fine_n,
+            sum_gap_ns: r.sum_gap_ns,
+            jitter_n: r.jitter_n,
+            sum_jitter_ns: r.sum_jitter_ns,
         }
+    }
+
+    /// Mean jitter (µs): how much a gap differs from the one before.
+    pub fn jitter_us(&self) -> Option<f64> {
+        (self.jitter_n > 0).then(|| self.sum_jitter_ns as f64 / self.jitter_n as f64 / 1e3)
+    }
+
+    /// Mean gap at game rate (µs).
+    pub fn mean_gap_us(&self) -> Option<f64> {
+        (self.fine_n > 0).then(|| self.sum_gap_ns as f64 / self.fine_n as f64 / 1e3)
+    }
+
+    fn add_fine(&mut self, o: &Gaps) {
+        self.fine_n += o.fine_n;
+        self.sum_gap_ns += o.sum_gap_ns;
+        self.jitter_n += o.jitter_n;
+        self.sum_jitter_ns += o.sum_jitter_ns;
     }
 
     /// The match's traffic: every port that received at least a tenth of
@@ -101,6 +128,7 @@ impl Gaps {
             }
             g.stalls += other.stalls;
             g.max_gap_ns = g.max_gap_ns.max(other.max_gap_ns);
+            g.add_fine(&other);
         }
         Some(g)
     }
@@ -135,6 +163,8 @@ impl Gaps {
             p99_ms: self.quantile_ms(0.99)?,
             max_ms: self.max_gap_ns as f64 / 1e6,
             stalls: self.stalls,
+            jitter_us: self.jitter_us(),
+            mean_gap_us: self.mean_gap_us(),
         })
     }
 }
@@ -151,6 +181,12 @@ pub struct GapSummary {
     pub max_ms: f64,
     /// Gaps of 100 ms or more.
     pub stalls: u64,
+    /// How much a gap differs from the one before, on average (µs), and
+    /// the mean gap (µs), both at game rate (from 0.13.0).
+    #[serde(default)]
+    pub jitter_us: Option<f64>,
+    #[serde(default)]
+    pub mean_gap_us: Option<f64>,
 }
 
 /// "≤16 ms", or "over 63 ms" for the histogram's last bucket.
@@ -164,8 +200,12 @@ fn at_most(ms: u32) -> String {
 
 impl GapSummary {
     pub fn describe(&self) -> String {
+        let jitter = self
+            .jitter_us
+            .map(|j| format!(", jitter {:.0} µs", j))
+            .unwrap_or_default();
         format!(
-            "half {}, 99% {}, longest {:.0} ms, {} stall{} (100 ms+)",
+            "half {}, 99% {}, longest {:.0} ms, {} stall{} (100 ms+){jitter}",
             at_most(self.p50_ms),
             at_most(self.p99_ms),
             self.max_ms,
@@ -625,6 +665,7 @@ impl Play {
                 for (x, y) in c.hist.iter_mut().zip(d.hist.iter()) {
                     *x += y;
                 }
+                c.add_fine(&d);
             }
         }
     }
@@ -644,6 +685,8 @@ impl Play {
         g.pkts = c.pkts;
         g.updates = c.updates;
         g.hist = c.hist;
+        (g.fine_n, g.sum_gap_ns, g.jitter_n, g.sum_jitter_ns) =
+            (c.fine_n, c.sum_gap_ns, c.jitter_n, c.sum_jitter_ns);
         Some(g)
     }
 }
@@ -659,6 +702,10 @@ fn since(now: &[(u16, bpf_intf::port_rx)], base: &[(u16, bpf_intf::port_rx)]) ->
                 d.pkts = r.pkts - b.pkts;
                 d.updates = r.updates.saturating_sub(b.updates);
                 d.stalls = r.stalls.saturating_sub(b.stalls);
+                d.fine_n = r.fine_n.saturating_sub(b.fine_n);
+                d.sum_gap_ns = r.sum_gap_ns.saturating_sub(b.sum_gap_ns);
+                d.jitter_n = r.jitter_n.saturating_sub(b.jitter_n);
+                d.sum_jitter_ns = r.sum_jitter_ns.saturating_sub(b.sum_jitter_ns);
                 for (x, y) in d.hist.iter_mut().zip(b.hist.iter()) {
                     *x = x.saturating_sub(*y);
                 }
@@ -960,6 +1007,16 @@ mod tests {
             p.update(&ports, reading, self.game())
         }
 
+        /// A second like [`Port::second`], each gap differing from the one
+        /// before by `jitter_us`.
+        fn jittery(&mut self, p: &mut Play, n: u32, ms: usize, jitter_us: u64) -> Option<Gaps> {
+            self.r.fine_n += u64::from(n);
+            self.r.sum_gap_ns += u64::from(n) * ms as u64 * 1_000_000;
+            self.r.jitter_n += u64::from(n);
+            self.r.sum_jitter_ns += u64::from(n) * jitter_us * 1_000;
+            self.second(p, n, ms, 1)
+        }
+
         /// A hiccup: the flow paused for `ms`, then came back.
         fn stall(&mut self, p: &mut Play, ms: u64) -> Option<Gaps> {
             self.r.stalls += 1;
@@ -1072,6 +1129,26 @@ mod tests {
             port.second(&mut p, 90, 11, 1);
         }
         (p, port)
+    }
+
+    #[test]
+    fn jitter_is_play_s_alone() {
+        let (mut p, mut port) = racing();
+        for _ in 0..60 {
+            port.jittery(&mut p, 90, 11, 200);
+        }
+        // a load, jittery as the server gets going again: left out
+        port.tcp += 30_000_000;
+        port.silent(&mut p);
+        port.jittery(&mut p, 30, 30, 9_000);
+        for _ in 0..60 {
+            port.jittery(&mut p, 90, 11, 200);
+        }
+        let g = port.silent(&mut p).unwrap();
+        let j = g.jitter_us().unwrap();
+        assert!((j - 200.0).abs() < 1.0, "{j}");
+        let m = g.mean_gap_us().unwrap();
+        assert!((m - 11_000.0).abs() < 1.0, "{m}");
     }
 
     #[test]
@@ -1312,12 +1389,22 @@ mod tests {
                 p99_ms: 64,
                 max_ms: 48.4,
                 stalls: 1,
+                jitter_us: None,
+                mean_gap_us: None,
             }),
             ..Default::default()
         };
         assert_eq!(
             h.summary(),
             "packet gaps half ≤16 ms, 99% over 63 ms, longest 48 ms, 1 stall (100 ms+); no drops"
+        );
+        let mut j = h.clone();
+        j.gaps.as_mut().unwrap().jitter_us = Some(212.6);
+        assert!(
+            j.summary()
+                .contains("1 stall (100 ms+), jitter 213 µs; no drops"),
+            "{}",
+            j.summary()
         );
         let d = Health {
             socket_drops: 2,

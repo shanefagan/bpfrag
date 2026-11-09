@@ -676,7 +676,7 @@ it.
 | M5 | Timestamps of the stalls in each match, to line them up with tier changes, scans and other events. Done: the match timeline (`[capture] timeline = true`) has stalls, tier and events per second | 4, 7 |
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
 | M7 | The game's peer address (or its network) per match. Partly done: the server is followed and named by a letter per address within a match ("server A:27031"), without the address itself; comparing servers across matches would need a stable name for one | 17, 22 |
-| M8 | Sub-millisecond arrival timing | 5, 13 |
+| M8 | Sub-millisecond arrival timing. Done in 0.13.0: jitter (mean change between consecutive gaps at game rate) to the microsecond, per match and per second | 5, 13 |
 | M9 | The game's own TCP retransmissions and timeouts (the `tcp_retransmit_skb` tracepoint carries the socket, so it can be tied to the game's connection) | 21 |
 | M10 | Health while a match is on: the gap figures, stalls and drops so far, as a D-Bus property refreshed every few seconds, not only in `MatchEnded`. For an overlay, a game or a support tool to say "your side is fine" during play | 23 |
 

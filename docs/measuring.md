@@ -67,9 +67,14 @@ Limits to keep in mind:
   look worse; they add easy minutes. The timeline's `udp_rx_bytes_s`
   shows them (a few KB a second instead of tens).
 
-- **1 ms resolution.** Changes of tens or hundreds of microseconds
-  (interrupt coalescing, busy polling) can't show in the gap numbers.
-  They'd need finer timing.
+- **1 ms resolution, except jitter.** Changes of tens or hundreds of
+  microseconds (interrupt coalescing, busy polling) can't show in the
+  half, 99% and longest figures. From 0.13.0 the meter also times each
+  gap at game rate to the nanosecond, and the health line's `jitter`
+  (with the timeline's `jitter_us`) is how much each gap differed from
+  the one before, on average, over play. That's what a change on this
+  machine moves; it's still mostly the path's and the server's, so
+  compare it across arms, not against zero.
 - **Most jitter isn't on this machine.** The internet path and the game
   server dominate the spread. A tuning change shows up as a small shift in
   the 99% figure and the stall count, against a lot of match-to-match noise.
@@ -240,6 +245,7 @@ bpfrag version, the game and the experiment arm, then a row a second:
 | `port` | the game's local port that received the most that second |
 | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps that second on the ports carrying the match; 64 is over 63 ms, except that from 0.12.3 a `gap_max_ms` over 63 ms is the gap's exact length |
 | `stalls` | stalls that finished that second |
+| `jitter_us` | how much each gap at game rate differed from the one before, on average, in µs (0.13.0) |
 | `events` | match start and end, tier changes, server changes |
 
 There are no addresses in it, so it can be attached to a "Share match

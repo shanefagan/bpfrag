@@ -206,6 +206,9 @@ pub fn health_dict(h: Option<&Health>) -> PropMap {
         put(&mut m, "gap_p99_ms", Box::new(g.p99_ms));
         put(&mut m, "gap_max_ms", Box::new(g.max_ms));
         put(&mut m, "stalls", Box::new(g.stalls));
+        if let Some(j) = g.jitter_us {
+            put(&mut m, "jitter_us", Box::new(j));
+        }
     }
     put(&mut m, "socket_drops", Box::new(h.socket_drops));
     if let Some(d) = h.game_socket_drops {
@@ -955,6 +958,8 @@ mod tests {
                 p99_ms: 31,
                 max_ms: 84.5,
                 stalls: 2,
+                jitter_us: Some(210.4),
+                mean_gap_us: Some(15_625.0),
             }),
             game_socket_drops: Some(0),
             nic_drops: 3,
@@ -968,6 +973,7 @@ mod tests {
         assert_eq!(d["gap_p99_ms"].0.as_u64(), Some(31));
         assert_eq!(d["gap_max_ms"].0.as_f64(), Some(84.5));
         assert_eq!(d["stalls"].0.as_u64(), Some(2));
+        assert_eq!(d["jitter_us"].0.as_f64(), Some(210.4));
         assert_eq!(d["nic_drops"].0.as_u64(), Some(3));
         assert!(d.contains_key("game_socket_drops"));
         // Not about the game's connection, so not on the bus.

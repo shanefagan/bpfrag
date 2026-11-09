@@ -36,7 +36,7 @@ RETIER = re.compile(r": traffic now ~\d+ pkt/s .*; (\w+) -> (\w+)$")
 ENDED = re.compile(r"Match ended after (\S+) \((.*)\); settings restored")
 GAPS = re.compile(
     r"packet gaps half (≤\d+|over \d+) ms, 99% (≤\d+|over \d+) ms, "
-    r"longest (\d+) ms, (\d+) stalls? \(100 ms\+\)"
+    r"longest (\d+) ms, (\d+) stalls? \(100 ms\+\)(?:, jitter (\d+) µs)?"
 )
 DROPS = re.compile(
     r"drops: (\d+) socket buffer(?: \((\d+) the game's\))?, (\d+) backlog, (\d+) NIC"
@@ -56,7 +56,7 @@ EXPERIMENT = re.compile(r"; experiment: (\S+) (on|off)\b")
 FIELDS = [
     "label", "started", "game", "mode", "version", "start_tier", "peak_tier",
     "duration_s", "end_reason", "start_pps", "gap_p50_ms", "gap_p99_ms",
-    "gap_longest_ms", "stalls", "socket_drops", "game_socket_drops", "backlog_drops",
+    "gap_longest_ms", "stalls", "jitter_us", "socket_drops", "game_socket_drops", "backlog_drops",
     "nic_drops", "squeezed", "busy_polled", "server_changes", "silences",
     "silence_longest_s", "rx_queue", "game_tcp", "bulk",
     "bulk_marked",
@@ -112,6 +112,8 @@ def parse(lines, label):
             if m := GAPS.search(line):
                 cur["gap_p50_ms"], cur["gap_p99_ms"] = ms(m.group(1)), ms(m.group(2))
                 cur["gap_longest_ms"], cur["stalls"] = m.group(3), m.group(4)
+                # blank before 0.13.0
+                cur["jitter_us"] = m.group(5) or ""
             d = DROPS.search(line)
             # game_socket_drops is blank before 0.3.1, or if bpfrag couldn't
             # read the game's sockets
@@ -154,6 +156,7 @@ COMPARED = [
     ("gap_p99_ms", "99% gap ms"),
     ("gap_longest_ms", "longest ms"),
     ("stalls", "stalls"),
+    ("jitter_us", "jitter µs"),
     ("game_socket_drops", "game drops"),
     ("busy_polled", "busy-polled"),
 ]
