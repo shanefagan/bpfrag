@@ -839,7 +839,7 @@ impl Tracker {
     /// "A:27031" and its packets a second, the game's current server.
     pub fn server(&self) -> Option<(String, f64)> {
         self.servers
-            .main()
+            .main_now()
             .map(|(p, pps)| (self.servers.label(&p), pps))
     }
 

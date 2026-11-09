@@ -200,9 +200,13 @@ impl Servers {
         format!("{letter}:{}", p.port)
     }
 
-    /// The current server and its rate.
-    pub fn main(&self) -> Option<(Peer, f64)> {
-        self.main.map(|m| (m, self.rate(&m)))
+    /// The current server and its rate in the last reading alone, for a
+    /// timeline that's a second a row.
+    pub fn main_now(&self) -> Option<(Peer, f64)> {
+        self.main.map(|m| {
+            let r = self.rates.get(&m).and_then(|r| r.back().copied());
+            (m, r.unwrap_or(0.0))
+        })
     }
 
     /// Times the server changed this match.
@@ -217,14 +221,17 @@ impl Servers {
 
     /// Packets a second, in the last reading, from every peer but the
     /// server: relay pings and the like, which the game answers one for
-    /// one. Nothing until there is a server to tell them apart from.
+    /// one. Nothing until there is a server to tell them apart from. A
+    /// peer about to take over as the server isn't one of them: for the
+    /// readings before the switch, it's carrying the match.
     pub fn others_pps(&self) -> f64 {
         let Some(main) = self.main else {
             return 0.0;
         };
+        let next = self.challenger.map(|(p, _)| p);
         self.rates
             .iter()
-            .filter(|(p, _)| **p != main)
+            .filter(|(p, _)| **p != main && Some(**p) != next)
             .map(|(_, r)| r.back().copied().unwrap_or(0.0))
             .sum()
     }
@@ -283,7 +290,7 @@ mod tests {
                 pps: 64.0
             }]
         );
-        assert_eq!(sim.s.main().map(|(p, _)| p), Some(a));
+        assert_eq!(sim.s.main_now().map(|(p, _)| p), Some(a));
         assert_eq!(sim.s.active(), 2);
         assert_eq!(sim.s.changes(), 0);
     }
@@ -324,6 +331,25 @@ mod tests {
     }
 
     #[test]
+    fn the_next_server_isnt_relay_traffic() {
+        let a = peer([162, 254, 192, 73], 27031);
+        let b = peer([155, 133, 2, 2], 27031);
+        let r = |p| peer([10, 0, 0, p], 27015);
+        let mut sim = Sim::new();
+        sim.run(10, &[(a, 64)]);
+        // relay pings beside the server
+        sim.run(1, &[(a, 64), (r(1), 6), (r(2), 6)]);
+        assert_eq!(sim.s.others_pps(), 12.0);
+        // a new relay carries the match before it's the server: not pings
+        sim.run(1, &[(b, 120)]);
+        assert_eq!(sim.s.others_pps(), 0.0);
+        assert_eq!(sim.s.main_now().map(|m| m.1), Some(0.0));
+        sim.run(3, &[(b, 120)]);
+        assert_eq!(sim.s.main_now().map(|m| (m.0, m.1)), Some((b, 120.0)));
+        assert_eq!(sim.s.others_pps(), 0.0);
+    }
+
+    #[test]
     fn a_short_burst_from_another_peer_isnt_a_change() {
         let a = peer([10, 0, 0, 1], 27031);
         let b = peer([10, 0, 0, 2], 27031);
@@ -341,7 +367,7 @@ mod tests {
         let mut sim = Sim::new();
         let ev = sim.run(5, &[(peer([10, 0, 0, 1], 1), 2)]);
         assert!(ev.is_empty());
-        assert!(sim.s.main().is_none());
+        assert!(sim.s.main_now().is_none());
     }
 
     #[test]

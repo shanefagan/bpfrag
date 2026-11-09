@@ -18,7 +18,7 @@
 //! | `udp_tx_pps`, `udp_rx_pps` | the game's UDP datagrams a second, every socket |
 //! | `udp_tx_bytes_s`, `udp_rx_bytes_s` | the same in bytes |
 //! | `tcp_tx_bytes_s`, `tcp_rx_bytes_s` | the game's own TCP |
-//! | `server`, `server_pps` | who the game receives from ([`super::peers`]): a letter per address, and the port; its packets a second |
+//! | `server`, `server_pps` | who the game receives from ([`super::peers`]): a letter per address, and the port; its packets that second |
 //! | `peers` | remote addresses and ports that sent anything this second |
 //! | `port` | the game's local port that received the most this second |
 //! | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps this second on the ports carrying the match (1 ms buckets; a longest gap over 63 ms is its exact length, or 64 if the meter didn't time it) |

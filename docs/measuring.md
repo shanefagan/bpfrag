@@ -235,7 +235,7 @@ bpfrag version, the game and the experiment arm, then a row a second:
 | `udp_tx_pps`, `udp_rx_pps` | the game's UDP datagrams a second, all its sockets |
 | `udp_tx_bytes_s`, `udp_rx_bytes_s` | the same in bytes |
 | `tcp_tx_bytes_s`, `tcp_rx_bytes_s` | the game's own TCP |
-| `server`, `server_pps` | the server it receives from (a letter per address, and the port) and its packets a second |
+| `server`, `server_pps` | the server it receives from (a letter per address, and the port) and its packets that second (before 0.12.6, a mean over three seconds) |
 | `peers` | addresses and ports that sent the game anything that second (relay pings included) |
 | `port` | the game's local port that received the most that second |
 | `gaps`, `gap_p50_ms`, `gap_p99_ms`, `gap_max_ms` | arrival gaps that second on the ports carrying the match; 64 is over 63 ms, except that from 0.12.3 a `gap_max_ms` over 63 ms is the gap's exact length |
