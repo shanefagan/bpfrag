@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.12.6
+Version:        0.13.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.13.0-1
+- Jitter to the microsecond (how much each gap differs from the one before) and the game's own sending (its longest gap and stalls, timed at send) in the health line, the timeline, D-Bus and matches.py.
+
 * Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.12.6-1
 - Loading is told from play by what the game does (sending, TCP, sending with nothing back), and a match doesn't end on quiet while the game loads over TCP; relay traffic and the server rate fixes; Wine programs' names on the allow and deny lists.
 

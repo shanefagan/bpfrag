@@ -1,3 +1,9 @@
+bpfrag (0.13.0-1) unstable; urgency=medium
+
+  * Jitter to the microsecond (how much each gap differs from the one before) and the game's own sending (its longest gap and stalls, timed at send) in the health line, the timeline, D-Bus and matches.py.
+
+ -- Shane Fagan <mail@shanefagan.com>  Mon, 09 Nov 2026 10:49:29 +0000
+
 bpfrag (0.12.6-1) unstable; urgency=medium
 
   * Loading is told from play by what the game does (sending, TCP, sending with nothing back), and a match doesn't end on quiet while the game loads over TCP; relay traffic and the server rate fixes; Wine programs' names on the allow and deny lists.
