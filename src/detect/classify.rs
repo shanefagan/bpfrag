@@ -90,17 +90,16 @@ impl ProcInfo {
     /// the library's appmanifest, the Windows .exe a Wine process runs, the
     /// process name.
     pub fn display_name(&self) -> String {
-        if let Some(t) = self.steam_title() {
-            return t;
-        }
-        if let Some(e) = self.wine_exe() {
-            return e;
-        }
-        if !self.comm.is_empty() {
+        let raw = if let Some(t) = self.steam_title() {
+            t
+        } else if let Some(e) = self.wine_exe() {
+            e
+        } else if !self.comm.is_empty() {
             self.comm.clone()
         } else {
             self.exe_name().to_string()
-        }
+        };
+        clean_name(&raw)
     }
 
     /// Paths that may sit inside a Steam library: cwd, exe, and every
@@ -187,6 +186,36 @@ impl ProcInfo {
         let stem = &base[..base.len() - 4];
         (!stem.is_empty()).then(|| stem.to_string())
     }
+}
+
+/// Longest name shown for a process.
+const NAME_MAX: usize = 64;
+
+/// A process's name made safe to log, publish and write to files. It comes
+/// from the process's own command line or a manifest in its user's home,
+/// so any local user can put anything in it: a newline would forge journal
+/// lines ("settings restored"), terminal escapes would rewrite the screen
+/// of whoever reads the log, bidirectional overrides would reorder what
+/// they see. Those become spaces, runs of spaces one, and the whole is cut
+/// to NAME_MAX characters.
+pub fn clean_name(s: &str) -> String {
+    let mut out = String::with_capacity(s.len().min(NAME_MAX * 4));
+    let mut n = 0;
+    for c in s.chars() {
+        let bad = c.is_control()
+            || matches!(c, '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}' | '\u{feff}');
+        let c = if bad { ' ' } else { c };
+        if c == ' ' && (out.is_empty() || out.ends_with(' ')) {
+            continue;
+        }
+        if n == NAME_MAX {
+            break;
+        }
+        out.push(c);
+        n += 1;
+    }
+    let out = out.trim_end().to_string();
+    if out.is_empty() { "game".into() } else { out }
 }
 
 fn is_exe(arg: &str) -> bool {
@@ -732,6 +761,21 @@ mod tests {
         assert_eq!(c.read(11).unwrap().display_name(), "Deadlock");
         assert_eq!(c.read(12).unwrap().display_name(), "Overwatch");
         assert_eq!(c.read(13).unwrap().display_name(), "cs2");
+    }
+
+    #[test]
+    fn names_from_a_process_are_safe_to_log() {
+        // a forged journal line, a terminal escape, a bidi override
+        assert_eq!(
+            clean_name("Deadlock\nNov 06 12:00:00 host bpfrag[1]: settings restored"),
+            "Deadlock Nov 06 12:00:00 host bpfrag[1]: settings restored"
+        );
+        assert_eq!(clean_name("\u{1b}[2J\u{1b}[31mGame"), "[2J [31mGame");
+        assert_eq!(clean_name("abc\u{202e}gpj.exe"), "abc gpj.exe");
+        assert_eq!(clean_name("  \t\r\n "), "game");
+        assert_eq!(clean_name(&"x".repeat(5000)).chars().count(), NAME_MAX);
+        assert_eq!(clean_name("Counter-Strike 2"), "Counter-Strike 2");
+        assert_eq!(clean_name("ゼルダ"), "ゼルダ");
     }
 
     #[test]
