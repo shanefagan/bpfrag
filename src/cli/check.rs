@@ -289,8 +289,13 @@ fn context() {
             // With PREEMPT_DYNAMIC the build choice is only the default:
             // debugfs shows the live mode as "(full)", and preempt= on the
             // command line overrides it at boot.
-            let live = read_trim("/sys/kernel/debug/sched/preempt")
-                .ok()
+            // Lockdown (integrity and up) refuses debugfs, and the kernel
+            // logs each attempt ("Lockdown: bpfrag: debugfs access is
+            // restricted"): don't try there.
+            let locked = crate::bpf::lockdown().is_some_and(|m| m != "none");
+            let live = (!locked)
+                .then(|| read_trim("/sys/kernel/debug/sched/preempt").ok())
+                .flatten()
                 .and_then(|s| {
                     s.split_whitespace()
                         .find_map(|w| w.strip_prefix('(')?.strip_suffix(')').map(String::from))
