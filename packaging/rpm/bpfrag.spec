@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.12.5
+Version:        0.12.6
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.12.6-1
+- Loading is told from play by what the game does (sending, TCP, sending with nothing back), and a match doesn't end on quiet while the game loads over TCP; relay traffic and the server rate fixes; Wine programs' names on the allow and deny lists.
+
 * Sat Nov 07 2026 Shane Fagan <mail@shanefagan.com> - 0.12.5-1
 - Nothing in a game's first 20 seconds starts a match (launch_secs): Deadlock sometimes pings Steam's relays as it launches before its menu is up.
 
