@@ -54,6 +54,10 @@ check-system: build
 selftest: build
     {{ sudo }} {{ bin }} --selftest
 
+# The selftest with many more random packets (a failure prints the seed that repeats it)
+fuzz packets="200000" seed="": build
+    {{ sudo }} env BPFRAG_FUZZ_PACKETS={{ packets }} {{ if seed != "" { "BPFRAG_FUZZ_SEED=" + seed } else { "" } }} {{ bin }} --selftest
+
 # Network namespace, fake game, noise, crash recovery, D-Bus (root)
 e2e: build
     {{ sudo }} tests/rig/e2e.sh {{ bin }}

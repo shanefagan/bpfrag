@@ -97,7 +97,9 @@ container). bpfrag itself must keep building with plain `cargo build
   for one). `--selftest` and the e2e rig check this.
 - Any change to a tc program gets a `--selftest` vector
   (`cli/selftest.rs`), which runs on the real kernel via
-  BPF_PROG_TEST_RUN.
+  BPF_PROG_TEST_RUN, and a `just fuzz` run: random and damaged packets
+  must come out the same length, passed on, with only their DSCP (and
+  the IPv4 checksum) changed.
 
 ## Rust conventions
 

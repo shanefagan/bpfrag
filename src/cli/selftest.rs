@@ -631,6 +631,160 @@ fn run_case_on(skel: &BpfSkel, c: &Case, ingress: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Packets the fuzzer starts from: the cases' own, both directions'
+/// bulk shapes, VLAN-tagged and non-IP frames.
+fn fuzz_seeds(cases: &[Case]) -> Vec<Vec<u8>> {
+    let mut seeds: Vec<Vec<u8>> = cases.iter().map(|c| c.pkt.clone()).collect();
+    seeds.push(pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, 40000, 443)));
+    seeds.push(pkt6(0, TCP, HOST_V6, PEER_V6, l4(TCP, 40000, 443)));
+    // IPv6 with a hop-by-hop header before UDP
+    let mut hbh = ipv6(0, 0x1, GAME_PORT);
+    hbh[20] = 0; // next header: hop-by-hop
+    hbh.splice(54..54, [17u8, 0, 1, 4, 0, 0, 0, 0]);
+    seeds.push(hbh);
+    // VLAN-tagged IPv4, ARP
+    let mut vlan = ipv4(0, GAME_PORT, 0x4000, 0);
+    vlan.splice(12..12, [0x81, 0x00, 0x00, 0x01]);
+    seeds.push(vlan);
+    let mut arp = eth(0x0806);
+    arp.extend([0u8; 28]);
+    seeds.push(arp);
+    seeds
+}
+
+/// xorshift64*: reproducible from its seed, which the output prints.
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+}
+
+/// One mutation of a seed: flipped bytes, a cut, an extension, or noise.
+fn mutate(rng: &mut Rng, seed: &[u8]) -> Vec<u8> {
+    let mut p = seed.to_vec();
+    match rng.below(5) {
+        0 => {
+            for _ in 0..1 + rng.below(8) {
+                let i = rng.below(p.len());
+                p[i] ^= 1 << rng.below(8);
+            }
+        }
+        1 => {
+            for _ in 0..1 + rng.below(4) {
+                let i = rng.below(p.len());
+                p[i] = rng.next() as u8;
+            }
+        }
+        2 => p.truncate(14 + rng.below(p.len() - 13)),
+        3 => p.extend((0..rng.below(64)).map(|_| rng.next() as u8)),
+        _ => {
+            let n = 14 + rng.below(120);
+            p = (0..n).map(|_| rng.next() as u8).collect();
+            // mostly IP, so the parsers past the Ethernet header get used
+            let et: &[u8] = match rng.below(3) {
+                0 => &[0x08, 0x00],
+                1 => &[0x86, 0xdd],
+                _ => &[p[12], p[13]],
+            };
+            let et = [et[0], et[1]];
+            p[12..14].copy_from_slice(&et);
+        }
+    }
+    p
+}
+
+fn v4_header_ok(p: &[u8]) -> Option<bool> {
+    if p.len() < 34 || p[12..14] != [0x08, 0x00] || p[14] >> 4 != 4 {
+        return None;
+    }
+    let ihl = usize::from(p[14] & 0x0f) * 4;
+    (ihl >= 20 && p.len() >= 14 + ihl).then(|| csum16(&p[14..14 + ihl]) == 0)
+}
+
+/// Random and mutated packets through the marker and the meter: each must
+/// be passed on (TCX_NEXT), the same length, with nothing changed but its
+/// DSCP (and the IPv4 header checksum to match), and an IPv4 header that
+/// was valid must stay valid. The verifier already proves the programs
+/// can't crash; this checks they never damage or drop a packet.
+fn check_fuzz(skel: &BpfSkel, seeds: &[Vec<u8>], n: usize, seed: u64) -> Result<String, String> {
+    let mut rng = Rng(seed | 1);
+    let (mut changed, mut refused) = (0, 0);
+    for i in 0..n {
+        let which = rng.below(seeds.len());
+        let pkt = mutate(&mut rng, &seeds[which]);
+        for (ingress, prog) in [
+            (false, &skel.progs.bpfrag_dscp),
+            (true, &skel.progs.bpfrag_rx),
+        ] {
+            let mut out = vec![0u8; pkt.len() + 64];
+            let input = ProgramInput {
+                data_in: Some(&pkt),
+                data_out: Some(&mut out),
+                ..Default::default()
+            };
+            let what = if ingress { "meter" } else { "marker" };
+            let fail = |e: String| format!("{what}, packet {i} ({}): {e}", hex(&pkt));
+            // The kernel turns some frames away before the program sees
+            // them (EINVAL from setting up the skb): nothing to check.
+            let res = match prog.test_run(input) {
+                Ok(r) => r,
+                Err(e) if e.kind() == libbpf_rs::ErrorKind::InvalidInput => {
+                    refused += 1;
+                    continue;
+                }
+                Err(e) => return Err(fail(format!("test_run failed: {e}"))),
+            };
+            check_verdict(res.return_value).map_err(fail)?;
+            let got = res
+                .data
+                .ok_or_else(|| fail("no output packet".into()))?
+                .to_vec();
+            if got.len() != pkt.len() {
+                return Err(fail(format!(
+                    "length changed {} -> {}",
+                    pkt.len(),
+                    got.len()
+                )));
+            }
+            let allowed: &[usize] = match &pkt[12..14] {
+                [0x08, 0x00] => &[15, 24, 25],
+                [0x86, 0xdd] => &[14, 15],
+                _ => &[],
+            };
+            for (j, (a, b)) in pkt.iter().zip(&got).enumerate() {
+                if a != b && !allowed.contains(&j) {
+                    return Err(fail(format!("byte {j} changed 0x{a:02x} -> 0x{b:02x}")));
+                }
+            }
+            if got != pkt {
+                changed += 1;
+                if v4_header_ok(&pkt) == Some(true) && v4_header_ok(&got) != Some(true) {
+                    return Err(fail("a valid IPv4 header checksum broken".into()));
+                }
+                if pkt[12..14] == [0x86, 0xdd]
+                    && (got[14] >> 4 != pkt[14] >> 4 || got[15] & 0x0f != pkt[15] & 0x0f)
+                {
+                    return Err(fail("IPv6 version or flow label changed".into()));
+                }
+            }
+        }
+    }
+    Ok(format!(
+        "{n} packets each way, {changed} remarked, {refused} turned away by the kernel, seed {seed:#x}"
+    ))
+}
+
+fn hex(p: &[u8]) -> String {
+    p.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 pub fn run(cfg: &Config) -> Result<bool> {
     let dscp = parse_dscp(&cfg.dscp.class)?;
     let over = cfg.dscp.override_app;
@@ -803,6 +957,27 @@ pub fn run(cfg: &Config) -> Result<bool> {
     let (n, f) = check_bulk(&mut skel, bulk, dscp)?;
     total += n;
     failed += f;
+    // BPFRAG_FUZZ_SEED repeats a run; BPFRAG_FUZZ_PACKETS runs more
+    let seed = std::env::var("BPFRAG_FUZZ_SEED")
+        .ok()
+        .and_then(|s| u64::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+        .unwrap_or_else(|| {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(1, |d| d.as_nanos() as u64)
+        });
+    let packets = std::env::var("BPFRAG_FUZZ_PACKETS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2000);
+    total += 1;
+    match check_fuzz(&skel, &fuzz_seeds(&cases), packets, seed) {
+        Ok(what) => println!("  PASS random and damaged packets passed on unharmed ({what})"),
+        Err(e) => {
+            failed += 1;
+            println!("  FAIL fuzzing: {e} (BPFRAG_FUZZ_SEED={seed:#x} repeats it)");
+        }
+    }
     println!("{}/{total} passed", total - failed);
     Ok(failed == 0)
 }
