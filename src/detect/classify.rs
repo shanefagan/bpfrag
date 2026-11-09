@@ -168,6 +168,19 @@ impl ProcInfo {
         })
     }
 
+    /// The names lists are matched against: comm, the executable's name
+    /// and, under Wine, the Windows program's (with and without .exe): a
+    /// Wine process's comm and executable can be "wine64-preloader" or a
+    /// thread's name, so a deny entry like "battle.net*" would miss it.
+    fn list_names(&self) -> Vec<String> {
+        let mut v = vec![self.comm.clone(), self.exe_name().to_string()];
+        if let Some(w) = self.wine_exe() {
+            v.push(format!("{w}.exe"));
+            v.push(w);
+        }
+        v
+    }
+
     fn wine_exe(&self) -> Option<String> {
         let a = self.args.iter().find(|a| is_exe(a))?;
         let base = a.rsplit(['/', '\\']).next()?;
@@ -333,7 +346,8 @@ impl Classifier {
             };
         }
 
-        let names = [p.comm.as_str(), p.exe_name()];
+        let owned = p.list_names();
+        let names: Vec<&str> = owned.iter().map(String::as_str).collect();
         if let Some(pat) = first_match(&self.allow, &names) {
             return Verdict::Game(format!("allow list '{pat}'"));
         }
@@ -477,8 +491,7 @@ impl ProcfsLookup {
     /// name). None if the process is gone.
     pub fn names(&self, tgid: u32) -> Option<(String, Vec<String>)> {
         let info = self.classifier.read(tgid)?;
-        let all = vec![info.comm.clone(), info.exe_name().to_string()];
-        Some((info.display_name(), all))
+        Some((info.display_name(), info.list_names()))
     }
 }
 
@@ -868,6 +881,21 @@ mod tests {
         );
         assert_eq!(c.read(50).unwrap().program(), "randomd");
         assert!(!c.classify(999).0.is_game());
+        // a store launcher under Wine, its comm a thread's name: the deny
+        // list still knows it by the Windows program
+        fp.add(
+            70,
+            1,
+            "MainThrd",
+            "/usr/bin/wine64-preloader",
+            &["C:\\Program Files (x86)\\Ubisoft\\upc.exe"],
+            &[],
+        );
+        assert!(
+            matches!(c.classify(70).0, Verdict::Excluded(ref r) if r.contains("upc")),
+            "{:?}",
+            c.classify(70).0
+        );
         assert_eq!(start_time(&fp.dir, 20), Some(4242));
         // started 4242 ticks after boot
         let hz = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
