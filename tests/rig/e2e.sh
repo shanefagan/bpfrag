@@ -415,7 +415,9 @@ if [ -n "$CSV" ]; then
   grep -q "fakeshooter: timeline written to $CSV" $W/d11f.log && ok "its path is logged" || bad "path: $(grep timeline $W/d11f.log)"
   head -1 "$CSV" | grep -q "^# bpfrag .*fakeshooter (pid $G) \[Steam app 4242\]; experiment: none" && ok "timeline header names the game" || bad "header: $(head -1 "$CSV")"
   sed -n 2p "$CSV" | grep -q "^t,unix,tier,udp_tx_pps,udp_rx_pps," && ok "timeline columns" || bad "columns: $(sed -n 2p "$CSV")"
-  [ "$(grep -vc '^#' "$CSV")" -ge 15 ] && ok "about a row a second" || bad "rows: $(grep -vc '^#' "$CSV")"
+  # the match starts a few seconds into the 19 (two of three windows
+  # from outside, steady traffic): 14 to 17 rows
+  [ "$(grep -vc '^#' "$CSV")" -ge 12 ] && ok "about a row a second" || bad "rows: $(grep -vc '^#' "$CSV")"
   awk -F, 'NR > 2 && $10 == "B:27015" && $4 >= 50' "$CSV" | grep -q . && ok "rows name the new server, with the game's rates" || bad "rows: $(tail -3 "$CSV")"
   awk -F, 'NR > 2 && $19 ~ /^[0-9]+$/' "$CSV" | grep -q . && ok "rows carry jitter in µs" || bad "jitter column: $(cut -d, -f14-19 "$CSV" | tail -3)"
   awk -F, 'NR > 2 && $20 ~ /^[0-9]+$/ && $20 < 100' "$CSV" | grep -q . && ok "rows carry the game's send gaps" || bad "send columns: $(cut -d, -f19-21 "$CSV" | tail -3)"
