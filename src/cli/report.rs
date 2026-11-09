@@ -80,11 +80,12 @@ pub fn run_report(config: Option<&Path>, run_dir: &Path) -> String {
         Some(c) => vec!["--config", c],
         None => vec![],
     };
-    let with_cfg = |flag: &str| -> String {
+    let with_cfg_args = |flags: &[&str]| -> String {
         let mut a = cfg_args.clone();
-        a.push(flag);
+        a.extend_from_slice(flags);
         run(&me, &a)
     };
+    let with_cfg = |flag: &str| with_cfg_args(&[flag]);
 
     let mut out = String::new();
     let _ = write!(
@@ -114,7 +115,8 @@ pub fn run_report(config: Option<&Path>, run_dir: &Path) -> String {
     section(
         &mut out,
         "bpfrag --monitor 0",
-        &run(&me, &["--monitor", "0"]),
+        // with the config: its run_dir is where the stats are
+        &with_cfg_args(&["--monitor", "0"]),
     );
     section(
         &mut out,
