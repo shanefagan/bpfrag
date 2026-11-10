@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.14.0
+Version:        0.14.1
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Tue Nov 10 2026 Shane Fagan <mail@shanefagan.com> - 0.14.1-1
+- Fixes from a full code review: an outage of 2 to 4 seconds counts as a stall; a game sitting in its menu no longer stops a second game being detected; --restore runs when the config file doesn't load; the journal records the value the kernel holds after a write; the game's send timing covers only ports that hear from outside.
+
 * Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.14.0-1
 - Hardening: process-supplied names made safe to log, no spreadsheet formulas in timelines, IPv6 prefixes redacted in reports, a packet fuzzer in the selftest (just fuzz), cargo-deny and a unit sandboxing gate in CI; the game's send stalls no longer count a lobby's keepalives; --check doesn't touch debugfs under lockdown.
 

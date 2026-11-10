@@ -90,7 +90,7 @@ Limits to keep in mind:
   stall is the flow going quiet and coming back at game rate. Don't
   compare stall counts across that version (the CSV has a version
   column).
-- **An outage of two to four seconds is a stall** (after 0.14.0). The
+- **An outage of two to four seconds is a stall** (0.14.1). The
   meter leaves quiet stretches of 2 s or more out of its gaps, because
   nearly all of them are a lobby, a menu or a load; a lost connection is
   only counted once three whole readings pass with nothing received. An
