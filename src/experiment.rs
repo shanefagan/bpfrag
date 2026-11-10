@@ -43,12 +43,13 @@ pub const RANDOM: &str = "random";
 /// The pool for a wired connection: everything but Wi-Fi power save, and
 /// NIC coalescing, whose effect (microseconds) the gap figures (1 ms) can't
 /// show; on 2026-11-02 what it did change was how much busy polling
-/// found to do. `setting = "coalescing"` still tests it on its own.
+/// found to do. `setting = "coalescing"` still tests it on its own. So
+/// does `setting = "backlog"`: `netdev_max_backlog` only matters with RPS
+/// or virtual devices, and its arms never differed (2026-11-09 and -10).
 pub const WIRED_POOL: &[&str] = &[
     "dscp",
     "busy_polling",
     "socket_buffers",
-    "backlog",
     "budget",
     "writeback",
     "bulk",
@@ -61,7 +62,6 @@ pub const WIFI_POOL: &[&str] = &[
     "wifi_power_save",
     "busy_polling",
     "socket_buffers",
-    "backlog",
     "budget",
     "writeback",
     "bulk",

@@ -23,6 +23,9 @@ Deadlock, with some Trackmania.
   (7 on, 5 off). It runs when on (20–30 packets a second, machine-wide). Sockets
   opened during an "on" match keep busy-polling after it, until they
   close, so an "off" match straight after an "on" one isn't fully off.
+- **Receive budget and backlog** (`netdev_budget*`,
+  `netdev_max_backlog`): no difference in the gaps, jitter or stalls over
+  19 Deadlock matches (2026-11-04 to -10). What made matches differ was the relay they were on.
 - **Socket buffers:** the game's own sockets never dropped a packet in
   play, with or without bigger buffers (15 matches, 2026-11-02 to -08).
   The one time they did, 4 packets with the kernel's default buffers,
@@ -95,6 +98,8 @@ conditions, the number of matches on each side, and the medians.
 | 2026-11-02 | CachyOS, wired (`eno1`), bpfrag 0.9.2 tuning, Deadlock, ktorrent seeding and downloading throughout (marked LE) | NIC coalescing on (0–10 µs) / off (NIC default) | 5 / 5 | 32 / 31 ms | 1016 / 573 ms | 2 / 1 | No difference in the gaps (1 ms resolution can't show a microsecond effect, and every stall and long gap was loading or the end screen). Busy polling did far less with coalescing on: 31–37 busy-polled packets a second against 114–192, no overlap (permutation p = 0.047 on medians) |
 | 2026-11-03 | CachyOS, wired (`eno1`), bpfrag 0.11.1 tuning, Deadlock, coalescing at 10 µs in both arms, ktorrent seeding lightly (marked LE) | busy polling on (`busy_poll`/`busy_read` 25–50) / off | 3 / 2 | 18 / 17.5 ms | 41 / 38 ms | 0 / 0 | No difference in the gaps (1 ms resolution can't show it). Busy polling was active when on: 21–30 busy-polled packets a second, machine-wide, against 4 and then 0 when off |
 | 2026-11-06 | CachyOS, wired (`eno1`), bpfrag 0.12.2 tuning, Deadlock, coalescing not recorded | busy polling on / off | 4 / 3 | 18 / 18 ms | 80 / 70 ms (relay changes) | 0 / 0 | No difference. Busy polling ran when on (90,000–300,000 busy-polled packets a match against 50–100 off). With 2026-11-03: 7 on, 5 off, the same gaps either way |
+| 2026-11-09 | CachyOS, wired (`eno1`), bpfrag 0.14.0 tuning, Deadlock; figures from the timelines (each match's median of the per-second 99% gap, its longest gap in play) | `netdev_budget`/`netdev_budget_usecs` raised (on) / left at the distribution's (off) | 6 / 3 | 17.5 / 17 ms | 55 / 64 ms | 0 / 0 | No difference. Jitter 580–660 µs on against 480–860 µs off. The one stall (635 ms, an "on" match) was the server catching up, and the uneven match of the evening (an "off" one) was its relay |
+| 2026-11-04 to -10 | The same, bpfrag 0.12.0 to 0.14.0 | `netdev_max_backlog` raised to 5000 (on) / left at CachyOS's 4096 (off) | 2 / 8 | 18 / 18 ms | 81 / 62 ms | 0 / 0 | No difference, with too few "on" matches to say more than that. The matches differed by relay: one "off" match on a worse one had 2.5 ms of jitter against 0.7–0.9 ms in the others. Taken out of the random pool after 0.14.1: on a NIC with NAPI and no RPS the queue it sizes isn't used ([knobs.md](knobs.md#netdev_max_backlog)), and here the default was already 4096 |
 
 ## Open questions
 
