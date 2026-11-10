@@ -441,6 +441,8 @@ const LOADING_HOLD: u32 = 3;
 /// mean its server is gone (as in silence.rs).
 const SILENT_READINGS: u32 = 3;
 const LOADING_MAX: u32 = 60;
+/// Readings kept for judging a long quiet stretch the meter reports.
+const RECENT: usize = 8;
 
 type PortReadings = Vec<(u16, bpf_intf::port_rx)>;
 
@@ -491,6 +493,11 @@ struct Play {
     /// sending over the whole match (for one too short for play).
     prev_send_stalls: Option<u64>,
     send_whole: Option<SendSummary>,
+    /// What the game sent and how many updates arrived in each of the
+    /// last RECENT readings, and an outage (ns) counted as a stall in the
+    /// latest one.
+    recent: VecDeque<(u64, u64)>,
+    outage_now: Option<u64>,
     /// Readings in a row sending with nothing back, and at the usual rate.
     unanswered: u32,
     usual_run: u32,
@@ -576,6 +583,35 @@ impl Play {
         let rate = median(&self.rates).unwrap_or(0);
         let usual_ms = median(&self.intervals).unwrap_or(0);
         d.updates * 2 >= rate && interval.is_some_and(|ms| ms * 2 <= usual_ms * 3)
+    }
+
+    /// Was a quiet stretch of `quiet_ns` that just ended an outage: the
+    /// server's packets stopped while the game went on sending at its
+    /// usual rate? The meter leaves stretches of GAP_IDLE_MS or more out
+    /// of its gaps, since most are a lobby or a load, where the game stops
+    /// sending too (or sends a keepalive a second). One that covered
+    /// SILENT_READINGS readings or more is a lost connection, which
+    /// silence.rs counts.
+    fn outage(&self, quiet_ns: u64) -> bool {
+        if quiet_ns == 0 || self.sent.len() < LEARN {
+            return false;
+        }
+        let usual = median(&self.sent).unwrap_or(0);
+        // the readings the stretch reached into, and those it covered
+        let reach = (quiet_ns / 1_000_000_000) as usize + 2;
+        let covered: Vec<u64> = self
+            .recent
+            .iter()
+            .rev()
+            .take(reach)
+            .filter(|(_, updates)| *updates == 0)
+            .map(|(sent, _)| *sent)
+            .collect();
+        !covered.is_empty()
+            && covered.len() < SILENT_READINGS as usize
+            && covered
+                .iter()
+                .all(|sent| sent.saturating_mul(QUIET_SENDING) >= usual)
     }
 
     /// One reading: the meter's per-port statistics, which reading of the
@@ -672,6 +708,7 @@ impl Play {
             send_max_ns,
             ..Reading::default()
         };
+        let mut quiet_ns = 0;
         for ((_, d), (_, r)) in delta.iter().zip(ports) {
             if busiest == 0 || d.updates.saturating_mul(10) < busiest {
                 continue;
@@ -680,7 +717,19 @@ impl Play {
             if r.reading == reading {
                 rec.max_ns = rec.max_ns.max(r.reading_max_ns);
             }
+            if d.quiets > 0 {
+                quiet_ns = quiet_ns.max(r.quiet_ns);
+            }
         }
+        self.outage_now = (!loading && self.outage(quiet_ns)).then_some(quiet_ns);
+        if self.outage_now.is_some() {
+            rec.stalls += 1;
+            rec.max_ns = rec.max_ns.max(quiet_ns);
+        }
+        if self.recent.len() == RECENT {
+            self.recent.pop_front();
+        }
+        self.recent.push_back((sent_now, updates_now));
         self.readings.push(rec);
         if let Some(d) = gaps {
             let interval = d.quantile_ms(0.5);
@@ -767,6 +816,7 @@ fn since(now: &[(u16, bpf_intf::port_rx)], base: &[(u16, bpf_intf::port_rx)]) ->
                 d.pkts = r.pkts - b.pkts;
                 d.updates = r.updates.saturating_sub(b.updates);
                 d.stalls = r.stalls.saturating_sub(b.stalls);
+                d.quiets = r.quiets.saturating_sub(b.quiets);
                 d.fine_n = r.fine_n.saturating_sub(b.fine_n);
                 d.sum_gap_ns = r.sum_gap_ns.saturating_sub(b.sum_gap_ns);
                 d.jitter_n = r.jitter_n.saturating_sub(b.jitter_n);
@@ -911,6 +961,14 @@ impl Tracker {
             silence_longest_secs: self.silence.longest(),
             ..Default::default()
         });
+    }
+
+    /// Seconds the server's packets stopped for, ending in the latest
+    /// reading, while the game kept sending: too long for the meter to
+    /// call a gap (2 s or more), too short to be a lost connection, and
+    /// counted as a stall.
+    pub fn outage(&self) -> Option<f64> {
+        self.play.outage_now.map(|ns| ns as f64 / 1e9)
     }
 
     /// One reading of the game's UDP packet counts so far (`udp`: sent,
@@ -1100,6 +1158,20 @@ mod tests {
             self.r.hist[BUCKETS - 1] += 1;
             self.gap(ms * 1_000_000);
             self.second(p, 50, 15, 1)
+        }
+
+        /// The server's packets coming back after `ms` of nothing, longer
+        /// than the meter counts as a gap.
+        fn back_after(&mut self, p: &mut Play, ms: u64) -> Option<Gaps> {
+            self.r.quiets += 1;
+            self.r.quiet_ns = ms * 1_000_000;
+            self.second(p, 50, 15, 1)
+        }
+
+        /// A second with nothing from the server while the game sends on.
+        fn unanswered(&mut self, p: &mut Play) -> Option<Gaps> {
+            self.tx += 64;
+            self.silent(p)
         }
 
         /// A second with nothing from the game's server.
@@ -1568,5 +1640,79 @@ mod tests {
             "{}",
             b.summary()
         );
+    }
+
+    /// A minute of play at 64 updates a second, settled.
+    fn playing(port: &mut Port) -> Play {
+        let mut p = Play::default();
+        p.start();
+        port.second(&mut p, 64, 15, 1);
+        let (ports, _) = port.next();
+        p.settle(&ports);
+        for _ in 0..30 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        p
+    }
+
+    #[test]
+    fn a_three_second_outage_is_a_stall() {
+        // too long for the meter's gaps (2 s), too short for a lost
+        // connection (three whole readings of nothing)
+        let mut port = Port::new();
+        let mut p = playing(&mut port);
+        port.unanswered(&mut p);
+        port.unanswered(&mut p);
+        port.back_after(&mut p, 2_900);
+        assert_eq!(p.outage_now, Some(2_900_000_000));
+        let mut g = None;
+        for _ in 0..20 {
+            g = port.second(&mut p, 64, 15, 1);
+        }
+        assert_eq!(p.outage_now, None, "only in the reading it ended in");
+        let g = g.unwrap();
+        assert_eq!(g.stalls, 1, "{g:?}");
+        assert_eq!(g.max_gap_ns, 2_900_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn a_quiet_stretch_the_game_didnt_send_through_isnt_an_outage() {
+        let mut port = Port::new();
+        let mut p = playing(&mut port);
+        // a load or a pause: neither side sends
+        port.silent(&mut p);
+        port.silent(&mut p);
+        port.back_after(&mut p, 2_900);
+        assert_eq!(p.outage_now, None);
+        for _ in 0..20 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        // a lobby: a keepalive a second each way for a while
+        for _ in 0..6 {
+            port.tx += 1;
+            port.r.pkts += 1;
+            port.r.updates += 1;
+            let (ports, reading) = port.next();
+            p.update(&ports, reading, port.game());
+        }
+        port.back_after(&mut p, 6_000);
+        assert_eq!(p.outage_now, None);
+        let mut g = None;
+        for _ in 0..20 {
+            g = port.second(&mut p, 64, 15, 1);
+        }
+        assert_eq!(g.unwrap().stalls, 0);
+    }
+
+    #[test]
+    fn a_lost_connection_isnt_counted_twice() {
+        // three readings of nothing or more is silence.rs's to count
+        let mut port = Port::new();
+        let mut p = playing(&mut port);
+        for _ in 0..4 {
+            port.unanswered(&mut p);
+        }
+        port.back_after(&mut p, 4_600);
+        assert_eq!(p.outage_now, None);
     }
 }

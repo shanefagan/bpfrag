@@ -80,7 +80,8 @@ struct port_rx {
 	__u32 stalls;		/* quiet stretches of GAP_STALL_MS .. GAP_IDLE_MS */
 	__u32 napi_id;		/* NAPI instance (receive queue) of the latest packet */
 	__u32 reading;		/* the reading reading_max_ns is for (rx_reading) */
-	__u32 _pad;
+	__u32 quiets;		/* quiet stretches of GAP_IDLE_MS or more */
+	__u64 quiet_ns;		/* the latest of them */
 	/* Gaps at game rate (not stalls), to the nanosecond: how many, their
 	 * sum, and how much each differed from the one before (jitter, as
 	 * RFC 3550 means it but unsmoothed). The histogram's 1 ms buckets

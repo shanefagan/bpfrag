@@ -527,6 +527,52 @@ fn check_readings(skel: &mut BpfSkel) -> Result<String, String> {
     ))
 }
 
+/// A quiet stretch of GAP_IDLE_MS or more isn't a gap or a stall, but is
+/// reported on its own once the flow is back at game rate (GAP_RESUME
+/// fast gaps), for user space to tell an outage from a lobby.
+fn check_quiet(skel: &BpfSkel) -> Result<String, String> {
+    let game = || {
+        crate::bpf::maps::read_port_rx(skel)
+            .into_iter()
+            .find(|(p, _)| *p == GAME_PORT)
+            .map(|(_, r)| r)
+            .ok_or("no arrivals on the game port")
+    };
+    let before = game()?;
+    let idle = u64::from(crate::bpf_intf::GAP_IDLE_MS);
+    std::thread::sleep(std::time::Duration::from_millis(idle + 50));
+    let pkt = to_port(ipv4(0, OTHER_PORT, 0x4000, 0), GAME_PORT);
+    for i in 0..=crate::bpf_intf::GAP_RESUME {
+        if i > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(6));
+        }
+        let input = ProgramInput {
+            data_in: Some(&pkt),
+            ..Default::default()
+        };
+        let res = skel
+            .progs
+            .bpfrag_rx
+            .test_run(input)
+            .map_err(|e| format!("test_run failed: {e}"))?;
+        check_verdict(res.return_value)?;
+    }
+    let r = game()?;
+    if r.quiets != before.quiets + 1 || r.quiet_ns < idle * 1_000_000 {
+        return Err(format!(
+            "{} quiet stretches (were {}), the latest {} ns: expected one more, of {idle} ms or over",
+            r.quiets, before.quiets, r.quiet_ns
+        ));
+    }
+    if r.stalls != before.stalls || r.max_gap_ns != before.max_gap_ns {
+        return Err(format!(
+            "stalls {} (were {}), longest gap {} ns (was {}): a long quiet stretch isn't either",
+            r.stalls, before.stalls, r.max_gap_ns, before.max_gap_ns
+        ));
+    }
+    Ok(format!("{} ms", r.quiet_ns / 1_000_000))
+}
+
 /// On loopback (flagged local), game packets are counted against the
 /// interface but not timed or counted per sender: the game talking to
 /// itself isn't the match.
@@ -944,6 +990,14 @@ pub fn run(cfg: &Config) -> Result<bool> {
         Err(e) => {
             failed += 1;
             println!("  FAIL longest gap per reading: {e}");
+        }
+    }
+    total += 1;
+    match check_quiet(&skel) {
+        Ok(what) => println!("  PASS long quiet stretch reported apart from gaps ({what})"),
+        Err(e) => {
+            failed += 1;
+            println!("  FAIL long quiet stretch reported apart from gaps: {e}");
         }
     }
     total += 1;

@@ -701,9 +701,11 @@ static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 	 * A stall is the flow going quiet and then coming back at game rate.
 	 * From the first slow gap, hold everything until GAP_RESUME fast gaps
 	 * in a row say the game's tick rate is back, then count the quiet
-	 * stretch as one gap. If it lasted GAP_IDLE_MS or more it was a lobby,
-	 * a menu or loading (games keep sending keepalives there, Deadlock
-	 * about one a second), and isn't counted at all.
+	 * stretch as one gap. If it lasted GAP_IDLE_MS or more it was most
+	 * likely a lobby, a menu or loading (games keep sending keepalives
+	 * there, Deadlock about one a second) and isn't counted as a gap; it
+	 * is reported on its own (quiets, quiet_ns), since user space knows
+	 * whether the game kept sending through it, which makes it an outage.
 	 */
 	if (ms >= GAP_STALL_MS) {
 		pr->prev_gap_ns = 0;
@@ -720,8 +722,12 @@ static __always_inline void record_arrival(__u32 port, __u32 napi_id)
 	pr->resume_ns += gap;
 	if (++pr->resume_n < GAP_RESUME)
 		return;
-	if (pr->held_ns < (__u64)GAP_IDLE_MS * 1000000)
+	if (pr->held_ns < (__u64)GAP_IDLE_MS * 1000000) {
 		count_gap(pr, pr->held_ns);
+	} else {
+		pr->quiets++;
+		pr->quiet_ns = pr->held_ns;
+	}
 	pr->held_ns = 0;
 	pr->resume_ns = 0;
 	pr->resume_n = 0;

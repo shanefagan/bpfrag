@@ -25,7 +25,7 @@
 //! | `stalls` | stalls the meter finished counting this second |
 //! | `send_gap_max_ms`, `send_stalls` | the game's own sending, timed as it sends: its longest gap that second (ms) and stalls (100 ms to 2 s) ended in it; a stall in `stalls` with none here is the network or the server |
 //! | `jitter_us` | how much each gap at game rate differed from the one before, on average, to the microsecond |
-//! | `events` | match start and end, tier and server changes |
+//! | `events` | match start and end, tier and server changes, outages |
 //!
 //! Addresses aren't written, only letters, so a timeline can be shared.
 //! Timelines live in the run directory (`/run/bpfrag`, in memory), so a

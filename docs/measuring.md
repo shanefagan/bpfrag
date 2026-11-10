@@ -22,8 +22,8 @@ show what reaches the machine, not what the game does with it.
 |---|---|---|
 | half ≤N ms | median gap between the game's incoming updates (1 ms buckets), while the game sends at its usual rate | the server's tick rate: about 16 ms at 64 a second |
 | 99% ≤N ms | the gap 99% of updates beat, while the game sends at its usual rate | jitter anywhere on the path: Wi-Fi, queues, the internet |
-| longest N ms | the longest gap counted (pauses of 2 s or more aren't) | one-off hiccups, Wi-Fi power save |
-| stalls | the flow went quiet for 100 ms to 2 s, then came back at game rate | what a player feels as rubber-banding |
+| longest N ms | the longest gap counted (pauses of 2 s or more aren't, unless the game kept sending through them: see below) | one-off hiccups, Wi-Fi power save |
+| stalls | the flow went quiet for 100 ms to 2 s, then came back at game rate; or for longer while the game kept sending | what a player feels as rubber-banding |
 | jitter N µs | how much each gap at game rate differed from the one before, on average, to the microsecond (0.13.0) | the path and the server mostly; settings on this machine by microseconds |
 | the game's own sending | its longest gap between sends and its stalls over play, timed as it calls send (0.13.0) | the game or this machine: a freeze, a hitch. A stall coming in with none going out was the network or the server |
 | socket buffer drops | a UDP receive buffer overflowed (`RcvbufErrors`), anywhere on the machine; "(N the game's)" is how many were the game's own sockets | socket buffers, a game that stopped reading |
@@ -90,6 +90,17 @@ Limits to keep in mind:
   stall is the flow going quiet and coming back at game rate. Don't
   compare stall counts across that version (the CSV has a version
   column).
+- **An outage of two to four seconds is a stall** (after 0.14.0). The
+  meter leaves quiet stretches of 2 s or more out of its gaps, because
+  nearly all of them are a lobby, a menu or a load; a lost connection is
+  only counted once three whole readings pass with nothing received. An
+  outage in between showed in neither figure. Now the meter reports those
+  stretches separately, and one counts as a stall (and as the longest gap)
+  when the game kept sending at a quarter of its usual rate or more
+  through every reading it covered: in a lobby or a load the game stops
+  sending too. The log and the timeline's `events` say "nothing from the
+  server for N s". Only in play (a minute in, not loading), like the other
+  gap figures.
 - **Gaps measure jitter, not delay.** A queue somewhere on the path that
   holds a steady 80 ms still delivers packets every ~16 ms, so the gaps
   look perfect while the player's latency has doubled. The game's own ping
@@ -249,7 +260,7 @@ bpfrag version, the game and the experiment arm, then a row a second:
 | `stalls` | stalls that finished that second |
 | `jitter_us` | how much each gap at game rate differed from the one before, on average, in µs (0.13.0) |
 | `send_gap_max_ms`, `send_stalls` | the game's own sending that second: its longest gap between sends and the stalls (100 ms to 2 s) that ended in it (0.13.0) |
-| `events` | match start and end, tier changes, server changes |
+| `events` | match start and end, tier changes, server changes, the server going quiet for 2 s or more while the game kept sending (a stall in the match's summary; the `stalls` column is the meter's own count and doesn't include it) |
 
 There are no addresses in it, so it can be attached to a "Share match
 data" issue as it is. Any spreadsheet or `pandas.read_csv(path,

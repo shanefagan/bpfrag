@@ -713,6 +713,16 @@ impl<'a> Tuner<'a> {
                 send: send_reading(&sends, &ports, reading),
             },
         );
+        if let Some(d) = self.health.outage() {
+            info!(
+                "{}: nothing from the server for {d:.1} s while the game kept sending; \
+                 counted as a stall",
+                s.name
+            );
+            if let Some(t) = self.timeline.as_mut() {
+                t.event(format!("nothing from the server for {d:.1} s (a stall)"));
+            }
+        }
         if let Some(x) = samples.iter().find(|x| x.tgid == s.tgid) {
             let outside = self.last_paths.map(|p| p.outside_pps);
             let udp = (x.tx_pkts, x.rx_pkts);
