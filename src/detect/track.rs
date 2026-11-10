@@ -7,6 +7,8 @@
 
 use std::collections::VecDeque;
 
+use crate::config::Detect;
+
 /// Cumulative per-process counters as read from the BPF map.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Sample {
@@ -84,6 +86,57 @@ impl Track {
             idle_ticks: 0,
             ifindex: s.ifindex,
         }
+    }
+
+    /// Add a window, keeping the last `keep`.
+    pub(super) fn push(&mut self, w: Window, keep: usize) {
+        self.hist.push_back(w);
+        while self.hist.len() > keep {
+            self.hist.pop_front();
+        }
+    }
+
+    /// Take the next reading of the counters: the rates since the last one
+    /// become a window. `others_pps` is what of it went to and came from
+    /// peers other than the game's server.
+    pub(super) fn advance(&mut self, s: &Sample, dt: f64, others_pps: f64, keep: usize) {
+        let prev = self.prev;
+        let dtx = s.tx_pkts - prev.tx_pkts;
+        let drx = s.rx_pkts - prev.rx_pkts;
+        let dbytes =
+            s.tx_bytes.saturating_sub(prev.tx_bytes) + s.rx_bytes.saturating_sub(prev.rx_bytes);
+        let pkts = dtx + drx;
+        self.prev = *s;
+        if s.ifindex != 0 {
+            self.ifindex = s.ifindex;
+        }
+        self.push(
+            Window {
+                tx_pps: dtx as f64 / dt,
+                rx_pps: drx as f64 / dt,
+                avg_size: if pkts > 0 {
+                    dbytes as f64 / pkts as f64
+                } else {
+                    0.0
+                },
+                others_pps,
+                tcp_rx_bps: s.tcp_rx_bytes.saturating_sub(prev.tcp_rx_bytes) as f64 / dt,
+            },
+            keep,
+        );
+        self.idle_ticks = if pkts == 0 { self.idle_ticks + 1 } else { 0 };
+    }
+
+    /// Does the traffic look like a game's netcode right now: enough of
+    /// it, both ways, in small packets, at an even rate?
+    pub(super) fn looks_like_netcode(&self, cfg: &Detect) -> bool {
+        let l = self.last();
+        !self.hist.is_empty()
+            && self.smooth() >= cfg.min_pps as f64
+            && l.tx_pps >= cfg.min_dir_pps as f64
+            && l.rx_pps >= cfg.min_dir_pps as f64
+            && l.avg_size <= cfg.max_avg_packet as f64
+            && self.jitter() <= cfg.max_jitter
     }
 
     pub(super) fn last(&self) -> Window {

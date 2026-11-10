@@ -78,6 +78,12 @@ const LOAD_GRACE_SECS: f64 = 30.0;
 /// few seconds.
 const PASS_OVER_SECS: f64 = 60.0;
 
+/// Seconds a process the classifier turned down isn't asked about again.
+const IGNORE_SECS: f64 = 30.0;
+
+/// Windows without a packet after which a process's history is dropped.
+const FORGET_IDLE_WINDOWS: u32 = 60;
+
 /// Consecutive windows that must agree on a higher tier before it is
 /// applied. Tiers only go up within a match.
 const CONFIDENCE_UP: u32 = 3;
@@ -217,6 +223,19 @@ struct Watched {
     /// traffic from outside, on the detector's clock.
     since: f64,
     outside_since: Option<f64>,
+}
+
+/// A process whose traffic has looked like netcode for long enough to ask
+/// the classifier about.
+struct Candidate {
+    tgid: u32,
+    /// Mean packets a second over its history, and the same per direction
+    /// (sent, received).
+    pps: f64,
+    dirs: (f64, f64),
+    ifindex: u32,
+    /// When its steady traffic began (monotonic seconds).
+    began: f64,
 }
 
 /// What the detector needs to know about a process. In the daemon this is
@@ -395,17 +414,33 @@ impl Detector {
         samples: &[Sample],
         procs: &mut dyn ProcessLookup,
     ) -> Vec<Action> {
-        let mut actions = Vec::new();
         let dt = dt.max(0.001);
-        let hist_len = self.cfg.history;
         if let Some(p) = self.pending_paths.take() {
             self.paths.push_back(p);
             while self.paths.len() > 2 * QUIET_WINDOWS {
                 self.paths.pop_front();
             }
         }
+        self.update_tracks(now, dt, samples);
+        let mut actions = self.advance_session(now, dt, procs);
+        actions.extend(self.advance_watch(now, dt, procs));
+        let candidates = self.candidates(now, dt);
+        actions.extend(self.consider(now, candidates, procs));
+        actions
+    }
 
-        // 1. Update every track with this window's deltas.
+    /// The process of the match, or failing that of the watched game.
+    fn current_tgid(&self) -> Option<u32> {
+        self.session
+            .as_ref()
+            .map(|s| s.info.tgid)
+            .or(self.watched.as_ref().map(|w| w.tgid))
+    }
+
+    /// Step 1 of a tick: every process's history gets this window, and
+    /// processes that have gone are forgotten.
+    fn update_tracks(&mut self, now: f64, dt: f64, samples: &[Sample]) {
+        let hist_len = self.cfg.history;
         let mut seen = std::collections::HashSet::new();
         for s in samples {
             seen.insert(s.tgid);
@@ -423,101 +458,78 @@ impl Detector {
                 self.ignored.remove(&s.tgid);
                 continue;
             }
-            let prev = t.prev;
-            let dtx = s.tx_pkts - prev.tx_pkts;
-            let drx = s.rx_pkts - prev.rx_pkts;
-            let dbytes = (s.tx_bytes.saturating_sub(prev.tx_bytes))
-                + (s.rx_bytes.saturating_sub(prev.rx_bytes));
-            let pkts = dtx + drx;
-            let w = Window {
-                tx_pps: dtx as f64 / dt,
-                rx_pps: drx as f64 / dt,
-                avg_size: if pkts > 0 {
-                    dbytes as f64 / pkts as f64
-                } else {
-                    0.0
-                },
-                others_pps: if self.session.as_ref().is_some_and(|x| x.info.tgid == s.tgid) {
-                    std::mem::take(&mut self.pending_others)
-                } else {
-                    0.0
-                },
-                tcp_rx_bps: s.tcp_rx_bytes.saturating_sub(prev.tcp_rx_bytes) as f64 / dt,
+            // Packets to and from peers other than the server are only
+            // known for the game of the match.
+            let others_pps = if self.session.as_ref().is_some_and(|x| x.info.tgid == s.tgid) {
+                std::mem::take(&mut self.pending_others)
+            } else {
+                0.0
             };
-            t.prev = *s;
-            if s.ifindex != 0 {
-                t.ifindex = s.ifindex;
-            }
-            t.hist.push_back(w);
-            while t.hist.len() > hist_len {
-                t.hist.pop_front();
-            }
-            t.idle_ticks = if pkts == 0 { t.idle_ticks + 1 } else { 0 };
+            t.advance(s, dt, others_pps, hist_len);
         }
         // The BPF exit hook deletes a process's map entry, so a track that
         // vanished belongs to a process that exited. Forget it at once, so a
         // later process reusing the pid starts from scratch. The session's
         // own process is kept: the session logic decides when it is over.
-        let session_tgid = self
-            .session
-            .as_ref()
-            .map(|s| s.info.tgid)
-            .or(self.watched.as_ref().map(|w| w.tgid));
+        let current = self.current_tgid();
         let gone: Vec<u32> = self
             .tracks
             .keys()
             .copied()
-            .filter(|tgid| !seen.contains(tgid) && Some(*tgid) != session_tgid)
+            .filter(|tgid| !seen.contains(tgid) && Some(*tgid) != current)
             .collect();
         for tgid in gone {
             self.tracks.remove(&tgid);
             self.ignored.remove(&tgid);
         }
-        if let Some(t) = session_tgid
+        if let Some(t) = current
             .filter(|tgid| !seen.contains(tgid))
             .and_then(|tgid| self.tracks.get_mut(&tgid))
         {
-            t.hist.push_back(Window::default());
-            while t.hist.len() > hist_len {
-                t.hist.pop_front();
-            }
+            t.push(Window::default(), hist_len);
             t.idle_ticks += 1;
         }
         self.tracks
-            .retain(|tgid, t| Some(*tgid) == session_tgid || t.idle_ticks < 60);
+            .retain(|tgid, t| Some(*tgid) == current || t.idle_ticks < FORGET_IDLE_WINDOWS);
         self.ignored.retain(|_, until| *until > now);
+    }
 
-        // 2. Advance the active session, or the watched game, if any.
-        actions.extend(self.advance_session(now, dt, procs));
-        actions.extend(self.advance_watch(now, dt, procs));
-        let session_tgid = self
-            .session
-            .as_ref()
-            .map(|s| s.info.tgid)
-            .or(self.watched.as_ref().map(|w| w.tgid));
-
-        // 3. Look for a new session.
+    /// Step 3 of a tick, first half: the processes whose traffic has looked
+    /// like netcode for long enough, other than the one already in hand.
+    fn candidates(&mut self, now: f64, dt: f64) -> Vec<Candidate> {
+        let current = self.current_tgid();
         let cfg = &self.cfg;
         let mut candidates = Vec::new();
         for (&tgid, t) in self.tracks.iter_mut() {
-            let l = t.last();
-            let steady_now = !t.hist.is_empty()
-                && t.smooth() >= cfg.min_pps as f64
-                && l.tx_pps >= cfg.min_dir_pps as f64
-                && l.rx_pps >= cfg.min_dir_pps as f64
-                && l.avg_size <= cfg.max_avg_packet as f64
-                && t.jitter() <= cfg.max_jitter;
-            t.steady = if steady_now { t.steady + 1 } else { 0 };
-            if t.steady >= cfg.steady_windows && Some(tgid) != session_tgid {
-                candidates.push((
+            t.steady = if t.looks_like_netcode(cfg) {
+                t.steady + 1
+            } else {
+                0
+            };
+            if t.steady >= cfg.steady_windows && Some(tgid) != current {
+                candidates.push(Candidate {
                     tgid,
-                    t.smooth(),
-                    t.smooth_dirs(),
-                    t.ifindex,
-                    now - f64::from(t.steady) * dt,
-                ));
+                    pps: t.smooth(),
+                    dirs: t.smooth_dirs(),
+                    ifindex: t.ifindex,
+                    began: now - f64::from(t.steady) * dt,
+                });
             }
         }
+        // Busiest first.
+        candidates.sort_by(|a, b| b.pps.total_cmp(&a.pps));
+        candidates
+    }
+
+    /// Step 3 of a tick, second half: ask the classifier about each
+    /// candidate, and watch (or start a match for) the first that is a game.
+    fn consider(
+        &mut self,
+        now: f64,
+        candidates: Vec<Candidate>,
+        procs: &mut dyn ProcessLookup,
+    ) -> Vec<Action> {
+        let mut actions = Vec::new();
         // A game sitting in its menu (its traffic stays on this machine) is
         // watched for as long as it runs; another game with traffic of its
         // own can take the watch from it, or only the first game opened
@@ -527,9 +539,8 @@ impl Detector {
             return actions;
         }
         self.passed_over.retain(|_, until| *until > now);
-        // Busiest candidate first.
-        candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
-        for (tgid, pps, (tx_pps, rx_pps), ifindex, began) in candidates {
+        for c in candidates {
+            let tgid = c.tgid;
             if self.ignored.contains_key(&tgid) || self.passed_over.contains_key(&tgid) {
                 continue;
             }
@@ -549,37 +560,30 @@ impl Detector {
                         windows: 0,
                         local: false,
                         quiet_secs: 0.0,
-                        since: began,
+                        since: c.began,
                         outside_since: None,
                     });
                     actions.push(Action::Watch {
                         tgid,
                         name,
-                        ifindex,
+                        ifindex: c.ifindex,
                     });
                     break;
                 }
                 Verdict::Game(reason) => {
-                    actions.push(self.start(
-                        now,
-                        began,
-                        tgid,
-                        name,
-                        reason,
-                        pps,
-                        (tx_pps, rx_pps),
-                        ifindex,
-                    ));
+                    actions.push(
+                        self.start(now, c.began, tgid, name, reason, c.pps, c.dirs, c.ifindex),
+                    );
                     break;
                 }
                 Verdict::NotGame(reason) | Verdict::Excluded(reason) => {
                     // Don't re-ask the classifier every second.
-                    self.ignored.insert(tgid, now + 30.0);
+                    self.ignored.insert(tgid, now + IGNORE_SECS);
                     actions.push(Action::Ignored {
                         tgid,
                         name,
                         reason,
-                        pps,
+                        pps: c.pps,
                         excluded,
                     });
                 }
