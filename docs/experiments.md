@@ -92,7 +92,7 @@ during a match get `busy_read` too.
 does work). Growth: keep it and run the A/B (`busy_polling`) to see
 whether it helps.
 
-**Decided (after 0.14.1):** it grew, the A/B was run (12 matches, no
+**Decided (from 0.15.0):** it grew, the A/B was run (12 matches, no
 difference in the gaps), and bpfrag no longer sets busy polling. The
 check still works for a config that sets it.
 

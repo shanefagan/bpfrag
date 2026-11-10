@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.14.1
+Version:        0.15.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Tue Nov 10 2026 Shane Fagan <mail@shanefagan.com> - 0.15.0-1
+- Busy polling is no longer set during matches: 12 matches showed the same packet gaps with it on or off, and it costs CPU and power (a config can still set it per tier). general.tick_ms is no longer a setting: readings are a second apart (the key is still accepted). The backlog setting leaves the random experiment pools. A roadmap in docs/roadmap.md.
+
 * Tue Nov 10 2026 Shane Fagan <mail@shanefagan.com> - 0.14.1-1
 - Fixes from a full code review: an outage of 2 to 4 seconds counts as a stall; a game sitting in its menu no longer stops a second game being detected; --restore runs when the config file doesn't load; the journal records the value the kernel holds after a write; the game's send timing covers only ports that hear from outside.
 

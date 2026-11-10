@@ -92,7 +92,7 @@ pub struct General {
     /// Accepted so older config files still load.
     #[serde(skip_serializing)]
     pub hook: Option<toml::Value>,
-    /// No longer used (after 0.14.1): bpfrag reads its counters once a
+    /// No longer used (from 0.15.0): bpfrag reads its counters once a
     /// second, which is what every rate, window and health figure is
     /// counted in. Accepted so older config files still load.
     #[serde(skip_serializing)]

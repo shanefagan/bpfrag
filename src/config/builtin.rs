@@ -256,7 +256,7 @@ fn sysctls(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 /// net.ipv4.udp_mem is left out: it is in pages, the kernel already sizes
 /// it from RAM (gigabytes, versus the kilobytes a game buffers), and the
 /// original values raised its hard limit past physical memory. Busy
-/// polling (busy_read/busy_poll at 25/50/75 µs) came out after 0.14.1: 12
+/// polling (busy_read/busy_poll at 25/50/75 µs) came out in 0.15.0: 12
 /// matches with it on or off showed the same gaps, it costs CPU and power
 /// while it spins, and sockets opened during a match kept it afterwards.
 pub fn builtin_profiles() -> [Profile; 3] {

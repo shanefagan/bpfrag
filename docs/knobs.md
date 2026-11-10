@@ -22,7 +22,7 @@ something below is a hypothesis rather than established, it says so.
 | [DSCP CS4](#dscp-cs4-on-the-games-packets) | verified | Real on busy Wi-Fi (uplink) and with CAKE or a QoS router; none on a plain wired LAN | High for the mechanism, unmeasured in matches |
 | [Wi-Fi power save off](#wi-fi-power-save) | verified | Removes wake-up delays of up to a beacon interval after lulls | Medium |
 | [NIC interrupt coalescing](#nic-interrupt-coalescing) | verified (igc) | Up to ~0.25 ms less receive delay, mostly while something else downloads | Medium for the mechanism; too small for the 1 ms gap histogram |
-| [busy_read / busy_poll](#busy-polling-busy_read-busy_poll) | verified | No longer set (after 0.14.1): no difference in 12 matches, and it costs CPU and power | Measured: [findings.md](findings.md#match-comparisons) |
+| [busy_read / busy_poll](#busy-polling-busy_read-busy_poll) | verified | No longer set (from 0.15.0): no difference in 12 matches, and it costs CPU and power | Measured: [findings.md](findings.md#match-comparisons) |
 | [Socket buffers](#socket-buffers-rmem_-wmem_) | verified | None unless the game stops reading for over a second, and the defaults also only apply to new sockets | Low; [check 2](experiments.md#2-do-the-socket-buffer-settings-reach-the-games-socket) |
 | [netdev_max_backlog](#netdev_max_backlog) | verified | None on a NAPI NIC without RPS | Low |
 | [netdev_budget / _usecs](#netdev_budget-and-netdev_budget_usecs) | verified | Only matters when receive processing is saturated | Low |
@@ -153,7 +153,7 @@ construction.
 
 ## Busy polling (`busy_read`, `busy_poll`)
 
-**Changes:** nothing, after 0.14.1. Up to then `net.core.busy_read` and
+**Changes:** nothing, from 0.15.0. Up to then `net.core.busy_read` and
 `net.core.busy_poll` were set to 25/50/75 µs (CASUAL/COMPETITIVE/INTENSE);
 both default to 0 (off).
 

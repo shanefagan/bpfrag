@@ -1,3 +1,9 @@
+bpfrag (0.15.0-1) unstable; urgency=medium
+
+  * Busy polling is no longer set during matches: 12 matches showed the same packet gaps with it on or off, and it costs CPU and power (a config can still set it per tier). general.tick_ms is no longer a setting: readings are a second apart (the key is still accepted). The backlog setting leaves the random experiment pools. A roadmap in docs/roadmap.md.
+
+ -- Shane Fagan <mail@shanefagan.com>  Tue, 10 Nov 2026 18:04:24 +0000
+
 bpfrag (0.14.1-1) unstable; urgency=medium
 
   * Fixes from a full code review: an outage of 2 to 4 seconds counts as a stall; a game sitting in its menu no longer stops a second game being detected; --restore runs when the config file doesn't load; the journal records the value the kernel holds after a write; the game's send timing covers only ports that hear from outside.
