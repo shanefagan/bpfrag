@@ -5,3 +5,6 @@ packaging/arch/pkg/
 packaging/arch/bpfrag/
 packaging/arch/*.pkg.tar.*
 packaging/arch/*.log
+# pytest and Python caches (the e2e tests run as root)
+.pytest_cache/
+__pycache__/

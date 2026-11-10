@@ -75,6 +75,11 @@ e2e: build
 e2e-unit: build
     {{ sudo }} tests/rig/e2e.sh tests/rig/unit-caps.sh
 
+# The end-to-end tests moved to pytest so far (root; e.g. `just e2e-py -k stall`)
+[positional-arguments]
+e2e-py *args: build
+    {{ sudo }} env PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/e2e --bpfrag={{ bin }} "$@"
+
 # Everything CI's test job runs
 ci: fmt-check lint test build check-system selftest e2e e2e-unit
 

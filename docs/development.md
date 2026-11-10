@@ -63,6 +63,8 @@ justfile                     build, test, install, package and release recipes;
                              CI runs the same ones
 tests/rig/                   end-to-end test in a throwaway netns (root): fake game,
                              echo and TCP bulk server, bulk.py, pcap checks
+tests/e2e/                   the same tests being moved to pytest: rig.py (the network,
+                             the daemon, the fake game), one test per behaviour
 docs/                        why each setting, how to measure, findings, internals
 docs/scripts/matches.py      the log as a CSV of matches
 AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
@@ -98,6 +100,7 @@ just ci            # all of the below, as CI runs it
 | `just fuzz [packets] [seed]` | the selftest with 200,000 random packets; a failure prints the seed that repeats it | yes |
 | `just e2e` | real kernel: netns, fake Steam game, noise (150 checks) | yes |
 | `just e2e-unit` | the same, with only the systemd unit's capabilities | yes |
+| `just e2e-py` | the end-to-end tests moved to pytest so far (`tests/e2e/`); needs `python3-pytest` | yes |
 | `just msrv` | `cargo +1.85 check` (the `rust-version` in Cargo.toml) | |
 
 Recipes that need root use `sudo` unless they already run as root (a
