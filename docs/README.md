@@ -14,6 +14,7 @@ use it. These pages go deeper.
   sources.
 - [experiments.md](experiments.md): the backlog of experiments and
   checks worth running, why, and what each needs.
+- [roadmap.md](roadmap.md): what might be built next, and what won't be.
 - [findings.md](findings.md): results so far, open questions, bugs found,
   and overhead measurements.
 - [detection.md](detection.md): how a match, its tier, its interfaces and
