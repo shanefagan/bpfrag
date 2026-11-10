@@ -53,6 +53,11 @@ match starts, and the log says so once:
 Deadlock (pid 643053): its traffic stays on this machine (a menu or a local server); waiting for traffic from outside before tuning
 ```
 
+A game in that state doesn't hold the watch for good: another game that
+passes the checks takes it over, so the second game opened is tuned too.
+The game set aside isn't picked up again for 60 seconds, so two games in
+their menus don't swap places every few seconds.
+
 `bpfrag --monitor` shows the same while it lasts. The match starts when
 traffic from outside does. If the meter sees the game's traffic nowhere
 (a path it isn't attached to, say an interface missing from `--iface`), the

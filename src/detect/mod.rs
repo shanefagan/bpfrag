@@ -69,6 +69,11 @@ const LOCAL_END_SECS: f64 = 6.0;
 const LOAD_BPS: f64 = 1_000_000.0;
 const LOAD_GRACE_SECS: f64 = 30.0;
 
+/// Seconds a game whose menu was set aside for another game isn't taken
+/// up again: two games in their menus would otherwise swap places every
+/// few seconds.
+const PASS_OVER_SECS: f64 = 60.0;
+
 /// Consecutive windows that must agree on a higher tier before it is
 /// applied. Tiers only go up within a match.
 const CONFIDENCE_UP: u32 = 3;
@@ -434,6 +439,8 @@ pub struct Detector {
     /// The match's traffic with peers other than its server, for the
     /// next window ([`Detector::others`]).
     pending_others: f64,
+    /// Games whose menu was set aside for another game, and until when.
+    passed_over: HashMap<u32, f64>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -459,6 +466,7 @@ impl Detector {
             paths: VecDeque::new(),
             pending_paths: None,
             pending_others: 0.0,
+            passed_over: HashMap::new(),
         }
     }
 
@@ -666,19 +674,29 @@ impl Detector {
                 ));
             }
         }
-        if self.session.is_some() || self.watched.is_some() {
+        // A game sitting in its menu (its traffic stays on this machine) is
+        // watched for as long as it runs; another game with traffic of its
+        // own can take the watch from it, or only the first game opened
+        // would ever be tuned.
+        let menu_only = self.watched.as_ref().is_some_and(|w| w.local);
+        if self.session.is_some() || (self.watched.is_some() && !menu_only) {
             return actions;
         }
+        self.passed_over.retain(|_, until| *until > now);
         // Busiest candidate first.
         candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
         for (tgid, pps, (tx_pps, rx_pps), ifindex, began) in candidates {
-            if self.ignored.contains_key(&tgid) {
+            if self.ignored.contains_key(&tgid) || self.passed_over.contains_key(&tgid) {
                 continue;
             }
             let (verdict, name) = procs.verdict(tgid);
             let excluded = matches!(verdict, Verdict::Excluded(_));
             match verdict {
                 Verdict::Game(reason) if self.check_paths => {
+                    if let Some(old) = self.watched.take() {
+                        self.passed_over.insert(old.tgid, now + PASS_OVER_SECS);
+                        actions.push(Action::Unwatch { tgid: old.tgid });
+                    }
                     self.paths.clear();
                     self.watched = Some(Watched {
                         tgid,
@@ -1623,6 +1641,43 @@ mod tests {
         sim.arrivals = outside(64.0);
         let a = sim.run(4, &[(7, 64, 64, 200)]);
         assert_eq!(starts(&a).len(), 1, "{a:?}");
+    }
+
+    #[test]
+    fn a_game_in_its_menu_doesnt_stop_another_being_tuned() {
+        let mut sim = Sim::with_paths(&[7, 8]);
+        // game 7 sits in its menu, confirmed as local
+        sim.arrivals = local(128.0);
+        let a = sim.run(10, &[(7, 128, 128, 220)]);
+        assert!(
+            has(&a, |x| matches!(x, Action::Local { tgid: 7, .. })),
+            "{a:?}"
+        );
+        assert_eq!(sim.det.watched(), Some((7, "game7", true)));
+        // game 8 starts talking to a server while 7 is still in its menu
+        // (the meter follows whichever game is watched: still local while
+        // 8 is picked up, outside once it's the one being measured)
+        let both = [(7, 128, 128, 220), (8, 64, 64, 200)];
+        let mut a = sim.run(4, &both);
+        sim.arrivals = outside(64.0);
+        a.extend(sim.run(6, &both));
+        let unwatch = a
+            .iter()
+            .position(|x| matches!(x, Action::Unwatch { tgid: 7 }));
+        let watch = a
+            .iter()
+            .position(|x| matches!(x, Action::Watch { tgid: 8, .. }));
+        match (unwatch, watch) {
+            (Some(u), Some(w)) => assert!(u < w, "7 is let go, then 8 watched: {a:?}"),
+            _ => panic!("{a:?}"),
+        }
+        assert!(starts(&a).iter().any(|s| s.tgid == 8), "{a:?}");
+        // and 7 isn't taken straight back while 8 plays
+        let a = sim.run(30, &[(7, 128, 128, 220), (8, 64, 64, 200)]);
+        assert!(
+            !has(&a, |x| matches!(x, Action::Watch { tgid: 7, .. })),
+            "{a:?}"
+        );
     }
 
     #[test]
