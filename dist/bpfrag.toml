@@ -4,7 +4,6 @@
 # `bpfrag --dump-config` to see the full effective configuration.
 
 [general]
-# tick_ms = 1000       # sampling window
 # Sharing with bpftune. bpftune switches its own tuners off if anyone else
 # writes their sysctls, so by default bpfrag leaves those to it while it runs.
 # bpftune = "auto"     # "auto" | "yield" | "ignore"

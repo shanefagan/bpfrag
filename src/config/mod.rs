@@ -92,8 +92,11 @@ pub struct General {
     /// Accepted so older config files still load.
     #[serde(skip_serializing)]
     pub hook: Option<toml::Value>,
-    /// Sampling window in milliseconds.
-    pub tick_ms: u64,
+    /// No longer used (after 0.14.1): bpfrag reads its counters once a
+    /// second, which is what every rate, window and health figure is
+    /// counted in. Accepted so older config files still load.
+    #[serde(skip_serializing)]
+    pub tick_ms: Option<toml::Value>,
     pub bpftune: BpftuneMode,
     /// Publish the read-only D-Bus interface (src/bus.rs).
     pub dbus: bool,
@@ -105,7 +108,7 @@ impl Default for General {
             run_dir: "/run/bpfrag".into(),
             state_dir: "/var/lib/bpfrag".into(),
             hook: None,
-            tick_ms: 1000,
+            tick_ms: None,
             bpftune: BpftuneMode::Auto,
             dbus: true,
         }
@@ -572,6 +575,11 @@ impl Config {
         if file.general.hook.is_some() {
             log::info!("config: general.hook is no longer used and can be removed");
         }
+        if file.general.tick_ms.is_some() {
+            log::info!(
+                "config: general.tick_ms is no longer used (readings are a second apart) and can be removed"
+            );
+        }
         let mut profiles = builtin_profiles();
         for p in profiles.iter_mut() {
             file.tier.all.apply(p)?;
@@ -633,9 +641,6 @@ impl Config {
         }
         if d.intense_pps <= d.competitive_pps {
             bail!("detect.intense_pps must be above detect.competitive_pps");
-        }
-        if self.general.tick_ms < 100 {
-            bail!("general.tick_ms must be >= 100");
         }
         parse_dscp(&self.dscp.class)?;
         parse_dscp(&self.bulk.class).context("bulk.class")?;
@@ -857,6 +862,13 @@ mod tests {
                 .is_err()
         );
         assert!(Config::from_toml("[general]\nbpftune = \"maybe\"\n").is_err());
+    }
+
+    #[test]
+    fn old_tick_setting_still_loads() {
+        let cfg = Config::from_toml("[general]\ntick_ms = 250\n").unwrap();
+        let dumped = toml::to_string(&cfg.general).unwrap();
+        assert!(!dumped.contains("tick_ms"), "{dumped}");
     }
 
     #[test]

@@ -329,7 +329,7 @@ mod tests {
         let odd = dir.join("odd.toml");
         std::fs::write(
             &odd,
-            "[general]\nrun_dir = \"/run/elsewhere\"\ntick_ms = 5\n",
+            "[general]\nrun_dir = \"/run/elsewhere\"\n[detect]\nsteady_windows = 0\n",
         )
         .unwrap();
         assert_eq!(

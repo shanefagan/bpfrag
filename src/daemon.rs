@@ -52,6 +52,11 @@ use crate::stats::{
 use crate::tune::{Knobs, coexist, target_for, writeback_would_tighten};
 use crate::util::{norm_ws, read_trim, sysctl_path};
 
+/// How often the counters are read. Every rate, the detector's windows
+/// and the health figures are counted in these readings, so it isn't a
+/// setting.
+const TICK: Duration = Duration::from_secs(1);
+
 /// The parts of the command line the daemon needs.
 pub struct RunOpts {
     /// Log what would change, change nothing.
@@ -1407,7 +1412,7 @@ impl<'a> Tuner<'a> {
         }
         let rb = rbb.build()?;
 
-        let tick = Duration::from_millis(self.cfg.general.tick_ms);
+        let tick = TICK;
         let t0 = Instant::now();
         let mut last = t0;
         let mut next = t0 + tick;
