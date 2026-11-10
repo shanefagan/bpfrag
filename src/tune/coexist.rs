@@ -8,8 +8,8 @@
 //!   sched_ext   owns CPU scheduling; bpfrag never touches scheduling, so
 //!               there is nothing to share. Reported in --check for information.
 //!   gamemode    CPU governor, GPU, process niceness: complementary.
-//!   tuned       its network-latency profile sets busy_read/busy_poll; our
-//!               "don't clobber" restore rule keeps us out of its way.
+//!   tuned       its profiles set sysctls of their own; our "don't clobber"
+//!               restore rule keeps us out of its way where one overlaps.
 
 use std::collections::HashSet;
 use std::fs;
@@ -101,7 +101,7 @@ pub fn neighbours() -> Vec<String> {
     }
     if let Some(p) = tuned_profile() {
         v.push(format!(
-            "tuned is running (profile {p}): if it sets busy_read/busy_poll too, bpfrag leaves its values alone on restore"
+            "tuned is running (profile {p}): where it changes a sysctl bpfrag also set, bpfrag leaves its value alone on restore"
         ));
     }
     v

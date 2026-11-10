@@ -255,7 +255,10 @@ fn sysctls(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 /// knobs are raise-only so we never shrink something the user sized up.
 /// net.ipv4.udp_mem is left out: it is in pages, the kernel already sizes
 /// it from RAM (gigabytes, versus the kilobytes a game buffers), and the
-/// original values raised its hard limit past physical memory.
+/// original values raised its hard limit past physical memory. Busy
+/// polling (busy_read/busy_poll at 25/50/75 µs) came out after 0.14.1: 12
+/// matches with it on or off showed the same gaps, it costs CPU and power
+/// while it spins, and sockets opened during a match kept it afterwards.
 pub fn builtin_profiles() -> [Profile; 3] {
     let wb = Some(Writeback {
         dirty_mb: 256,
@@ -271,8 +274,6 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.netdev_max_backlog", ">=5000"),
             ("net.core.netdev_budget", ">=400"),
             ("net.core.netdev_budget_usecs", ">=8000"),
-            ("net.core.busy_read", "25"),
-            ("net.core.busy_poll", "25"),
             ("net.ipv4.udp_early_demux", "1"),
         ]),
         coalesce_usecs: None,
@@ -290,8 +291,6 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.netdev_max_backlog", ">=5000"),
             ("net.core.netdev_budget", ">=600"),
             ("net.core.netdev_budget_usecs", ">=8000"),
-            ("net.core.busy_read", "50"),
-            ("net.core.busy_poll", "50"),
             ("net.ipv4.udp_early_demux", "1"),
         ]),
         coalesce_usecs: Some(10),
@@ -309,8 +308,6 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.netdev_max_backlog", ">=5000"),
             ("net.core.netdev_budget", ">=800"),
             ("net.core.netdev_budget_usecs", ">=8000"),
-            ("net.core.busy_read", "75"),
-            ("net.core.busy_poll", "75"),
             ("net.ipv4.udp_early_demux", "1"),
         ]),
         coalesce_usecs: Some(0),

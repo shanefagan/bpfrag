@@ -17,7 +17,7 @@ alongside other tuners](#running-alongside-other-tuners)).
 $ sudo bpfrag
 20:14:02 INFO  bpfrag 0.12.2 started; waiting for game traffic
 20:15:10 INFO  Match detected: Counter-Strike 2 (pid 6230) at ~128 pkt/s (tx 64, rx 64) -> COMPETITIVE [Steam app 730]
-20:15:10 INFO  COMPETITIVE profile: net.core.busy_poll=50, net.core.busy_read=50, enp6s0 coalescing=10us, ..., dscp=CS4 on enp6s0
+20:15:10 INFO  COMPETITIVE profile: net.core.netdev_budget=600, net.core.rmem_max=16777216, enp6s0 coalescing=10us, ..., dscp=CS4 on enp6s0
 20:52:47 INFO  Match ended after 37m37s (game exited); settings restored
 20:52:47 INFO  Counter-Strike 2: packet gaps half ≤16 ms, 99% ≤19 ms, longest 31 ms, 0 stalls (100 ms+); no drops
 ```
@@ -57,7 +57,6 @@ and changed without fighting the verifier.
 |---|---|---|---|
 | DSCP mark on the game's packets | CS4 | CS4 | CS4 |
 | NIC interrupt coalescing (rx/tx) | untouched | 10 µs | 0 µs |
-| `net.core.busy_read` / `busy_poll` | 25 µs | 50 µs | 75 µs |
 | `net.core.{r,w}mem_max` (raise-only) | 8 MiB | 16 MiB | 32 MiB |
 | `net.core.{r,w}mem_default` (raise-only) | 256 KiB | 256 KiB | 256 KiB |
 | `net.core.netdev_max_backlog` (raise-only) | 5000 | 5000 | 5000 |
@@ -79,8 +78,7 @@ which gets the game's packets ahead on busy Wi-Fi and through CAKE or QoS
 routers, and turning Wi-Fi power save off, which avoids wake-up delays after
 lulls. Interrupt coalescing trims up to a quarter of a millisecond while
 something else downloads. The buffer, backlog and budget headroom only
-matter when their drop counters move, and busy polling's effect on games is
-still unmeasured. **[docs/knobs.md](docs/knobs.md)** goes through every
+matter when their drop counters move. **[docs/knobs.md](docs/knobs.md)** goes through every
 setting: the kernel mechanism behind it, with sources, what to expect, when
 nothing will happen, and how confident that is.
 
@@ -197,10 +195,9 @@ bpfrag never touches CPU scheduling, priorities, affinity or frequency.
 sched_ext schedulers use struct_ops, while bpfrag uses tracepoints and tc,
 and the two run side by side.
 
-The one indirect interaction is busy polling. A socket read may spin for up
-to 25–75 µs, and the scheduler counts that as the game thread's runtime. If
-you'd rather not have it, set `sysctl = { "net.core.busy_read" = false,
-"net.core.busy_poll" = false }` under `[tier.all]`.
+(Up to 0.14.1 bpfrag switched busy polling on during matches, whose spin
+time a scheduler counts as the game thread's runtime. It no longer does:
+see [docs/knobs.md](docs/knobs.md#busy-polling-busy_read-busy_poll).)
 
 **bpftune.** They do overlap, and bpfrag handles it. bpftune's sysctl watcher
 switches off a whole tuner (e.g. `udp_buffer`, `net_buffer`) as soon as any
@@ -210,7 +207,7 @@ yields those sysctls by default (`--bpftune auto`):
 | Sysctl | Owner while bpftune runs |
 |---|---|
 | `rmem_max`, `rmem_default`, `netdev_max_backlog`, `netdev_budget`, `netdev_budget_usecs` | bpftune: it sizes these from observed drops rather than a fixed profile |
-| `busy_read`, `busy_poll`, `wmem_*`, `udp_early_demux`, NIC coalescing, DSCP, writeback | bpfrag: bpftune doesn't touch them |
+| `wmem_*`, `udp_early_demux`, NIC coalescing, DSCP, writeback | bpfrag: bpftune doesn't touch them |
 
 In that pairing bpftune looks after capacity and bpfrag looks after latency
 during matches. `bpfrag --check` shows exactly what's being yielded. Use
@@ -222,8 +219,9 @@ build that includes the old gaming tuner patch, disable one of the two.
 level, niceness and ioprio, while bpfrag does the network side. They pair
 well.
 
-**tuned** profiles like network-latency set `busy_read` and `busy_poll` too.
-That's fine because of the general rule below.
+**tuned** profiles like network-latency set sysctls of their own
+(`busy_read` and `busy_poll`, which bpfrag no longer sets). Where one
+overlaps, the general rule below applies.
 
 **General rule.** On restore, if a value no longer holds what bpfrag wrote,
 someone else changed it during the match, and bpfrag leaves it alone and logs
@@ -303,7 +301,7 @@ After your first real match:
 - `journalctl -u bpfrag` should show `Match detected` and then `Match ended
   ... settings restored`.
 - `ethtool -c <nic>` should show the original coalescing values again.
-- `sysctl net.core.busy_poll` should be back at its old value.
+- `sysctl net.core.rmem_max` should be back at its old value.
 
 If a restore ever fails, `sudo bpfrag --restore` replays the journal.
 

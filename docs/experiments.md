@@ -92,6 +92,10 @@ during a match get `busy_read` too.
 does work). Growth: keep it and run the A/B (`busy_polling`) to see
 whether it helps.
 
+**Decided (after 0.14.1):** it grew, the A/B was run (12 matches, no
+difference in the gaps), and bpfrag no longer sets busy polling. The
+check still works for a config that sets it.
+
 **So far:** it grows: 15,000 to 200,000 busy-polled packets a match on
 2026-11-02 (Deadlock, wired, a torrent client running), machine-wide, so
 not yet shown to be the game's. How much depends on coalescing: 31–37 a

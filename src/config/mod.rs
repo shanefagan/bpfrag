@@ -809,7 +809,7 @@ mod tests {
             allow = ["mynativegame"]
 
             [tier.all]
-            sysctl = { "net.core.busy_read" = false }
+            sysctl = { "net.ipv4.udp_early_demux" = false }
 
             [tier.intense]
             coalesce_usecs = 5
@@ -826,14 +826,14 @@ mod tests {
         assert_eq!(i.writeback, None);
         assert_eq!(i.sysctl["net.core.busy_poll"], "0");
         assert_eq!(i.sysctl["net.ipv4.tcp_fastopen"], "3");
-        assert!(!i.sysctl.contains_key("net.core.busy_read"));
+        assert!(!i.sysctl.contains_key("net.ipv4.udp_early_demux"));
         assert!(
             !cfg.profile(Tier::Casual)
                 .sysctl
-                .contains_key("net.core.busy_read")
+                .contains_key("net.ipv4.udp_early_demux")
         );
         let mut c = builtin_profiles()[1].clone();
-        c.sysctl.remove("net.core.busy_read");
+        c.sysctl.remove("net.ipv4.udp_early_demux");
         assert_eq!(cfg.profile(Tier::Competitive), &c);
         assert!(cfg.classify.deny_list().iter().any(|d| d == "discord"));
     }
@@ -931,7 +931,16 @@ mod tests {
                 .map_err(|e| format!("{e:#}"))
         };
         ok("[experiment]\nsetting = \"wifi_power_save\"\n").unwrap();
-        ok("[experiment]\nsetting = \"sysctl:net.core.busy_poll\"\n").unwrap();
+        ok("[experiment]\nsetting = \"sysctl:net.core.netdev_budget\"\n").unwrap();
+        // one no tier sets has two arms the same: busy polling, unless the
+        // config sets it
+        assert!(
+            ok("[experiment]\nsetting = \"busy_polling\"\n")
+                .unwrap_err()
+                .contains("no tier changes it")
+        );
+        ok("[tier.all]\nsysctl = { \"net.core.busy_poll\" = 50 }\n[experiment]\nsetting = \"busy_polling\"\n")
+            .unwrap();
         assert!(
             ok("[experiment]\nsetting = \"turbo\"\n")
                 .unwrap_err()

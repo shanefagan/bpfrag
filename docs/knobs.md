@@ -22,7 +22,7 @@ something below is a hypothesis rather than established, it says so.
 | [DSCP CS4](#dscp-cs4-on-the-games-packets) | verified | Real on busy Wi-Fi (uplink) and with CAKE or a QoS router; none on a plain wired LAN | High for the mechanism, unmeasured in matches |
 | [Wi-Fi power save off](#wi-fi-power-save) | verified | Removes wake-up delays of up to a beacon interval after lulls | Medium |
 | [NIC interrupt coalescing](#nic-interrupt-coalescing) | verified (igc) | Up to ~0.25 ms less receive delay, mostly while something else downloads | Medium for the mechanism; too small for the 1 ms gap histogram |
-| [busy_read / busy_poll](#busy-polling-busy_read-busy_poll) | verified | Unknown, possibly none: for blocking reads and `poll()` it only reaches sockets created after bpfrag raises it; `epoll` follows it at once | Low; [check 1](experiments.md#1-does-busy-polling-reach-the-game) |
+| [busy_read / busy_poll](#busy-polling-busy_read-busy_poll) | verified | No longer set (after 0.14.1): no difference in 12 matches, and it costs CPU and power | Measured: [findings.md](findings.md#match-comparisons) |
 | [Socket buffers](#socket-buffers-rmem_-wmem_) | verified | None unless the game stops reading for over a second, and the defaults also only apply to new sockets | Low; [check 2](experiments.md#2-do-the-socket-buffer-settings-reach-the-games-socket) |
 | [netdev_max_backlog](#netdev_max_backlog) | verified | None on a NAPI NIC without RPS | Low |
 | [netdev_budget / _usecs](#netdev_budget-and-netdev_budget_usecs) | verified | Only matters when receive processing is saturated | Low |
@@ -153,8 +153,19 @@ construction.
 
 ## Busy polling (`busy_read`, `busy_poll`)
 
-**Changes:** `net.core.busy_read` and `net.core.busy_poll` are set to
-25/50/75 µs (CASUAL/COMPETITIVE/INTENSE). Both default to 0 (off).
+**Changes:** nothing, after 0.14.1. Up to then `net.core.busy_read` and
+`net.core.busy_poll` were set to 25/50/75 µs (CASUAL/COMPETITIVE/INTENSE);
+both default to 0 (off).
+
+**Why it went:** over 12 Deadlock matches, 7 with it on and 5 off, the
+packet gaps were the same ([findings.md](findings.md#match-comparisons)).
+It did run when on, so it cost CPU time and power for nothing measurable,
+and sockets opened during a match kept busy polling after it, which is a
+setting bpfrag couldn't put back. To have it anyway, set it per tier in
+the config, for example under `[tier.all]`:
+`sysctl = { "net.core.busy_read" = 50, "net.core.busy_poll" = 50 }`. It's restored like any other sysctl, `[experiment] setting =
+"busy_polling"` then tests it, and the rest of this section describes
+what it does.
 
 **Mechanism** (`Documentation/admin-guide/sysctl/net.rst`,
 `Documentation/networking/napi.rst`):
@@ -170,8 +181,8 @@ construction.
 - **`busy_read` is copied into a socket when the socket is created**
   (`sk->sk_ll_usec` in `sock_init_data_uid()`, `net/core/sock.c`).
   Raising it doesn't change sockets that are already open, and `poll()`
-  and `select()` only busy-poll sockets that have it. bpfrag raises both
-  once it has seen the game's traffic for a few seconds, by which time
+  and `select()` only busy-poll sockets that have it. bpfrag raised both
+  once it had seen the game's traffic for a few seconds, by which time
   the game's socket exists, so for blocking reads, `poll()` and `select()`
   only sockets the game opens later in the same session (a reconnect, a
   new match server) are affected.
@@ -201,8 +212,8 @@ it stays at 0, busy polling did nothing
 If it does, compare packet gaps and frame times with `[experiment] setting
 = "busy_polling"`.
 
-**Confidence:** low. If the counter stays at 0 during matches, it should
-go, since it costs power when it does work.
+**Confidence:** measured on one machine and one game (Deadlock under
+Proton, wired). A game that waits for packets differently might differ.
 
 ## Socket buffers (`rmem_*`, `wmem_*`)
 

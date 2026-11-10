@@ -48,7 +48,7 @@ traffic.
 | `Reason` | s | "" | why it counts as a game |
 | `Tier` | s | "" | `casual`, `competitive` or `intense` |
 | `MatchSince` | t | 0 | when the match started, Unix seconds |
-| `Experiment` | s | "" | this match's `[experiment]` arm, e.g. `busy_polling off`; "" if none |
+| `Experiment` | s | "" | this match's `[experiment]` arm, e.g. `socket_buffers off`; "" if none |
 | `Applied` | a(sss) | empty | each setting changed: name, value now, value before the match |
 | `State` | s | `idle`, or `menu` | `match` |
 | `AppId` | u | 0 | the game's Steam app id; 0 if Steam didn't launch it (or it's a non-Steam game added to Steam) |

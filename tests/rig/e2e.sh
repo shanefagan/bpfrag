@@ -66,6 +66,15 @@ linger_secs = 6
 dwell_secs = 3
 # the fake game starts its match the moment it launches
 launch_secs = 0
+# A sysctl with a fixed value per tier, set from the config: what the
+# checks below follow through tier changes, someone else's change and
+# restore. (The built-in profiles' own sysctls are all raise-only.)
+[tier.casual]
+sysctl = { "net.core.busy_read" = 25, "net.core.busy_poll" = 25 }
+[tier.competitive]
+sysctl = { "net.core.busy_read" = 50, "net.core.busy_poll" = 50 }
+[tier.intense]
+sysctl = { "net.core.busy_read" = 75, "net.core.busy_poll" = 75 }
 EOT
 ip netns add bpfrag-srv
 ip link add bpfrag0 type veth peer name bpfrag1

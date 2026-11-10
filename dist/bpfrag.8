@@ -22,7 +22,7 @@ a game), it applies a networking profile chosen from the tick rate:
 .B COMPETITIVE
 or
 .BR INTENSE .
-Depending on the tier, that covers socket busy\-polling, NIC interrupt
+Depending on the tier, that covers NIC interrupt
 coalescing, socket buffer headroom, DSCP marking of the game's packets,
 Wi\-Fi power save and, optionally, tighter dirty\-page writeback.
 .PP
@@ -61,7 +61,7 @@ a dry run.
 With
 .B [experiment]
 set, one setting (for example
-.BR busy_polling )
+.BR socket_buffers )
 is switched off in a random share of matches, so its effect can be
 measured. Each match logs which it got, and its health line ends with it.
 With

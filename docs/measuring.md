@@ -127,7 +127,7 @@ period = "day"     # one setting per day, from 05:00; or "boot"
 ```
 
 Then `sudo systemctl restart bpfrag`. Once a day bpfrag picks one setting
-from the pool and logs it (`Experiment for today: busy_polling, switched
+from the pool and logs it (`Experiment for today: socket_buffers, switched
 off in 50% of matches (picked at random from the wired pool: ...)`); the
 pick is kept in `/var/lib/bpfrag`, so restarts and reboots during the day
 don't change it. The day starts at 05:00, so an evening that runs past
@@ -136,22 +136,24 @@ the distribution ships them, or bpftune holds them) are left out, since
 both halves would be the same. The wired pool leaves out Wi-Fi power save
 and NIC coalescing (its effect is microseconds, below what the gap
 figures can show; test it on its own with `setting = "coalescing"` and
-watch the busy-polled and NIC drop counts); the Wi-Fi pool leaves out
-coalescing too. The day's pick waits until the network is up.
+watch the NIC drop count); the Wi-Fi pool leaves out coalescing too.
+Neither has `backlog` (its arms never differed) or `busy_polling` (no
+longer set unless your config sets it); both can still be named. The day's pick waits until the network is up.
 `sudo bpfrag --check` shows today's pick.
 
 Testing one setting at a time is the point: switching everything off at
 once (`setting = "all"`) can show whether bpfrag helps as a whole, but not
 which setting did it.
 
-To test one setting yourself, name it: `setting = "busy_polling"`. The
+To test one setting yourself, name it: `setting = "socket_buffers"`. The
 names are the sections of [knobs.md](knobs.md): `dscp`,
-`wifi_power_save`, `coalescing`, `busy_polling`, `socket_buffers`,
+`wifi_power_save`, `coalescing`, `busy_polling` (only if your config sets
+busy polling), `socket_buffers`,
 `backlog`, `budget`, `writeback`, `bulk` (needs `[bulk] enabled = true`),
 `all`, or `sysctl:<name>` for a single sysctl.
 
 Either way, each match logs its arm when it starts (`Experiment:
-busy_polling off for this match`), `--monitor` shows it, and the health
+socket_buffers off for this match`), `--monitor` shows it, and the health
 line at the end says it again. `keep = 0.3` would keep the setting in 30%
 of matches.
 
@@ -281,11 +283,12 @@ Ordered by how likely each is to show something:
    longest gap and stalls.
 3. **DSCP on a busy Wi-Fi network** (`dscp`), with other devices
    streaming or downloading.
-4. **Busy polling** (`busy_polling`). Check first that it happens at all:
-   the "busy-polled packets" count in the "on" matches
+4. **Busy polling** (`busy_polling`), which bpfrag no longer sets: put it
+   in your config first ([knobs.md](knobs.md#busy-polling-busy_read-busy_poll)).
+   Worth it for a native game, or one known to wait in `epoll`. Check that
+   it happens at all: the "busy-polled packets" count in the "on" matches
    ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)).
-   It probably doesn't reach the game's socket. Note frame times and CPU
-   use too, since busy polling costs both.
+   Note frame times and CPU use too, since busy polling costs both.
 5. **Everything** (`all`): the overall picture, once the individual
    pieces are understood.
 

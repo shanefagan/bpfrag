@@ -59,13 +59,14 @@
 #
 # "random" tests one setting per day (or per boot), picked from a pool and
 # saved in /var/lib/bpfrag, leaving out settings this machine already has.
-# Or name one: dscp, wifi_power_save, coalescing, busy_polling,
-# socket_buffers, backlog, budget, writeback, bulk, sysctl:<name>, or all
+# Or name one: dscp, wifi_power_save, coalescing, socket_buffers, backlog,
+# budget, writeback, bulk, sysctl:<name>, busy_polling (if a tier below
+# sets busy_read/busy_poll), or all
 # (every setting at once: the whole package, not one cause).
 [experiment]
 # setting = "random"
 # pool = "wired"         # with random: "auto" (by the default route), "wired",
-#                        # "wifi", or a list such as ["busy_polling", "backlog"]
+#                        # "wifi", or a list such as ["socket_buffers", "budget"]
 # period = "day"         # with random: "day" (from 05:00) or "boot"
 # keep = 0.5             # share of matches that keep it on
 
@@ -88,4 +89,6 @@
 
 # [tier.intense]
 # coalesce_usecs = 5                        # instead of 0
-# sysctl = { "net.core.busy_poll" = 50, "net.core.busy_read" = false }
+# Any sysctl can be set (busy polling here, which bpfrag leaves off), or
+# left alone with false:
+# sysctl = { "net.core.busy_poll" = 50, "net.core.busy_read" = 50, "net.ipv4.udp_early_demux" = false }

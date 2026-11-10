@@ -44,23 +44,17 @@ pub const RANDOM: &str = "random";
 /// NIC coalescing, whose effect (microseconds) the gap figures (1 ms) can't
 /// show; on 2026-11-02 what it did change was how much busy polling
 /// found to do. `setting = "coalescing"` still tests it on its own. So
-/// does `setting = "backlog"`: `netdev_max_backlog` only matters with RPS
+/// does `setting = "busy_polling"`, for a config that sets `busy_read` and
+/// `busy_poll` itself (the built-in profiles no longer do), and `setting =
+/// "backlog"`: `netdev_max_backlog` only matters with RPS
 /// or virtual devices, and its arms never differed (2026-11-09 and -10).
-pub const WIRED_POOL: &[&str] = &[
-    "dscp",
-    "busy_polling",
-    "socket_buffers",
-    "budget",
-    "writeback",
-    "bulk",
-];
+pub const WIRED_POOL: &[&str] = &["dscp", "socket_buffers", "budget", "writeback", "bulk"];
 
 /// The pool for Wi-Fi: everything but NIC coalescing, which Wi-Fi drivers
 /// generally don't support.
 pub const WIFI_POOL: &[&str] = &[
     "dscp",
     "wifi_power_save",
-    "busy_polling",
     "socket_buffers",
     "budget",
     "writeback",
@@ -382,7 +376,7 @@ mod tests {
         // writeback already in place here, everything else would change
         let (keep, in_place) = candidates(&pool, &profiles, false, |s| *s != Setting::Writeback);
         let kept: Vec<&str> = keep.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(kept.contains(&"busy_polling") && kept.contains(&"dscp"));
+        assert!(kept.contains(&"budget") && kept.contains(&"dscp"));
         assert!(!kept.contains(&"bulk"), "bulk is off");
         assert_eq!(in_place, ["writeback"]);
         // with bulk on, bulk joins and dscp leaves (the marker does both)
@@ -451,13 +445,10 @@ mod tests {
             assert!(Setting::parse(n).unwrap().is_some(), "{n}");
         }
         let mut p = builtin_profiles()[2].clone();
-        assert!(p.sysctl.contains_key("net.core.busy_poll"));
-        Setting::parse("busy_polling")
-            .unwrap()
-            .unwrap()
-            .strip(&mut p);
-        assert!(!p.sysctl.contains_key("net.core.busy_poll"));
-        assert!(!p.sysctl.contains_key("net.core.busy_read"));
+        assert!(p.sysctl.contains_key("net.core.netdev_budget"));
+        Setting::parse("budget").unwrap().unwrap().strip(&mut p);
+        assert!(!p.sysctl.contains_key("net.core.netdev_budget"));
+        assert!(!p.sysctl.contains_key("net.core.netdev_budget_usecs"));
         assert!(
             p.sysctl.contains_key("net.core.rmem_max"),
             "only that setting"

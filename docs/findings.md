@@ -23,6 +23,8 @@ Deadlock, with some Trackmania.
   (7 on, 5 off). It runs when on (20–30 packets a second, machine-wide). Sockets
   opened during an "on" match keep busy-polling after it, until they
   close, so an "off" match straight after an "on" one isn't fully off.
+  Taken out of the profiles after 0.14.1: it costs CPU and power, and
+  nothing in the figures paid for it.
 - **Receive budget and backlog** (`netdev_budget*`,
   `netdev_max_backlog`): no difference in the gaps, jitter or stalls over
   19 Deadlock matches (2026-11-04 to -10). What made matches differ was the relay they were on.
@@ -112,7 +114,9 @@ each:
 2. **Does Wi-Fi power save cause stalls in real matches** on common
    drivers (iwlwifi, mt7921/mt7925)?
 3. **Does busy polling change anything for real games,** native or under
-   Proton? So far no; if that holds, it goes: it costs power.
+   Proton? Not in 12 Deadlock matches, so bpfrag stopped setting it after
+   0.14.1. Still open for a native game, or one that waits in `epoll`:
+   set it in the config and run `setting = "busy_polling"`.
 4. **Do socket buffer, backlog or NIC drops ever happen during matches
    with the kernel defaults?** If not, the buffer, backlog and budget
    settings can go. For socket buffers, look at the game's own count,
