@@ -1,3 +1,9 @@
+bpfrag (0.16.0-1) unstable; urgency=medium
+
+  * Fewer settings: the receive backlog and budget and NIC interrupt coalescing are no longer set, after matches with each on and off measured the same; each can still be set per tier. The backlog, budget and busy_polling experiment names and the busy-polled packets figure go with them. general.hook and general.tick_ms are no longer accepted: delete those lines. The end-to-end tests are now pytest (tests/e2e), and the detector's code is split into smaller files.
+
+ -- Shane Fagan <mail@shanefagan.com>  Tue, 10 Nov 2026 23:42:32 +0000
+
 bpfrag (0.15.0-1) unstable; urgency=medium
 
   * Busy polling is no longer set during matches: 12 matches showed the same packet gaps with it on or off, and it costs CPU and power (a config can still set it per tier). general.tick_ms is no longer a setting: readings are a second apart (the key is still accepted). The backlog setting leaves the random experiment pools. A roadmap in docs/roadmap.md.
