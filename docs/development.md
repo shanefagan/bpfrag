@@ -90,7 +90,7 @@ just ci            # all of the below, as CI runs it
 | Recipe | What | Root |
 |---|---|---|
 | `just fmt-check` | `cargo fmt --check` | |
-| `just lint` | `cargo clippy --locked --all-targets -- -D warnings` | |
+| `just lint` | `cargo clippy --locked --all-targets -- -D warnings`, and `cargo doc` with warnings as errors | |
 | `just test` | unit tests: detectors, classifier, config, journal, health, report, D-Bus, packaging (137) | |
 | `just build` | `cargo build --locked --release` | |
 | `just check-system` | `bpfrag --check`: what this machine and kernel support (never fails) | yes |

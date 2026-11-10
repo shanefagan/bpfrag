@@ -64,7 +64,7 @@ impl Verdict {
 #[derive(Clone, Debug, Default)]
 pub struct ProcInfo {
     pub ppid: u32,
-    /// Real user id, from /proc/<pid>/status.
+    /// Real user id, from `/proc/<pid>/status`.
     pub uid: Option<u32>,
     pub comm: String,
     pub exe: String,

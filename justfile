@@ -34,9 +34,10 @@ default:
 fmt-check:
     cargo fmt --check
 
-# Clippy, with warnings as errors
+# Clippy and the docs, with warnings as errors
 lint:
     cargo clippy --locked --all-targets -- -D warnings
+    RUSTDOCFLAGS="-D warnings" cargo doc --locked --no-deps --document-private-items
 
 # Unit tests (no root)
 test:

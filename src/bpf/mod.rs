@@ -65,7 +65,7 @@ pub fn lockdown() -> Option<String> {
     lockdown_mode(&text).map(str::to_string)
 }
 
-/// The bracketed word in "none [integrity] confidentiality".
+/// The bracketed word in `none [integrity] confidentiality`.
 fn lockdown_mode(text: &str) -> Option<&str> {
     text.split_whitespace()
         .find_map(|w| w.strip_prefix('[')?.strip_suffix(']'))
