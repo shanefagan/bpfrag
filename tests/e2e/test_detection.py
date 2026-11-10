@@ -3,6 +3,7 @@
 
 import json
 import subprocess
+import time
 
 from rig import bad_checksums, dscps, sysctl, wait_until
 
@@ -89,6 +90,7 @@ def test_the_tier_follows_the_games_rate(rig, match):
 
 def test_the_game_exiting_ends_the_match(rig, match):
     daemon, game = match
+    time.sleep(4)  # a few readings, so the health line has every part
     game.exit()
     daemon.wait_for_end(timeout=5)
 

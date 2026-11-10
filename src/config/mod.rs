@@ -88,15 +88,6 @@ pub struct General {
     pub run_dir: String,
     /// What has to survive a reboot: today's `[experiment]` pick.
     pub state_dir: String,
-    /// No longer used: on kernel 6.6+ there is only one counting hook.
-    /// Accepted so older config files still load.
-    #[serde(skip_serializing)]
-    pub hook: Option<toml::Value>,
-    /// No longer used (from 0.15.0): bpfrag reads its counters once a
-    /// second, which is what every rate, window and health figure is
-    /// counted in. Accepted so older config files still load.
-    #[serde(skip_serializing)]
-    pub tick_ms: Option<toml::Value>,
     pub bpftune: BpftuneMode,
     /// Publish the read-only D-Bus interface (src/bus.rs).
     pub dbus: bool,
@@ -107,8 +98,6 @@ impl Default for General {
         Self {
             run_dir: "/run/bpfrag".into(),
             state_dir: "/var/lib/bpfrag".into(),
-            hook: None,
-            tick_ms: None,
             bpftune: BpftuneMode::Auto,
             dbus: true,
         }
@@ -569,17 +558,23 @@ impl Default for Config {
     }
 }
 
+/// `[general]` keys older versions accepted (and, at the end, ignored).
+const REMOVED_KEYS: [&str; 2] = ["hook", "tick_ms"];
+
 impl Config {
     pub fn from_toml(text: &str) -> Result<Self> {
-        let file: ConfigFile = toml::from_str(text)?;
-        if file.general.hook.is_some() {
-            log::info!("config: general.hook is no longer used and can be removed");
-        }
-        if file.general.tick_ms.is_some() {
-            log::info!(
-                "config: general.tick_ms is no longer used (readings are a second apart) and can be removed"
-            );
-        }
+        let file: ConfigFile = match toml::from_str(text) {
+            Ok(file) => file,
+            Err(e) => {
+                // say so plainly for a key an older version accepted
+                for gone in REMOVED_KEYS {
+                    if e.message().contains(&format!("unknown field `{gone}`")) {
+                        bail!("general.{gone} is no longer a setting: delete that line");
+                    }
+                }
+                return Err(e.into());
+            }
+        };
         let mut profiles = builtin_profiles();
         for p in profiles.iter_mut() {
             file.tier.all.apply(p)?;
@@ -865,17 +860,15 @@ mod tests {
     }
 
     #[test]
-    fn old_tick_setting_still_loads() {
-        let cfg = Config::from_toml("[general]\ntick_ms = 250\n").unwrap();
-        let dumped = toml::to_string(&cfg.general).unwrap();
-        assert!(!dumped.contains("tick_ms"), "{dumped}");
-    }
-
-    #[test]
-    fn old_hook_setting_still_loads() {
-        let cfg = Config::from_toml("[general]\nhook = \"fexit\"\n").unwrap();
-        let dumped = toml::to_string(&cfg.general).unwrap();
-        assert!(!dumped.contains("hook"), "{dumped}");
+    fn a_removed_setting_is_named_in_the_error() {
+        for line in ["tick_ms = 250", "hook = \"fexit\""] {
+            let e = Config::from_toml(&format!("[general]\n{line}\n")).unwrap_err();
+            let key = line.split(' ').next().unwrap();
+            assert_eq!(
+                e.to_string(),
+                format!("general.{key} is no longer a setting: delete that line")
+            );
+        }
     }
 
     #[test]
@@ -914,7 +907,7 @@ mod tests {
             .collect();
         let cfg = Config::from_toml(&uncommented.join("\n")).unwrap();
         assert_eq!(cfg.detect.pin_tier, Some(Tier::Competitive));
-        assert_eq!(cfg.profile(Tier::Intense).coalesce_usecs, Some(5));
+        assert_eq!(cfg.profile(Tier::Intense).coalesce_usecs, Some(10));
         assert!(cfg.bulk.enabled);
         assert!(cfg.bulk.never_list().iter().any(|n| n == "rclone"));
         assert!(cfg.bulk.never_list().iter().any(|n| n == "obs"));
@@ -931,16 +924,15 @@ mod tests {
                 .map_err(|e| format!("{e:#}"))
         };
         ok("[experiment]\nsetting = \"wifi_power_save\"\n").unwrap();
-        ok("[experiment]\nsetting = \"sysctl:net.core.netdev_budget\"\n").unwrap();
-        // one no tier sets has two arms the same: busy polling, unless the
+        ok("[experiment]\nsetting = \"sysctl:net.core.rmem_max\"\n").unwrap();
+        // one no tier sets has two arms the same: coalescing, unless the
         // config sets it
         assert!(
-            ok("[experiment]\nsetting = \"busy_polling\"\n")
+            ok("[experiment]\nsetting = \"coalescing\"\n")
                 .unwrap_err()
                 .contains("no tier changes it")
         );
-        ok("[tier.all]\nsysctl = { \"net.core.busy_poll\" = 50 }\n[experiment]\nsetting = \"busy_polling\"\n")
-            .unwrap();
+        ok("[tier.all]\ncoalesce_usecs = 10\n[experiment]\nsetting = \"coalescing\"\n").unwrap();
         assert!(
             ok("[experiment]\nsetting = \"turbo\"\n")
                 .unwrap_err()
@@ -981,12 +973,12 @@ mod tests {
             ExperimentPlan::Random
         );
         let c = Config::from_toml(
-            "[experiment]\nsetting = \"random\"\npool = [\"backlog\", \"budget\"]\nperiod = \"boot\"\n",
+            "[experiment]\nsetting = \"random\"\npool = [\"writeback\", \"dscp\"]\nperiod = \"boot\"\n",
         )
         .unwrap();
         assert_eq!(
             c.experiment.pool,
-            Pool::List(vec!["backlog".into(), "budget".into()])
+            Pool::List(vec!["writeback".into(), "dscp".into()])
         );
         assert_eq!(c.experiment.period, Period::Boot);
         plan("[experiment]\nsetting = \"random\"\npool = \"wifi\"\n").unwrap();

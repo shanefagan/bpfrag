@@ -259,6 +259,10 @@ fn sysctls(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
 /// polling (busy_read/busy_poll at 25/50/75 µs) came out in 0.15.0: 12
 /// matches with it on or off showed the same gaps, it costs CPU and power
 /// while it spins, and sockets opened during a match kept it afterwards.
+/// The receive backlog and budget (`netdev_max_backlog`, `netdev_budget*`)
+/// and NIC interrupt coalescing came out in 0.16.0: no match showed a
+/// difference with any of them, and their drop counters stayed at zero. A
+/// config can still set each per tier (`sysctl`, `coalesce_usecs`).
 pub fn builtin_profiles() -> [Profile; 3] {
     let wb = Some(Writeback {
         dirty_mb: 256,
@@ -271,9 +275,6 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.rmem_max", ">=8388608"),
             ("net.core.wmem_default", ">=262144"),
             ("net.core.wmem_max", ">=8388608"),
-            ("net.core.netdev_max_backlog", ">=5000"),
-            ("net.core.netdev_budget", ">=400"),
-            ("net.core.netdev_budget_usecs", ">=8000"),
             ("net.ipv4.udp_early_demux", "1"),
         ]),
         coalesce_usecs: None,
@@ -288,12 +289,9 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.rmem_max", ">=16777216"),
             ("net.core.wmem_default", ">=262144"),
             ("net.core.wmem_max", ">=16777216"),
-            ("net.core.netdev_max_backlog", ">=5000"),
-            ("net.core.netdev_budget", ">=600"),
-            ("net.core.netdev_budget_usecs", ">=8000"),
             ("net.ipv4.udp_early_demux", "1"),
         ]),
-        coalesce_usecs: Some(10),
+        coalesce_usecs: None,
         dscp: true,
         writeback: wb,
         wifi_powersave_off: true,
@@ -305,12 +303,9 @@ pub fn builtin_profiles() -> [Profile; 3] {
             ("net.core.rmem_max", ">=33554432"),
             ("net.core.wmem_default", ">=262144"),
             ("net.core.wmem_max", ">=33554432"),
-            ("net.core.netdev_max_backlog", ">=5000"),
-            ("net.core.netdev_budget", ">=800"),
-            ("net.core.netdev_budget_usecs", ">=8000"),
             ("net.ipv4.udp_early_demux", "1"),
         ]),
-        coalesce_usecs: Some(0),
+        coalesce_usecs: None,
         dscp: true,
         writeback: wb,
         wifi_powersave_off: true,

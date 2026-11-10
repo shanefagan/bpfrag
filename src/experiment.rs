@@ -40,23 +40,15 @@ pub enum Setting {
 /// `[experiment] setting` value that picks one from `pool` each period.
 pub const RANDOM: &str = "random";
 
-/// The pool for a wired connection: everything but Wi-Fi power save, and
-/// NIC coalescing, whose effect (microseconds) the gap figures (1 ms) can't
-/// show; on 2026-11-02 what it did change was how much busy polling
-/// found to do. `setting = "coalescing"` still tests it on its own. So
-/// does `setting = "busy_polling"`, for a config that sets `busy_read` and
-/// `busy_poll` itself (the built-in profiles no longer do), and `setting =
-/// "backlog"`: `netdev_max_backlog` only matters with RPS
-/// or virtual devices, and its arms never differed (2026-11-09 and -10).
-pub const WIRED_POOL: &[&str] = &["dscp", "socket_buffers", "budget", "writeback", "bulk"];
+/// The pool for a wired connection: every setting the built-in profiles
+/// change there.
+pub const WIRED_POOL: &[&str] = &["dscp", "socket_buffers", "writeback", "bulk"];
 
-/// The pool for Wi-Fi: everything but NIC coalescing, which Wi-Fi drivers
-/// generally don't support.
+/// The pool for Wi-Fi: the same, and Wi-Fi power save.
 pub const WIFI_POOL: &[&str] = &[
     "dscp",
     "wifi_power_save",
     "socket_buffers",
-    "budget",
     "writeback",
     "bulk",
 ];
@@ -67,10 +59,7 @@ pub const NAMES: &[&str] = &[
     "dscp",
     "wifi_power_save",
     "coalescing",
-    "busy_polling",
     "socket_buffers",
-    "backlog",
-    "budget",
     "writeback",
     "bulk",
     "sysctl:<name>",
@@ -85,17 +74,11 @@ impl Setting {
             "dscp" => Setting::Dscp,
             "wifi_power_save" => Setting::WifiPowerSave,
             "coalescing" => Setting::Coalescing,
-            "busy_polling" => Setting::Sysctls(vec!["net.core.busy_poll", "net.core.busy_read"]),
             "socket_buffers" => Setting::Sysctls(vec![
                 "net.core.rmem_default",
                 "net.core.rmem_max",
                 "net.core.wmem_default",
                 "net.core.wmem_max",
-            ]),
-            "backlog" => Setting::Sysctls(vec!["net.core.netdev_max_backlog"]),
-            "budget" => Setting::Sysctls(vec![
-                "net.core.netdev_budget",
-                "net.core.netdev_budget_usecs",
             ]),
             "writeback" => Setting::Writeback,
             "bulk" => Setting::Bulk,
@@ -361,8 +344,8 @@ mod tests {
                 .contains(&"wifi_power_save".into())
         );
         assert_eq!(
-            pool_names(&Pool::List(names(&["backlog"])), Link::Wifi),
-            ["backlog"]
+            pool_names(&Pool::List(names(&["writeback"])), Link::Wifi),
+            ["writeback"]
         );
         for n in WIRED_POOL.iter().chain(WIFI_POOL) {
             assert!(Setting::parse(n).unwrap().is_some(), "{n}");
@@ -376,7 +359,7 @@ mod tests {
         // writeback already in place here, everything else would change
         let (keep, in_place) = candidates(&pool, &profiles, false, |s| *s != Setting::Writeback);
         let kept: Vec<&str> = keep.iter().map(|(n, _)| n.as_str()).collect();
-        assert!(kept.contains(&"budget") && kept.contains(&"dscp"));
+        assert!(kept.contains(&"socket_buffers") && kept.contains(&"dscp"));
         assert!(!kept.contains(&"bulk"), "bulk is off");
         assert_eq!(in_place, ["writeback"]);
         // with bulk on, bulk joins and dscp leaves (the marker does both)
@@ -387,9 +370,9 @@ mod tests {
 
     #[test]
     fn a_pick_lasts_its_period() {
-        let c = names(&["backlog", "budget", "busy_polling"]);
+        let c = names(&["writeback", "socket_buffers", "dscp"]);
         let (first, new) = pick_for("2026-10-29", None, &c, |_| 1).unwrap();
-        assert_eq!((first.as_str(), new), ("budget", true));
+        assert_eq!((first.as_str(), new), ("socket_buffers", true));
         let saved = Pick {
             period: "2026-10-29".into(),
             setting: first,
@@ -397,18 +380,18 @@ mod tests {
         // same day: kept, whatever the dice say
         assert_eq!(
             pick_for("2026-10-29", Some(&saved), &c, |_| 2),
-            Some(("budget".into(), false))
+            Some(("socket_buffers".into(), false))
         );
         // next day: drawn again
         assert_eq!(
             pick_for("2026-10-30", Some(&saved), &c, |_| 2),
-            Some(("busy_polling".into(), true))
+            Some(("dscp".into(), true))
         );
         // the saved one no longer a candidate: drawn again
-        let fewer = names(&["backlog"]);
+        let fewer = names(&["writeback"]);
         assert_eq!(
             pick_for("2026-10-29", Some(&saved), &fewer, |_| 0),
-            Some(("backlog".into(), true))
+            Some(("writeback".into(), true))
         );
         assert_eq!(pick_for("2026-10-29", None, &[], |_| 0), None);
     }
@@ -418,7 +401,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("bpfrag-pick-{}", std::process::id()));
         let p = Pick {
             period: "2026-10-29".into(),
-            setting: "backlog".into(),
+            setting: "writeback".into(),
         };
         save_pick(&dir, &p).unwrap();
         assert_eq!(load_pick(&dir), Some(p));
@@ -445,12 +428,15 @@ mod tests {
             assert!(Setting::parse(n).unwrap().is_some(), "{n}");
         }
         let mut p = builtin_profiles()[2].clone();
-        assert!(p.sysctl.contains_key("net.core.netdev_budget"));
-        Setting::parse("budget").unwrap().unwrap().strip(&mut p);
-        assert!(!p.sysctl.contains_key("net.core.netdev_budget"));
-        assert!(!p.sysctl.contains_key("net.core.netdev_budget_usecs"));
+        assert!(p.sysctl.contains_key("net.core.rmem_max"));
+        Setting::parse("socket_buffers")
+            .unwrap()
+            .unwrap()
+            .strip(&mut p);
+        assert!(!p.sysctl.contains_key("net.core.rmem_max"));
+        assert!(!p.sysctl.contains_key("net.core.wmem_default"));
         assert!(
-            p.sysctl.contains_key("net.core.rmem_max"),
+            p.sysctl.contains_key("net.ipv4.udp_early_demux"),
             "only that setting"
         );
         assert!(p.dscp);

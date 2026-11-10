@@ -172,12 +172,11 @@ class Health(dict):
         ("jitter_us", r"jitter (\d+) µs"),
         ("send_longest_ms", r"own sending: longest gap (\d+) ms"),
         ("send_stalls", r"own sending: longest gap \d+ ms, (\d+) stalls?"),
-        ("busy_polled", r"busy-polled packets: (\d+)"),
     )
 
     @property
     def experiment(self):
-        """The experiment's arm the match ran with, e.g. "backlog off"."""
+        """The experiment's arm the match ran with, e.g. "socket_buffers off"."""
         m = re.search(r"; experiment: ([\w:.]+ (?:on|off))", self["line"])
         return m.group(1) if m else None
 

@@ -61,8 +61,8 @@ from. These extend that.
 ## Maybe: settings
 
 Each of these waits on its experiment. Given how the first settings have
-measured (busy polling and the backlog came out; coalescing and buffers
-show nothing at 1 ms), the bar is a visible effect.
+measured (busy polling, the backlog, the budget and coalescing all came
+out), the bar is a visible effect.
 
 - **Energy Efficient Ethernet off during a match** (experiment 5), on
   the Intel I225/I226 controllers where it has a history of trouble.
@@ -70,8 +70,8 @@ show nothing at 1 ms), the bar is a visible effect.
   the timelines show periodic stalls that line up with scans.
 - **EF in place of CS4** for the game's packets (experiment 9), as a
   config choice if it measures better through CAKE or on Wi-Fi.
-- **Removing what doesn't pay:** socket buffers and the receive budget
-  are the next candidates if their counters stay at zero.
+- **Removing what doesn't pay:** socket buffers are the next candidate,
+  if the game's socket turns out never to use them (M2).
 
 ## Maybe: reach
 

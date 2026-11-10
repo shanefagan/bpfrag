@@ -40,9 +40,9 @@ Every build and test command is a recipe in the `justfile`, and CI calls
 the same recipes; don't add a command to CI that isn't one.
 
 ```sh
-just pre-commit   # fmt --check, clippy -D warnings, unit tests: no root
+just pre-commit   # fmt --check, clippy and docs -D warnings, unit tests: no root
 just selftest     # BPF on this kernel, changes nothing (sudo)
-just e2e          # real kernel, netns, fake game (sudo)
+just e2e          # real kernel, netns, fake game: pytest in tests/e2e (sudo)
 just e2e-unit     # same, with only the unit's capabilities (sudo)
 just ci           # all of the above, in CI's order
 ```
@@ -118,6 +118,16 @@ container). bpfrag itself must keep building with plain `cargo build
 - Log wording is plain and specific ("Match detected: ...", "settings
   restored"), no gamer slang. Expected, deliberate cases (deny-listed
   processes) log at debug, not info.
+
+## End-to-end tests
+
+`tests/e2e/` is pytest on a real kernel: `rig.py` gives a test the
+network, the daemon and the fake game. One test per behaviour, named for
+it. Wait for events (`daemon.wait_for(...)`, `wait_for_profile()` before
+reading a setting), never for a fixed time, unless the timing is the
+scenario. Read the health line through `daemon.health()`, so its wording
+lives in one place. Every test must leave the system's settings as it
+found them; a fixture checks.
 
 ## Things tests enforce
 

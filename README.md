@@ -17,7 +17,7 @@ alongside other tuners](#running-alongside-other-tuners)).
 $ sudo bpfrag
 20:14:02 INFO  bpfrag 0.12.2 started; waiting for game traffic
 20:15:10 INFO  Match detected: Counter-Strike 2 (pid 6230) at ~128 pkt/s (tx 64, rx 64) -> COMPETITIVE [Steam app 730]
-20:15:10 INFO  COMPETITIVE profile: net.core.netdev_budget=600, net.core.rmem_max=16777216, enp6s0 coalescing=10us, ..., dscp=CS4 on enp6s0
+20:15:10 INFO  COMPETITIVE profile: net.core.rmem_max=16777216, net.core.wmem_max=16777216, ..., dscp=CS4 on enp6s0
 20:52:47 INFO  Match ended after 37m37s (game exited); settings restored
 20:52:47 INFO  Counter-Strike 2: packet gaps half ≤16 ms, 99% ≤19 ms, longest 31 ms, 0 stalls (100 ms+); no drops
 ```
@@ -56,29 +56,28 @@ and changed without fighting the verifier.
 | Knob | CASUAL | COMPETITIVE | INTENSE |
 |---|---|---|---|
 | DSCP mark on the game's packets | CS4 | CS4 | CS4 |
-| NIC interrupt coalescing (rx/tx) | untouched | 10 µs | 0 µs |
 | `net.core.{r,w}mem_max` (raise-only) | 8 MiB | 16 MiB | 32 MiB |
 | `net.core.{r,w}mem_default` (raise-only) | 256 KiB | 256 KiB | 256 KiB |
-| `net.core.netdev_max_backlog` (raise-only) | 5000 | 5000 | 5000 |
-| `net.core.netdev_budget` (raise-only) | 400 | 600 | 800 |
-| `net.core.netdev_budget_usecs` (raise-only) | 8000 | 8000 | 8000 |
 | `net.ipv4.udp_early_demux` | 1 | 1 | 1 |
 | `vm.dirty_bytes` / `dirty_background_bytes` (lower-only) | untouched | 256 / 64 MiB | 256 / 64 MiB |
 | Wi-Fi power save (wireless interfaces) | untouched | off | off |
 
-The network values are the three profiles from the original bpftune
-gaming-tuner patches, minus `net.ipv4.udp_mem`. That one is counted in pages,
-the kernel already sizes it from RAM (several GiB, against the kilobytes a
-game buffers), and the original values raised its hard limit to 32–128 GiB. "Raise-only" means bpfrag never shrinks something you
-already sized larger, and "lower-only" means writeback is only ever
-tightened. Everything is overridable per tier (see `dist/bpfrag.toml`).
+The buffer values come from the original bpftune gaming-tuner patches.
+"Raise-only" means bpfrag never shrinks something you already sized larger,
+and "lower-only" means writeback is only ever tightened. Everything is
+overridable per tier (see `dist/bpfrag.toml`).
+
+The list used to be longer. Busy polling, the receive backlog and budget
+and NIC interrupt coalescing were all set once, and all came out (0.15.0
+and 0.16.0) after matches with each on and off measured the same; any of
+them can still be set per tier in the config.
+[docs/findings.md](docs/findings.md) has the comparisons.
 
 How much each one matters varies a lot. The clearest cases are DSCP CS4,
 which gets the game's packets ahead on busy Wi-Fi and through CAKE or QoS
 routers, and turning Wi-Fi power save off, which avoids wake-up delays after
-lulls. Interrupt coalescing trims up to a quarter of a millisecond while
-something else downloads. The buffer, backlog and budget headroom only
-matter when their drop counters move. **[docs/knobs.md](docs/knobs.md)** goes through every
+lulls. The buffer headroom only matters when its drop counter moves.
+**[docs/knobs.md](docs/knobs.md)** goes through every
 setting: the kernel mechanism behind it, with sources, what to expect, when
 nothing will happen, and how confident that is.
 
@@ -195,9 +194,6 @@ bpfrag never touches CPU scheduling, priorities, affinity or frequency.
 sched_ext schedulers use struct_ops, while bpfrag uses tracepoints and tc,
 and the two run side by side.
 
-(Up to 0.14.1 bpfrag switched busy polling on during matches, whose spin
-time a scheduler counts as the game thread's runtime. It no longer does:
-see [docs/knobs.md](docs/knobs.md#busy-polling-busy_read-busy_poll).)
 
 **bpftune.** They do overlap, and bpfrag handles it. bpftune's sysctl watcher
 switches off a whole tuner (e.g. `udp_buffer`, `net_buffer`) as soon as any
@@ -206,8 +202,8 @@ yields those sysctls by default (`--bpftune auto`):
 
 | Sysctl | Owner while bpftune runs |
 |---|---|
-| `rmem_max`, `rmem_default`, `netdev_max_backlog`, `netdev_budget`, `netdev_budget_usecs` | bpftune: it sizes these from observed drops rather than a fixed profile |
-| `wmem_*`, `udp_early_demux`, NIC coalescing, DSCP, writeback | bpfrag: bpftune doesn't touch them |
+| `rmem_max`, `rmem_default` | bpftune: it sizes these from observed drops rather than a fixed profile |
+| `wmem_*`, `udp_early_demux`, DSCP, writeback | bpfrag: bpftune doesn't touch them |
 
 In that pairing bpftune looks after capacity and bpfrag looks after latency
 during matches. `bpfrag --check` shows exactly what's being yielded. Use
@@ -300,7 +296,6 @@ After your first real match:
 
 - `journalctl -u bpfrag` should show `Match detected` and then `Match ended
   ... settings restored`.
-- `ethtool -c <nic>` should show the original coalescing values again.
 - `sysctl net.core.rmem_max` should be back at its old value.
 
 If a restore ever fails, `sudo bpfrag --restore` replays the journal.
@@ -416,8 +411,8 @@ Carried over from those patches:
 - the variance gate, the tier hysteresis, and the asymmetric confidence and
   dwell for tier changes;
 - "never drop to CASUAL mid-match";
-- the three profiles' network values;
-- launcher-lineage trust and ethtool coalescing.
+- the three profiles' buffer values;
+- launcher-lineage trust.
 
 What's new:
 

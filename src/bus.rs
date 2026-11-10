@@ -89,7 +89,7 @@ pub struct State {
     /// The game's Steam app id; 0 between matches or if Steam didn't
     /// launch it.
     pub app_id: u32,
-    /// The `[experiment]` arm, e.g. "busy_polling off"; "" if none.
+    /// The `[experiment]` arm, e.g. "socket_buffers off"; "" if none.
     pub experiment: String,
     /// (setting, value now, value before the match)
     pub applied: Vec<(String, String, String)>,
@@ -222,9 +222,6 @@ pub fn health_dict(h: Option<&Health>) -> PropMap {
     put(&mut m, "nic_drops", Box::new(h.nic_drops));
     put(&mut m, "squeezed", Box::new(h.squeezed));
     put(&mut m, "game_tcp_bytes", Box::new(h.game_tcp_bytes));
-    if let Some(n) = h.busy_polled {
-        put(&mut m, "busy_polled", Box::new(n));
-    }
     put(
         &mut m,
         "server_changes",
@@ -748,7 +745,7 @@ mod tests {
                 reason: "Steam app 730".into(),
                 tier: "competitive".into(),
                 since: 1_700_000_000,
-                experiment: "busy_polling off".into(),
+                experiment: "socket_buffers off".into(),
                 applied: vec![("net.core.busy_poll".into(), "50".into(), "0".into())],
             },
         }
@@ -791,7 +788,7 @@ mod tests {
         want.sort();
         assert_eq!(keys, want);
         assert_eq!(all["GamePid"].0.as_u64(), Some(6230));
-        assert_eq!(all["Experiment"].0.as_str(), Some("busy_polling off"));
+        assert_eq!(all["Experiment"].0.as_str(), Some("socket_buffers off"));
         assert_eq!(all["State"].0.as_str(), Some("match"));
         assert_eq!(all["AppId"].0.as_u64(), Some(730));
         assert_eq!(all["MatchStartedAt"].0.as_u64(), Some(1_699_999_998_250));
@@ -967,13 +964,10 @@ mod tests {
             }),
             game_socket_drops: Some(0),
             nic_drops: 3,
-            busy_polled: Some(0),
             ..Default::default()
         };
         let d = health_dict(Some(&h));
-        assert_eq!(d["busy_polled"].0.as_u64(), Some(0));
         assert_eq!(d["server_changes"].0.as_u64(), Some(0));
-        assert!(!health_dict(Some(&Health::default())).contains_key("busy_polled"));
         assert_eq!(d["gap_p99_ms"].0.as_u64(), Some(31));
         assert_eq!(d["gap_max_ms"].0.as_f64(), Some(84.5));
         assert_eq!(d["stalls"].0.as_u64(), Some(2));

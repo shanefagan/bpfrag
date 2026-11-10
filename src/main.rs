@@ -41,10 +41,10 @@ use tune::Knobs;
 /// BPF programs count UDP traffic per process. When a game's netcode shows
 /// up (a steady, two-way, small-packet tick stream from a process that is
 /// a game) bpfrag applies a networking profile picked from the tick
-/// rate: CASUAL, COMPETITIVE or INTENSE. That covers socket busy-polling,
-/// NIC interrupt coalescing, buffer headroom, DSCP marking of the game's
-/// packets (helps Wi-Fi WMM and QoS routers) and, optionally, tighter dirty
-/// writeback so background downloads don't flush in bursts mid-match.
+/// rate: CASUAL, COMPETITIVE or INTENSE. That covers DSCP marking of the
+/// game's packets (helps Wi-Fi WMM and QoS routers), buffer headroom,
+/// Wi-Fi power save and, optionally, tighter dirty writeback so background
+/// downloads don't flush in bursts mid-match.
 ///
 /// Each match also gets a health report (packet gaps, drop counters) in
 /// --monitor and the log; --dry-run measures without changing anything.

@@ -46,7 +46,6 @@ SQUEEZE = re.compile(r"ran out of budget (\d+)x")
 QUEUE = re.compile(r"arrives on ([^;]+)")
 BULK = re.compile(r"bulk: (.*?)( marked \w+| \(not marked\))(?:;|$)")
 GAME_TCP = re.compile(r"the game's own TCP: ([^;]+)")
-BUSY = re.compile(r"busy-polled packets: (\d+)")
 SERVERS = re.compile(r"the game's server changed (once|\d+ times)")
 SILENT = re.compile(
     r"nothing from the server (?:for (\d+) s once|(\d+) times while the game kept sending, "
@@ -59,7 +58,7 @@ FIELDS = [
     "duration_s", "end_reason", "start_pps", "gap_p50_ms", "gap_p99_ms",
     "gap_longest_ms", "stalls", "jitter_us", "send_longest_ms", "send_stalls",
     "socket_drops", "game_socket_drops", "backlog_drops",
-    "nic_drops", "squeezed", "busy_polled", "server_changes", "silences",
+    "nic_drops", "squeezed", "server_changes", "silences",
     "silence_longest_s", "rx_queue", "game_tcp", "bulk",
     "bulk_marked",
     "experiment", "arm", "reason",
@@ -125,9 +124,6 @@ def parse(lines, label):
              cur["nic_drops"]) = d.groups("") if d else (0, 0, 0, 0)
             q = SQUEEZE.search(line)
             cur["squeezed"] = q.group(1) if q else 0
-            # blank when busy polling was off all match, or in older versions
-            if p := BUSY.search(line):
-                cur["busy_polled"] = p.group(1)
             # 0 when the server never changed; blank before 0.8.0. Without
             # the "started" line (a journal slice), the rx queue (0.9.0)
             # says it's recent enough.
@@ -162,7 +158,6 @@ COMPARED = [
     ("stalls", "stalls"),
     ("jitter_us", "jitter µs"),
     ("game_socket_drops", "game drops"),
-    ("busy_polled", "busy-polled"),
 ]
 
 

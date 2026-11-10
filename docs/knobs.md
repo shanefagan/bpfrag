@@ -21,11 +21,11 @@ something below is a hypothesis rather than established, it says so.
 |---|---|---|---|
 | [DSCP CS4](#dscp-cs4-on-the-games-packets) | verified | Real on busy Wi-Fi (uplink) and with CAKE or a QoS router; none on a plain wired LAN | High for the mechanism, unmeasured in matches |
 | [Wi-Fi power save off](#wi-fi-power-save) | verified | Removes wake-up delays of up to a beacon interval after lulls | Medium |
-| [NIC interrupt coalescing](#nic-interrupt-coalescing) | verified (igc) | Up to ~0.25 ms less receive delay, mostly while something else downloads | Medium for the mechanism; too small for the 1 ms gap histogram |
+| [NIC interrupt coalescing](#nic-interrupt-coalescing) | verified (igc) | No longer set (from 0.16.0): up to ~0.25 ms, too small to show in 10 matches | Measured: [findings.md](findings.md#match-comparisons) |
 | [busy_read / busy_poll](#busy-polling-busy_read-busy_poll) | verified | No longer set (from 0.15.0): no difference in 12 matches, and it costs CPU and power | Measured: [findings.md](findings.md#match-comparisons) |
 | [Socket buffers](#socket-buffers-rmem_-wmem_) | verified | None unless the game stops reading for over a second, and the defaults also only apply to new sockets | Low; [check 2](experiments.md#2-do-the-socket-buffer-settings-reach-the-games-socket) |
-| [netdev_max_backlog](#netdev_max_backlog) | verified | None on a NAPI NIC without RPS | Low |
-| [netdev_budget / _usecs](#netdev_budget-and-netdev_budget_usecs) | verified | Only matters when receive processing is saturated | Low |
+| [netdev_max_backlog](#netdev_max_backlog) | verified | No longer set (from 0.16.0): none on a NAPI NIC without RPS, and none measured | Measured: [findings.md](findings.md#match-comparisons) |
+| [netdev_budget / _usecs](#netdev_budget-and-netdev_budget_usecs) | verified | No longer set (from 0.16.0): only matters when receive processing is saturated, and none measured | Measured: [findings.md](findings.md#match-comparisons) |
 | [udp_early_demux](#udp_early_demux) | verified | None: it's already on by default | None (no-op) |
 | [Dirty writeback](#dirty-writeback-vmdirty_) | partly | Not networking; smaller writeback bursts. No-op on CachyOS | Low |
 | [Bulk demotion (LE)](#bulk-demotion-dscp-le) | verified | Real with CAKE on the machine or a router that adopts client marks | High for the mechanism, unmeasured in matches |
@@ -110,12 +110,19 @@ triggers during real matches depends on the game and the driver.
 
 ## NIC interrupt coalescing
 
-**Changes:** receive interrupt coalescing (`rx-usecs`) is set to 10 µs in
-COMPETITIVE and 0 µs in INTENSE, with adaptive coalescing off so the driver
-doesn't move it back, on wired interfaces carrying the game. Transmit
-coalescing is set along with it where the driver accepts that. The original
-values are put back. Wi-Fi drivers generally don't support it, and are
-skipped.
+**Changes:** nothing, from 0.16.0: ten matches with it on or off showed
+the same packet gaps, as expected of an effect measured in microseconds,
+and it is the setting most at the mercy of the NIC's driver. To have it,
+set `coalesce_usecs` per tier in the config (`coalesce_usecs = 10` under
+`[tier.competitive]`, say); `[experiment] setting = "coalescing"` then
+tests it.
+
+When set: receive interrupt coalescing (`rx-usecs`) takes that value, with
+adaptive coalescing off so the driver doesn't move it back, on wired
+interfaces carrying the game. Transmit coalescing is set along with it
+where the driver accepts that. The original values are put back. Wi-Fi
+drivers generally don't support it, and are skipped. Up to 0.15.0 the
+defaults were 10 µs in COMPETITIVE and 0 µs in INTENSE.
 
 **Mechanism:** `rx-usecs` is how long the NIC waits after a packet arrives
 before raising an interrupt, so it can batch several packets per interrupt.
@@ -164,8 +171,8 @@ and sockets opened during a match kept busy polling after it, which is a
 setting bpfrag couldn't put back. To have it anyway, set it per tier in
 the config, for example under `[tier.all]`:
 `sysctl = { "net.core.busy_read" = 50, "net.core.busy_poll" = 50 }`. It's restored like any other sysctl, `[experiment] setting =
-"busy_polling"` then tests it, and the rest of this section describes
-what it does.
+"sysctl:net.core.busy_poll"` then tests it, and the rest of this section
+describes what it does.
 
 **Mechanism** (`Documentation/admin-guide/sysctl/net.rst`,
 `Documentation/networking/napi.rst`):
@@ -204,13 +211,13 @@ behaviour under Proton isn't obvious either. The spin time is counted as
 the game thread's CPU time, which a sched_ext scheduler sees.
 
 **See it:** the kernel counts packets received by busy polling
-(`BusyPollRxPackets` in `/proc/net/netstat`, `nstat -az
-TcpExtBusyPollRxPackets`), and the end-of-match line reports how much it
-grew during any match with busy polling on: "busy-polled packets: N". If
-it stays at 0, busy polling did nothing
+(`BusyPollRxPackets` in `/proc/net/netstat`): run `nstat -az
+TcpExtBusyPollRxPackets` before and after a match. If it stays where it
+was, busy polling did nothing
 ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)).
-If it does, compare packet gaps and frame times with `[experiment] setting
-= "busy_polling"`.
+If it grows, compare packet gaps and frame times with `[experiment] setting
+= "sysctl:net.core.busy_poll"`. (bpfrag reported the count itself, as
+"busy-polled packets: N", up to 0.15.0.)
 
 **Confidence:** measured on one machine and one game (Deadlock under
 Proton, wired). A game that waits for packets differently might differ.
@@ -259,8 +266,11 @@ already sizes it from RAM, and the original values raised its hard limit to
 
 ## `netdev_max_backlog`
 
-**Changes:** raise-only, to at least 5000. The kernel default is 1000
-(`net/core/hotdata.c`).
+**Changes:** nothing, from 0.16.0: ten matches with it raised or left
+alone showed no difference, and the queue it sizes isn't used on a NIC
+with NAPI and no RPS. Up to then it was raised to at least 5000; the
+kernel default is 1000 (`net/core/hotdata.c`). It can still be set per
+tier (`sysctl = { "net.core.netdev_max_backlog" = ">=5000" }`).
 
 **Mechanism:** the per-CPU input queue (`enqueue_to_backlog()`,
 `net/core/dev.c`). Packets go through it when:
@@ -286,7 +296,10 @@ harmless.
 
 ## `netdev_budget` and `netdev_budget_usecs`
 
-**Changes:** raise-only, to at least 400/600/800 packets and 8000 µs. The
+**Changes:** nothing, from 0.16.0: nine matches with it raised or left
+alone showed no difference. Up to then both were raised, to at least
+400/600/800 packets and 8000 µs; they can still be set per tier under
+`sysctl`. The
 kernel defaults are 300 packets and two jiffies (`net/core/hotdata.c`):
 2000 µs on an HZ=1000 kernel, but already 8000 µs at
 HZ=250, where the time limit changes nothing.

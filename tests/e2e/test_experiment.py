@@ -19,28 +19,29 @@ def experiment(rig, name, setting, keep, extra=""):
     )
 
 
+# The rig's config sets busy_poll per tier, so that one sysctl is a setting
+# with a known value in each arm.
+SETTING = "sysctl:net.core.busy_poll"
+
+
 def test_the_off_arm_leaves_its_setting_alone(rig):
-    daemon = rig.daemon(experiment(rig, "exp-off", "busy_polling", 0))
+    daemon = rig.daemon(experiment(rig, "exp-off", SETTING, 0))
     game = rig.game(64)
     daemon.wait_for_match()
 
-    daemon.wait_for("Experiment: busy_polling off for this match")
+    daemon.wait_for(f"Experiment: {SETTING} off for this match")
     daemon.wait_for_profile()
-    assert sysctl("net.core.busy_poll") == "0" and sysctl("net.core.busy_read") == "0"
-    assert daemon.logged(r"net\.core\.netdev_budget="), "the other settings still apply"
-    assert "experiment: busy_polling off" in daemon.monitor()
+    assert sysctl("net.core.busy_poll") == "0"
+    assert sysctl("net.core.busy_read") == "50", "the other settings still apply"
+    assert f"experiment: {SETTING} off" in daemon.monitor()
 
     game.exit()
     health = daemon.health()
-    assert health.experiment == "busy_polling off", health["line"]
-    # The count is machine-wide, and sockets opened while busy polling was
-    # on (earlier tests, or anything else on a desktop) keep polling until
-    # they close: a few dozen can show with it off.
-    assert health.get("busy_polled", 0) < 1000, health["line"]
+    assert health.experiment == f"{SETTING} off", health["line"]
 
 
 def test_the_on_arm_applies_it_as_usual(rig):
-    daemon = rig.daemon(experiment(rig, "exp-on", "busy_polling", 1))
+    daemon = rig.daemon(experiment(rig, "exp-on", SETTING, 1))
     game = rig.game(64)
     daemon.wait_for_match()
     daemon.wait_for_profile()
@@ -48,8 +49,7 @@ def test_the_on_arm_applies_it_as_usual(rig):
 
     game.exit()
     health = daemon.health()
-    assert health.experiment == "busy_polling on", health["line"]
-    assert "busy_polled" in health, health["line"]
+    assert health.experiment == f"{SETTING} on", health["line"]
 
     # docs/scripts/matches.py turns the log into a CSV of matches
     out = subprocess.run(
@@ -59,7 +59,7 @@ def test_the_on_arm_applies_it_as_usual(rig):
         text=True,
         check=False,
     ).stdout
-    assert ",busy_polling,on," in out, out
+    assert f",{SETTING},on," in out, out
 
 
 def test_the_all_off_arm_changes_nothing_and_still_measures(rig):
@@ -78,29 +78,28 @@ def test_the_all_off_arm_changes_nothing_and_still_measures(rig):
 
 def test_a_random_experiment_keeps_one_setting_a_day(rig):
     """A one-setting pool makes the pick predictable."""
-    config = experiment(rig, "exp-random", "random", 0, 'pool = ["backlog"]\n')
+    config = experiment(rig, "exp-random", "random", 0, 'pool = ["socket_buffers"]\n')
     first = rig.daemon(config)
     first.wait_for(
-        r"Experiment for today: backlog, switched off in 100% of matches "
-        r"\(picked at random from the configured pool: backlog\)"
+        r"Experiment for today: socket_buffers, switched off in 100% of matches "
+        r"\(picked at random from the configured pool: socket_buffers\)"
     )
     saved = json.loads((rig.work / "state" / "experiment.json").read_text())
-    assert saved["setting"] == "backlog", saved
+    assert saved["setting"] == "socket_buffers", saved
     first.stop()
 
     daemon = rig.daemon(config)
-    daemon.wait_for(r"Experiment for today: backlog, .*\(picked earlier today\)")
-    backlog = sysctl("net.core.netdev_max_backlog")
+    daemon.wait_for(r"Experiment for today: socket_buffers, .*\(picked earlier today\)")
     rig.game(64)
     daemon.wait_for_match()
-    daemon.wait_for("Experiment: backlog off for this match")
+    daemon.wait_for("Experiment: socket_buffers off for this match")
     daemon.wait_for_profile()
-    assert sysctl("net.core.netdev_max_backlog") == backlog
+    assert sysctl("net.core.rmem_max") == rig.baseline["net.core.rmem_max"]
     assert sysctl("net.core.busy_poll") == "50", "the other settings still apply"
 
     check = daemon.ask("--check")
     assert any(
-        "experiment" in line and "random, one setting per day (now: backlog)" in line
+        "experiment" in line and "random, one setting per day (now: socket_buffers)" in line
         for line in check.splitlines()
     ), check
 

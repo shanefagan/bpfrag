@@ -18,7 +18,7 @@ Deadlock, with some Trackmania.
 - **NIC interrupt coalescing:** no difference in the packet gaps over 10
   matches (5 each way), as expected at 1 ms resolution. It does change
   busy polling: with coalescing at 0–10 µs, busy polling handled about a
-  quarter as many packets.
+  quarter as many packets. Taken out of the profiles in 0.16.0.
 - **Busy polling:** no difference in the gaps over 12 Deadlock matches
   (7 on, 5 off). It runs when on (20–30 packets a second, machine-wide). Sockets
   opened during an "on" match keep busy-polling after it, until they
@@ -27,7 +27,8 @@ Deadlock, with some Trackmania.
   nothing in the figures paid for it.
 - **Receive budget and backlog** (`netdev_budget*`,
   `netdev_max_backlog`): no difference in the gaps, jitter or stalls over
-  19 Deadlock matches (2026-11-04 to -10). What made matches differ was the relay they were on.
+  19 Deadlock matches (2026-11-04 to -10). What made matches differ was
+  the relay they were on. Both taken out of the profiles in 0.16.0.
 - **Socket buffers:** the game's own sockets never dropped a packet in
   play, with or without bigger buffers (15 matches, 2026-11-02 to -08).
   The one time they did, 4 packets with the kernel's default buffers,
@@ -116,11 +117,11 @@ each:
 3. **Does busy polling change anything for real games,** native or under
    Proton? Not in 12 Deadlock matches, so bpfrag stopped setting it after
    0.14.1. Still open for a native game, or one that waits in `epoll`:
-   set it in the config and run `setting = "busy_polling"`.
-4. **Do socket buffer, backlog or NIC drops ever happen during matches
-   with the kernel defaults?** If not, the buffer, backlog and budget
-   settings can go. For socket buffers, look at the game's own count,
-   not the machine-wide total.
+   set it in the config and run `setting = "sysctl:net.core.busy_poll"`.
+4. **Do socket buffer drops ever happen during matches with the kernel
+   defaults?** If not, the buffer settings can go, as the backlog and
+   budget did in 0.16.0. Look at the game's own count, not the
+   machine-wide total.
 5. **Is CS4 or EF better for the game's packets** with common router QoS
    setups? CAKE diffserv4 treats both as Voice; on Wi-Fi, EF maps to the
    voice category, CS4 to video.

@@ -253,18 +253,13 @@ pub struct Health {
     /// The class bulk packets were marked with; None if they weren't.
     #[serde(default)]
     pub bulk_class: Option<String>,
-    /// The `[experiment]` arm this match got, e.g. "busy_polling off".
+    /// The `[experiment]` arm this match got, e.g. "socket_buffers off".
     #[serde(default)]
     pub experiment: Option<String>,
     /// TCP the game itself moved during the match (map or replay
     /// downloads, voice through the game's servers).
     #[serde(default)]
     pub game_tcp_bytes: u64,
-    /// Packets received by busy polling, anywhere on the machine. Some
-    /// when busy polling was on at some point in the match (or the count
-    /// moved anyway); None otherwise, or if the kernel doesn't report it.
-    #[serde(default)]
-    pub busy_polled: Option<u64>,
     /// Times the game moved to another server (`peers`) without going
     /// quiet: back-to-back games the detector saw as one match, or one
     /// game moving mid-match (Steam's relays route through new ones).
@@ -329,9 +324,6 @@ impl Health {
         s += &format!("; {}", self.drops_text());
         if self.squeezed > 0 {
             s += &format!("; receive processing ran out of budget {}x", self.squeezed);
-        }
-        if let Some(n) = self.busy_polled {
-            s += &format!("; busy-polled packets: {n}");
         }
         if let Some(q) = &self.rx_queue {
             s += &format!("; arrives on {}", q.describe());
@@ -401,9 +393,6 @@ pub struct Tracker {
     /// The game's UDP sockets: drops at the start (0 for sockets opened
     /// later) and at the latest reading, by inode.
     game: Option<GameSockets>,
-    /// Busy polling was on (`busy_poll` or `busy_read` above 0) at some
-    /// reading this match, whoever set it.
-    busy_on: bool,
     /// Who the game receives from.
     servers: Servers,
     /// The part of the match the gap figures cover.
@@ -891,7 +880,6 @@ impl Tracker {
         self.nic_base.clear();
         self.latest = None;
         self.rx_queue = None;
-        self.busy_on = false;
         self.servers = Servers::default();
         self.silence = silence::Silence::default();
         self.udp_prev = None;
@@ -936,10 +924,6 @@ impl Tracker {
         if let Some(g) = self.game.as_mut() {
             g.refresh();
         }
-        if !self.busy_on {
-            self.busy_on = busy_polling_on();
-        }
-        let busy_polled = sys.busy_polled.filter(|n| self.busy_on || *n > 0);
         let main = self.play.update(ports, reading, game);
         let napi_id = Gaps::match_flows(ports).map_or(0, |g| g.napi_id);
         if napi_id != 0 && self.rx_queue.as_ref().map(|q| q.napi_id) != Some(napi_id) {
@@ -955,7 +939,6 @@ impl Tracker {
             nic_drops,
             squeezed: sys.squeezed,
             rx_queue: self.rx_queue.clone(),
-            busy_polled,
             server_changes: self.servers.changes(),
             silences: self.silence.count(),
             silence_longest_secs: self.silence.longest(),
@@ -1035,7 +1018,6 @@ impl Tracker {
         self.nic_base.clear();
         self.rx_queue = None;
         self.game = None;
-        self.busy_on = false;
         self.play = Play::default();
         let changes = self.servers.changes();
         self.servers = Servers::default();
@@ -1048,16 +1030,6 @@ impl Tracker {
             h
         })
     }
-}
-
-/// Is busy polling on right now, by either sysctl?
-fn busy_polling_on() -> bool {
-    ["busy_poll", "busy_read"].iter().any(|k| {
-        crate::util::read_trim(format!("/proc/sys/net/core/{k}"))
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .is_some_and(|v| v > 0)
-    })
 }
 
 #[cfg(test)]
@@ -1517,21 +1489,17 @@ mod tests {
     }
 
     #[test]
-    fn busy_polled_packets_show_when_counted() {
+    fn running_out_of_budget_shows_in_the_summary() {
         let h = Health {
             squeezed: 2,
-            busy_polled: Some(0),
             ..Default::default()
         };
         assert!(
-            h.summary().ends_with(
-                "no drops; receive processing ran out of budget 2x; busy-polled packets: 0"
-            ),
+            h.summary()
+                .ends_with("no drops; receive processing ran out of budget 2x"),
             "{}",
             h.summary()
         );
-        let off = Health::default();
-        assert!(!off.summary().contains("busy"));
     }
 
     #[test]

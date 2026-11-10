@@ -43,7 +43,7 @@ extended-description = """\
 bpfrag counts UDP traffic per process with eBPF. When a game's network \
 traffic appears (a steady, two-way, small-packet stream from a process \
 classified as a game), it applies a networking profile for the length of \
-the match: NIC interrupt coalescing, buffer headroom, \
+the match: buffer headroom, \
 DSCP marking of the game's packets and Wi-Fi power save. Every change is \
 journalled and restored when the match ends. It does not touch CPU \
 scheduling and yields bpftune's sysctls while bpftune runs."""

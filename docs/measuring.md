@@ -30,7 +30,6 @@ show what reaches the machine, not what the game does with it.
 | backlog drops | per-CPU input queue overflowed | `netdev_max_backlog` (RPS or virtual devices only) |
 | NIC drops | the NIC's receive ring overflowed | coalescing, ring size, very high rates |
 | ran out of budget | receive processing deferred | `netdev_budget*`, heavy receive load |
-| busy-polled packets | packets received by busy polling during the match, anywhere on the machine; shown when busy polling was on | `busy_poll`/`busy_read`, if they reach anything at all |
 | arrives on | the receive queue and IRQ | RSS, whether a download shares the queue |
 | bulk | what was demoted, and how much | `[bulk]` |
 
@@ -133,12 +132,9 @@ pick is kept in `/var/lib/bpfrag`, so restarts and reboots during the day
 don't change it. The day starts at 05:00, so an evening that runs past
 midnight stays one experiment. Settings this machine already has (because
 the distribution ships them, or bpftune holds them) are left out, since
-both halves would be the same. The wired pool leaves out Wi-Fi power save
-and NIC coalescing (its effect is microseconds, below what the gap
-figures can show; test it on its own with `setting = "coalescing"` and
-watch the NIC drop count); the Wi-Fi pool leaves out coalescing too.
-Neither has `backlog` (its arms never differed) or `busy_polling` (no
-longer set unless your config sets it); both can still be named. The day's pick waits until the network is up.
+both halves would be the same. The pools are the settings the built-in
+profiles change: `dscp`, `socket_buffers`, `writeback` and `bulk`, plus
+`wifi_power_save` on Wi-Fi. The day's pick waits until the network is up.
 `sudo bpfrag --check` shows today's pick.
 
 Testing one setting at a time is the point: switching everything off at
@@ -147,9 +143,9 @@ which setting did it.
 
 To test one setting yourself, name it: `setting = "socket_buffers"`. The
 names are the sections of [knobs.md](knobs.md): `dscp`,
-`wifi_power_save`, `coalescing`, `busy_polling` (only if your config sets
-busy polling), `socket_buffers`,
-`backlog`, `budget`, `writeback`, `bulk` (needs `[bulk] enabled = true`),
+`wifi_power_save`, `socket_buffers`, `writeback`, `bulk` (needs `[bulk]
+enabled = true`), `coalescing` (only if your config sets
+`coalesce_usecs`),
 `all`, or `sysctl:<name>` for a single sysctl.
 
 Either way, each match logs its arm when it starts (`Experiment:
@@ -283,17 +279,14 @@ Ordered by how likely each is to show something:
    longest gap and stalls.
 3. **DSCP on a busy Wi-Fi network** (`dscp`), with other devices
    streaming or downloading.
-4. **Busy polling** (`busy_polling`), which bpfrag no longer sets: put it
-   in your config first ([knobs.md](knobs.md#busy-polling-busy_read-busy_poll)).
-   Worth it for a native game, or one known to wait in `epoll`. Check that
-   it happens at all: the "busy-polled packets" count in the "on" matches
-   ([experiments.md](experiments.md#1-does-busy-polling-reach-the-game)).
-   Note frame times and CPU use too, since busy polling costs both.
+4. **Something bpfrag no longer sets** (busy polling, coalescing, the
+   backlog or budget): put it in your config first, then name it
+   (`sysctl:net.core.busy_poll`, `coalescing`). Worth it on hardware or a
+   game unlike the ones in [findings.md](findings.md).
 5. **Everything** (`all`): the overall picture, once the individual
    pieces are understood.
 
-The buffer, backlog and budget settings only matter when their drop
-counters move. If they stay at 0 across many matches with the defaults,
+The buffer settings only matter when their drop counters move. If they stay at 0 across many matches with the defaults,
 that's the finding. What a setting can do also depends on your
 distribution's defaults: `sudo bpfrag --check` shows which settings
 already hold their tier's value ([distros.md](distros.md)).

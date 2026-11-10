@@ -93,8 +93,11 @@ does work). Growth: keep it and run the A/B (`busy_polling`) to see
 whether it helps.
 
 **Decided (from 0.15.0):** it grew, the A/B was run (12 matches, no
-difference in the gaps), and bpfrag no longer sets busy polling. The
-check still works for a config that sets it.
+difference in the gaps), and bpfrag no longer sets busy polling. From
+0.16.0 it no longer reports the count or has a `busy_polling` experiment
+either: for a config that sets busy polling, use `nstat` as below and
+`setting = "sysctl:net.core.busy_poll"`. The rest of this check is kept
+as the record of how it was answered.
 
 **So far:** it grows: 15,000 to 200,000 busy-polled packets a match on
 2026-11-02 (Deadlock, wired, a torrent client running), machine-wide, so
@@ -673,7 +676,7 @@ it.
 
 | | Measurement | For |
 |---|---|---|
-| M1 | Busy-polled packets (`BusyPollRxPackets`) during the match, in the health line. Done: "busy-polled packets: N" | 1 |
+| M1 | Busy-polled packets (`BusyPollRxPackets`) during the match, in the health line. Done, then removed in 0.16.0 with busy polling itself | 1 |
 | M2 | The game's socket buffer sizes (`rb`, via sock_diag as `ss -m` does) | 2 |
 | M3 | Round-trip time to the gateway and a public anycast address, about once a second during a match. Arrival gaps measure jitter, not delay: a queue holding a steady 80 ms still delivers a steady 64 Hz stream, so only round-trip time shows it. Game servers and relays may not answer pings, which is why the gateway and a public address are the dependable targets; the server's own address needs M7 | 8, 10, 12, 18 |
 | M4 | Gaps between the game's outgoing packets to tell a game or host hiccup from a network one; on a server, a tick-loop hitch shows as every player's outgoing stream pausing at once. Done in 0.13.0 for the client: timed at send, in the health line and the timeline | all, 23, 24 |

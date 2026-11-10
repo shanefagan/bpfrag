@@ -44,7 +44,7 @@ Recommends:     iw
 bpfrag counts UDP traffic per process with eBPF. When a game's network
 traffic appears (a steady, two-way stream of small packets from a process
 that is a game), it applies a networking profile chosen from the tick
-rate: NIC interrupt coalescing, buffer headroom, DSCP
+rate: buffer headroom, DSCP
 marking of the game's packets, Wi-Fi power save and, optionally, tighter
 dirty-page writeback. Every change is journalled first and put back when
 the match ends or the game exits.
