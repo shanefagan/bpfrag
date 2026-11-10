@@ -14,7 +14,7 @@ def pytest_addoption(parser):
     parser.addoption(
         "--bpfrag",
         default=os.environ.get("BPFRAG_BIN", str(REPO / "target/release/bpfrag")),
-        help="the bpfrag binary to test, or a wrapper such as tests/rig/unit-caps.sh",
+        help="the bpfrag binary to test, or a wrapper such as tests/e2e/unit-caps.sh",
     )
 
 
@@ -29,7 +29,9 @@ def rig(request):
     # An installed bpfrag would see the fake game too, tune the system
     # under the test and write its matches into the real captures.
     if shutil.which("systemctl") and (
-        subprocess.run(["systemctl", "is-active", "--quiet", "bpfrag"], check=False).returncode
+        subprocess.run(
+            ["systemctl", "is-active", "--quiet", "bpfrag"], check=False, capture_output=True
+        ).returncode
         == 0
     ):
         pytest.exit(
@@ -63,8 +65,9 @@ def daemon(rig):
 
 @pytest.fixture
 def match(rig, daemon):
-    """A match in progress: the fake game at 64 packets a second, detected.
-    Gives (daemon, game)."""
+    """A match in progress: the fake game at 64 packets a second, detected
+    and tuned for. Gives (daemon, game)."""
     game = rig.game(64)
     daemon.wait_for_match("COMPETITIVE")
+    daemon.wait_for_profile("COMPETITIVE")
     return daemon, game

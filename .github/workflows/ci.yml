@@ -47,7 +47,7 @@ jobs:
       - name: Install build and test dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config tcpdump iproute2 just
+          sudo apt-get install -y clang libclang-dev libelf-dev libdbus-1-dev zlib1g-dev pkg-config tcpdump iproute2 python3-pytest just
 
       - name: Rust toolchain
         run: |

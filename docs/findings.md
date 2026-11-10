@@ -262,7 +262,7 @@ around a millisecond of CPU per second.
 
 ## Synthetic tests
 
-The e2e rig (`tests/rig/e2e.sh`) plays a fake 64-tick game against an echo
+The e2e rig (`tests/e2e/`) plays a fake 64-tick game against an echo
 server in a network namespace. It measures gaps of 15–18 ms, as it should,
 and checks every setting changes and comes back. That proves bpfrag does
 what it says, not that it helps a real game. The comparisons above are for

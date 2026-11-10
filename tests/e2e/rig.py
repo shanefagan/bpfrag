@@ -28,7 +28,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
-PROGRAMS = REPO / "tests" / "rig"  # client.py, server.py, bulk.py, ...
+PROGRAMS = HERE / "programs"  # client.py, server.py, bulk.py, ...
 
 SERVER = "10.99.0.2"
 SERVER2 = "10.99.0.3"
@@ -175,6 +175,12 @@ class Health(dict):
         ("busy_polled", r"busy-polled packets: (\d+)"),
     )
 
+    @property
+    def experiment(self):
+        """The experiment's arm the match ran with, e.g. "backlog off"."""
+        m = re.search(r"; experiment: ([\w:.]+ (?:on|off))", self["line"])
+        return m.group(1) if m else None
+
     def __init__(self, line):
         super().__init__(line=line)
         for key, pattern in self.FIELDS:
@@ -231,6 +237,11 @@ class Daemon:
         tier = f".*-> {tier}" if tier else ""
         return self.wait_for(rf"Match detected: \w+{tier}", timeout, count)
 
+    def wait_for_profile(self, tier=r"\w+", timeout=10.0):
+        """Wait until a tier's settings have been applied. "Match detected"
+        and a tier change are logged first, the settings follow."""
+        return self.wait_for(rf"{tier} profile: ", timeout)
+
     def wait_for_end(self, timeout=15.0, count=1):
         return self.wait_for(r"Match ended", timeout, count)
 
@@ -281,7 +292,7 @@ class Rig:
     """The network and files every test shares. Built once per session."""
 
     def __init__(self, bpfrag):
-        # one path, or a wrapper followed by nothing (tests/rig/unit-caps.sh)
+        # the binary, or a wrapper that runs it (tests/e2e/unit-caps.sh)
         self.bpfrag = [str(Path(bpfrag).resolve())]
         self.work = Path(tempfile.mkdtemp(prefix="bpfrag-e2e."))
         self.have_v6 = Path("/proc/net/if_inet6").exists()
@@ -392,6 +403,14 @@ class Rig:
         self._started.append(p)
         return p
 
+    def tcp_game(self, rate=20, appid="4243"):
+        """A Steam game that talks TCP (an MMO client)."""
+        p = Process(
+            [self.fakemmo, self.work / "tcpgame.py", rate], env={"SteamAppId": appid}
+        )
+        self._started.append(p)
+        return p
+
     def run_bpftune(self):
         """Something called bpftune, running: bpfrag leaves its sysctls be."""
         p = Process([self.bpftune, "600"])
@@ -429,6 +448,16 @@ class Rig:
             lambda: not self.changed(),
             timeout,
         )
+
+    # -- match timelines -------------------------------------------------
+
+    def timelines(self, game="fakeshooter"):
+        """The match timelines (CSV) written so far, oldest first."""
+        return sorted((self.work / "run" / "captures").glob(f"*_{game}.csv"))
+
+    def clear_timelines(self):
+        for old in (self.work / "run" / "captures").glob("*.csv"):
+            old.unlink()
 
     # -- packets ---------------------------------------------------------
 

@@ -67,18 +67,14 @@ selftest: build
 fuzz packets="200000" seed="": build
     {{ sudo }} env BPFRAG_FUZZ_PACKETS={{ packets }} {{ if seed != "" { "BPFRAG_FUZZ_SEED=" + seed } else { "" } }} {{ bin }} --selftest
 
-# Network namespace, fake game, noise, crash recovery, D-Bus (root)
-e2e: build
-    {{ sudo }} tests/rig/e2e.sh {{ bin }}
+# End-to-end on a real kernel: network namespace, fake game, crash recovery, D-Bus
+# (root, python3-pytest). One test: just e2e -k stall
+e2e *args: build
+    {{ sudo }} env PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/e2e --bpfrag={{ bin }} {{ args }}
 
 # The same with only the systemd unit's capabilities (root)
-e2e-unit: build
-    {{ sudo }} tests/rig/e2e.sh tests/rig/unit-caps.sh
-
-# The end-to-end tests moved to pytest so far (root; e.g. `just e2e-py -k stall`)
-[positional-arguments]
-e2e-py *args: build
-    {{ sudo }} env PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/e2e --bpfrag={{ bin }} "$@"
+e2e-unit *args: build
+    {{ sudo }} env PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/e2e --bpfrag=tests/e2e/unit-caps.sh {{ args }}
 
 # Everything CI's test job runs
 ci: fmt-check lint test build check-system selftest e2e e2e-unit

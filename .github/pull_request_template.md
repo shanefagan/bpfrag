@@ -9,7 +9,7 @@
 - [ ] `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`
 - [ ] `cargo test`
 - [ ] `sudo ./target/release/bpfrag --selftest` (if the BPF programs changed)
-- [ ] `sudo tests/rig/e2e.sh target/release/bpfrag` (if detection, tuning or restore changed)
+- [ ] `just e2e` (if detection, tuning or restore changed)
 - [ ] Tried in a real match (game, and Ethernet or Wi-Fi):
 
 ## Checklist

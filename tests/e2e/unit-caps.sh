@@ -4,7 +4,7 @@
 # Run bpfrag with only the capabilities dist/bpfrag.service leaves it, to
 # check the unit's CapabilityBoundingSet is enough:
 #
-#   sudo tests/rig/e2e.sh tests/rig/unit-caps.sh
+#   just e2e-unit
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 caps=$(sed -n 's/^CapabilityBoundingSet=//p' "$HERE/../../dist/bpfrag.service" |

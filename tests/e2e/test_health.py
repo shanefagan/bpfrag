@@ -25,3 +25,19 @@ def test_a_hiccup_is_a_stall_and_a_lobby_isnt(rig, match):
     # keepalive a second in the lobby: the same two going out
     assert health["send_stalls"] == 2, health["line"]
     assert 250 <= health["send_longest_ms"] < 450, health["line"]
+
+
+def test_a_hiccup_while_loading_isnt_counted(rig, match):
+    """The gaps count from a minute in. A hiccup ten seconds in is the
+    game loading; one after a minute is play."""
+    daemon, game = match
+    time.sleep(8)
+    game.freeze(0.6)  # loading
+    time.sleep(60)
+    game.freeze(0.3)  # play
+    time.sleep(10)  # past the last five seconds, left out as the match's end
+    game.exit()
+
+    health = daemon.health()
+    assert health["stalls"] == 1, health["line"]
+    assert 250 <= health["longest_ms"] < 450, "the one during play: " + health["line"]

@@ -40,6 +40,7 @@ def test_a_game_is_detected_and_tuned(rig, match):
     daemon, _game = match
     assert daemon.logged(r"Match detected: fakeshooter.*COMPETITIVE")
     assert sysctl("net.core.busy_poll") == "50"
+    assert int(sysctl("vm.dirty_bytes")) > 0, "writeback not tightened"
     # 64 echoes a second arrive about 15.6 ms apart
     line = wait_until(
         lambda: f"no gaps measured: {daemon.monitor()}",
@@ -76,6 +77,7 @@ def test_the_tier_follows_the_games_rate(rig, match):
     daemon, game = match
     game.set_rate(150)
     daemon.wait_for("COMPETITIVE -> INTENSE")
+    daemon.wait_for_profile("INTENSE")
 
     assert sysctl("net.core.busy_poll") == "75"
     wait_until(
