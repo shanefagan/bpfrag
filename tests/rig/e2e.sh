@@ -210,7 +210,10 @@ echo "== 6b. stalls: a mid-match hiccup counts, a lobby doesn't"
 # Two real hiccups (the client frozen for ~300 ms), then a lobby: a few
 # seconds of one packet a second, the way games idle between rounds.
 "$B" -c $W/cfg.toml > $W/d6b.log 2>&1 & D=$!; sleep 1
-echo 64 > $W/rate6b; game 64 180 $W/rate6b; sleep 6
+echo 64 > $W/rate6b; game 64 180 $W/rate6b
+# the hiccups only count once the match is on: wait for it, not a fixed time
+for i in $(seq 1 15); do grep -q "Match detected" $W/d6b.log && break; sleep 1; done
+sleep 4
 for i in 1 2; do kill -STOP $G; sleep 0.3; kill -CONT $G; sleep 2; done
 echo 1 > $W/rate6b; sleep 4; echo 64 > $W/rate6b; sleep 4
 kill $G; sleep 2
