@@ -173,6 +173,36 @@ impl Opts {
     }
 }
 
+/// The configuration `--restore` runs with: the file if it loads, else the
+/// defaults with whatever run directory the file names. Putting settings
+/// back is what the unit does after a crash, and a typo in the config file
+/// must not stop it; the run directory is all it needs.
+fn config_for_restore(path: Option<&std::path::Path>) -> Config {
+    let e = match Config::load(path) {
+        Ok(cfg) => return cfg,
+        Err(e) => e,
+    };
+    let file = path.unwrap_or(std::path::Path::new(config::DEFAULT_CONFIG));
+    let run_dir = std::fs::read_to_string(file)
+        .ok()
+        .and_then(|t| t.parse::<toml::Table>().ok())
+        .and_then(|t| {
+            t.get("general")?
+                .get("run_dir")?
+                .as_str()
+                .map(str::to_string)
+        });
+    let mut cfg = Config::default();
+    if let Some(d) = run_dir {
+        cfg.general.run_dir = d;
+    }
+    warn!(
+        "config not loaded ({e:#}); restoring with run directory {}",
+        cfg.general.run_dir
+    );
+    cfg
+}
+
 fn main() -> Result<()> {
     let opts = Opts::parse();
     logger::init(opts.verbose);
@@ -190,8 +220,13 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let mut cfg = Config::load(opts.config.as_deref())?;
-    opts.apply(&mut cfg)?;
+    let cfg = if opts.restore {
+        config_for_restore(opts.config.as_deref())
+    } else {
+        let mut cfg = Config::load(opts.config.as_deref())?;
+        opts.apply(&mut cfg)?;
+        cfg
+    };
     let run_dir = PathBuf::from(&cfg.general.run_dir);
 
     // SIGINT/SIGTERM/SIGHUP ask the daemon (or --monitor) to stop cleanly,
@@ -276,10 +311,33 @@ fn main() -> Result<()> {
     };
     daemon::run(&run, cfg, shutdown)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use clap::CommandFactory;
+
+    #[test]
+    fn restore_runs_with_a_config_that_does_not_load() {
+        let dir = std::env::temp_dir().join(format!("bpfrag-restore-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bad = dir.join("bad.toml");
+        std::fs::write(&bad, "this is [not toml").unwrap();
+        let cfg = config_for_restore(Some(&bad));
+        assert_eq!(cfg.general.run_dir, Config::default().general.run_dir);
+        // one that loads but wouldn't pass validation still gives its run dir
+        let odd = dir.join("odd.toml");
+        std::fs::write(
+            &odd,
+            "[general]\nrun_dir = \"/run/elsewhere\"\ntick_ms = 5\n",
+        )
+        .unwrap();
+        assert_eq!(
+            config_for_restore(Some(&odd)).general.run_dir,
+            "/run/elsewhere"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn man_page_lists_every_flag() {
