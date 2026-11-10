@@ -710,7 +710,7 @@ impl<'a> Tuner<'a> {
             crate::health::Game {
                 tcp_rx: game.map(|x| x.tcp_rx_bytes),
                 udp_tx: game.map(|x| x.tx_pkts),
-                send: send_reading(&sends, reading),
+                send: send_reading(&sends, &ports, reading),
             },
         );
         if let Some(x) = samples.iter().find(|x| x.tgid == s.tgid) {
@@ -735,7 +735,7 @@ impl<'a> Tuner<'a> {
                 server: self.health.server(),
                 peers: self.health.active_peers(),
                 reading: Some(reading),
-                send: send_reading(&sends, reading),
+                send: send_reading(&sends, &ports, reading),
             };
             if let Err(e) = t.row(&row) {
                 warn!("Capture: can't write {}: {e}", t.path().display());
@@ -1601,17 +1601,29 @@ fn tier_name(t: Tier) -> String {
     t.name().to_lowercase()
 }
 
-/// The game's sending as `port_tx` has it: stalls so far over every port,
-/// and the longest gap in `reading` on any. None if it hasn't sent.
-fn send_reading(sends: &[(u16, bpf_intf::port_tx)], reading: u32) -> Option<(u64, u64)> {
-    if sends.is_empty() {
+/// The game's sending as `port_tx` has it: stalls so far over its ports,
+/// and the longest gap in `reading` on any. Only ports the arrival meter
+/// has heard from outside on count: the game also sends to its own menu
+/// server over loopback, and that going quiet isn't the match. None if it
+/// hasn't sent.
+fn send_reading(
+    sends: &[(u16, bpf_intf::port_tx)],
+    ports: &[(u16, bpf_intf::port_rx)],
+    reading: u32,
+) -> Option<(u64, u64)> {
+    let mine: Vec<&bpf_intf::port_tx> = sends
+        .iter()
+        .filter(|(p, _)| ports.iter().any(|(q, r)| q == p && r.pkts > 0))
+        .map(|(_, t)| t)
+        .collect();
+    if mine.is_empty() {
         return None;
     }
-    let stalls = sends.iter().map(|(_, t)| u64::from(t.stalls)).sum();
-    let max = sends
+    let stalls = mine.iter().map(|t| u64::from(t.stalls)).sum();
+    let max = mine
         .iter()
-        .filter(|(_, t)| t.reading == reading)
-        .map(|(_, t)| t.reading_max_ns)
+        .filter(|t| t.reading == reading)
+        .map(|t| t.reading_max_ns)
         .max()
         .unwrap_or(0);
     Some((stalls, max))
@@ -1622,6 +1634,30 @@ mod tests {
     use super::*;
     use crate::config::builtin_profiles;
     use crate::experiment::Setting;
+
+    #[test]
+    fn the_games_menu_port_isnt_its_sending() {
+        let tx = |stalls, max| bpf_intf::port_tx {
+            stalls,
+            reading: 7,
+            reading_max_ns: max,
+            ..Default::default()
+        };
+        let rx = bpf_intf::port_rx {
+            pkts: 500,
+            ..Default::default()
+        };
+        // 40000 got packets from outside; 50000 only sends (loopback menu)
+        let sends = [(40000, tx(1, 30_000_000)), (50000, tx(4, 900_000_000))];
+        let ports = [(40000, rx)];
+        assert_eq!(
+            send_reading(&sends, &ports, 7),
+            Some((1, 30_000_000)),
+            "the menu port's stalls and long gap are left out"
+        );
+        // nothing from outside yet: nothing to report
+        assert_eq!(send_reading(&sends, &[], 7), None);
+    }
 
     #[test]
     fn only_the_all_off_arm_leaves_an_empty_profile() {
