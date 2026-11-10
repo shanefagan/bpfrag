@@ -183,8 +183,19 @@ impl Knobs {
         for p in pending {
             match write_str(&p.path, &p.target) {
                 Ok(()) => {
-                    changes.push(format!("{}={}", p.label, p.target));
-                    self.current.insert(p.key, p.target);
+                    // The kernel may have rounded or clamped it (a size
+                    // rounded to a page, a value capped by another). What
+                    // it holds is what restore must find, or it would call
+                    // our own value someone else's.
+                    let held = held_value(&p.path, &p.target);
+                    if held != p.target {
+                        if let Some(Saved::File { applied, .. }) = self.saved_get_mut(&p.key) {
+                            *applied = held.clone();
+                        }
+                        self.persist();
+                    }
+                    changes.push(format!("{}={held}", p.label));
+                    self.current.insert(p.key, held);
                 }
                 Err(e) => {
                     self.put_back(&p.key, p.prev);
@@ -196,6 +207,14 @@ impl Knobs {
             }
         }
     }
+}
+
+/// What a sysctl holds after `target` was written to it: the same unless
+/// the kernel adjusted it; `target` if it can't be read back.
+fn held_value(path: &std::path::Path, target: &str) -> String {
+    read_trim(path)
+        .map(|v| norm_ws(&v))
+        .unwrap_or_else(|_| target.to_string())
 }
 
 /// Put a sysctl back to `value`, unless it no longer holds what we wrote.
@@ -222,6 +241,19 @@ mod tests {
         assert_eq!(target_for(">=1 50", "4 10").as_deref(), Some("4 50"));
         assert_eq!(target_for("50", "0").as_deref(), Some("50"));
         assert_eq!(target_for(">=lots", "0"), None);
+    }
+
+    #[test]
+    fn a_value_the_kernel_adjusted_is_what_restore_expects() {
+        let f = std::env::temp_dir().join(format!("bpfrag-held-{}", std::process::id()));
+        std::fs::write(&f, "4096\n").unwrap();
+        // asked for 4100, the kernel rounded it down
+        assert_eq!(held_value(&f, "4100"), "4096");
+        std::fs::write(&f, "4096\t131072  6291456\n").unwrap();
+        assert_eq!(held_value(&f, "4096 131072 6291456"), "4096 131072 6291456");
+        let _ = std::fs::remove_file(&f);
+        // unreadable: assume it took
+        assert_eq!(held_value(&f, "7"), "7");
     }
 
     #[test]
