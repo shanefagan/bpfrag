@@ -118,7 +118,11 @@ started the count again every time and kept the match going). Within
 or more in a second), quiet doesn't end the match: Trackmania goes 16
 seconds without UDP while it loads a map, which cut sessions in two
 before 0.12.6. "Staying on this machine" is the same median, of packets from
-outside, while loopback carries at least that. With the game left
+outside, while loopback carries at least that. During a match, packets
+from peers other than its server don't count as its traffic from outside:
+a relay Deadlock had moved away from kept pinging it at 5 to 10 a second,
+which held a match open on the end screen until the game was closed
+(fixed in 0.16.2). With the game left
 running, each match is its own match: its own health line, its own
 experiment draw, its own row in `matches.py`, its own timeline. A dip
 while you're dead or waiting to respawn stays well above that (Deadlock

@@ -103,6 +103,8 @@ conditions, the number of matches on each side, and the medians.
 | 2026-11-06 | CachyOS, wired (`eno1`), bpfrag 0.12.2 tuning, Deadlock, coalescing not recorded | busy polling on / off | 4 / 3 | 18 / 18 ms | 80 / 70 ms (relay changes) | 0 / 0 | No difference. Busy polling ran when on (90,000–300,000 busy-polled packets a match against 50–100 off). With 2026-11-03: 7 on, 5 off, the same gaps either way |
 | 2026-11-09 | CachyOS, wired (`eno1`), bpfrag 0.14.0 tuning, Deadlock; figures from the timelines (each match's median of the per-second 99% gap, its longest gap in play) | `netdev_budget`/`netdev_budget_usecs` raised (on) / left at the distribution's (off) | 6 / 3 | 17.5 / 17 ms | 55 / 64 ms | 0 / 0 | No difference. Jitter 580–660 µs on against 480–860 µs off. The one stall (635 ms, an "on" match) was the server catching up, and the uneven match of the evening (an "off" one) was its relay |
 | 2026-11-04 to -10 | The same, bpfrag 0.12.0 to 0.14.0 | `netdev_max_backlog` raised to 5000 (on) / left at CachyOS's 4096 (off) | 2 / 8 | 18 / 18 ms | 81 / 62 ms | 0 / 0 | No difference, with too few "on" matches to say more than that. The matches differed by relay: one "off" match on a worse one had 2.5 ms of jitter against 0.7–0.9 ms in the others. Taken out of the random pool in 0.15.0: on a NIC with NAPI and no RPS the queue it sizes isn't used ([knobs.md](knobs.md#netdev_max_backlog)), and here the default was already 4096 |
+| 2026-11-11 | CachyOS, wired (`eno1`), bpfrag 0.16.0–0.16.1 tuning, Deadlock, nothing large being written to disk; figures from the timelines | writeback tightened (on) / left at the distribution's (off) | 6 / 7 | 18 / 18 ms | 61 / 49 ms | 0 / 0 | No difference, as expected: writeback only matters while something writes a lot. Jitter 742 / 622 µs, the "on" side raised by two matches on one evening relay |
+| 2026-11-09 to -11 | The same, bpfrag 0.14.0 / 0.16.x | all of 0.14.0's settings (busy polling, backlog, budget, coalescing) / 0.16's fewer | 15 / 13 | 18 / 18 ms | 64 / 50 ms | 0 / 0 | No difference: removing those four settings cost nothing measurable. Jitter 657 / 649 µs. The longest-gap difference (p 0.03) is one of ten comparisons, and 0.16's matches were shorter |
 
 ## Open questions
 
@@ -134,6 +136,14 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-09 to -11** (0.14.0 to 0.16.1, Deadlock, wired): 30 matches
+  of 5 minutes or more, all clean: no stall in play after 0.14.0. Removing
+  busy polling, the backlog, the budget and coalescing changed nothing,
+  and neither did writeback (table). One 3 s silence before a relay
+  change was counted as a lost connection, as designed; the 2–4 s outage
+  rule (0.14.1) hasn't fired yet. That match exposed a bug: a relay the
+  game had left kept pinging it, and on the end screen those pings held
+  the match open and raised its tier (fixed in 0.16.2).
 - **2026-11-07 and -08** (0.12.5, Deadlock and Trackmania, socket
   buffers on and off): Deadlock clean (99% 18 ms, no stalls). Trackmania
   changed rooms up to nine times a session; around each change the client
@@ -205,6 +215,12 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 
 ## Bugs found and what they taught
 
+- **0.16.1: a spare relay's pings held a match open.** After two relay
+  moves, Deadlock kept answering pings from a relay it had left, 5 to 10
+  a second. On the end screen they kept the traffic from outside at the
+  threshold, so the match never ended by the loopback rule, and the
+  loopback traffic raised the tier for its last 12 seconds. 0.16.2 leaves
+  peers other than the server out of the match's outside traffic.
 - **0.12.0:** a game pinging relays from its menu as it started counted
   as traffic from outside; 0.12.2 needs outside traffic to outweigh
   loopback.
