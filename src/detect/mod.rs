@@ -78,6 +78,9 @@ const LOAD_GRACE_SECS: f64 = 30.0;
 /// few seconds.
 const PASS_OVER_SECS: f64 = 60.0;
 
+/// Readings in a row with traffic before a quiet spell counts as over.
+const RESUME_WINDOWS: usize = 3;
+
 /// Seconds a process the classifier turned down isn't asked about again.
 const IGNORE_SECS: f64 = 30.0;
 
@@ -855,7 +858,13 @@ impl Detector {
             }
             return None;
         }
-        sess.quiet_secs = 0.0;
+        // Traffic again. A burst a reading or two long in a quiet spell
+        // isn't play resuming (relay pings in a menu come every few seconds,
+        // and one burst can fall across two readings): the countdown only
+        // starts over once traffic has stayed for RESUME_WINDOWS readings.
+        if t.recent_min(RESUME_WINDOWS) > self.cfg.idle_pps as f64 {
+            sess.quiet_secs = 0.0;
+        }
         if self.cfg.pin_tier.is_some() {
             return None;
         }

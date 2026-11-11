@@ -193,6 +193,44 @@ fn menus_with_ping_bursts_still_end_the_match() {
 }
 
 #[test]
+fn a_ping_burst_across_two_readings_still_ends_the_match() {
+    // The same menu, but each burst falls across two readings (where a
+    // burst lands against bpfrag's clock is chance). Three of any five
+    // readings can then hold traffic, which put the median over the
+    // threshold once a cycle and started the countdown again every time.
+    for (first, second) in [(20, 20), (30, 10), (10, 30)] {
+        let mut sim = Sim::new(&[7]);
+        let a = sim.run(4, &[(7, 64, 128, 120)]);
+        assert_eq!(starts(&a).len(), 1, "{a:?}");
+        let ended = (0..60).find(|i| {
+            let r = match i % 4 {
+                2 => (7, first, first, 80),
+                3 => (7, second, second, 80),
+                _ => (7, 1, 1, 80),
+            };
+            has(&sim.step(&[r]), |x| matches!(x, Action::End { .. }))
+        });
+        let at = ended.unwrap_or_else(|| panic!("{first}/{second}: the match never ended"));
+        // two quiet readings in four: twice as long as an unbroken quiet
+        assert!(at <= 2 * 15 + 8, "{first}/{second}: ended after {at}s");
+    }
+}
+
+#[test]
+fn play_resuming_after_a_quiet_spell_starts_the_countdown_again() {
+    let mut sim = Sim::new(&[7]);
+    sim.run(4, &[(7, 64, 128, 120)]);
+    // ten quiet seconds, play for five, ten quiet again: neither spell
+    // reaches the 15 s that end a match, and they don't add up
+    let mut a = sim.run(10, &[(7, 1, 1, 80)]);
+    a.extend(sim.run(5, &[(7, 64, 128, 120)]));
+    a.extend(sim.run(10, &[(7, 1, 1, 80)]));
+    assert!(!has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
+    let a = sim.run(8, &[(7, 1, 1, 80)]);
+    assert!(has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
+}
+
+#[test]
 fn a_dip_mid_match_is_not_the_end() {
     let mut sim = Sim::new(&[7]);
     sim.run(4, &[(7, 64, 128, 120)]);

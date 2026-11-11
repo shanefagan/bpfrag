@@ -110,7 +110,10 @@ ends, and with 15 seconds two games became one match on 2026-11-02).
 last five seconds at 10 packets a second or fewer: menus and queues are
 mostly silent but ping relays in short bursts, and judging each second on
 its own let those bursts keep one match going into the next (0.4.0 and
-earlier); a second with traffic again doesn't add to the count. Within
+earlier); a second with traffic again doesn't add to the count, and the
+count only starts over once traffic has stayed for three seconds in a row
+(a burst can fall across two of bpfrag's readings, which until 0.16.0
+started the count again every time and kept the match going). Within
 30 seconds of the game loading something over its own TCP (a megabyte
 or more in a second), quiet doesn't end the match: Trackmania goes 16
 seconds without UDP while it loads a map, which cut sessions in two

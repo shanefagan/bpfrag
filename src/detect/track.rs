@@ -155,6 +155,19 @@ impl Track {
         v[v.len() / 2]
     }
 
+    /// The quietest of the last `n` windows (total pps); 0 with fewer.
+    pub(super) fn recent_min(&self, n: usize) -> f64 {
+        if self.hist.len() < n {
+            return 0.0;
+        }
+        self.hist
+            .iter()
+            .rev()
+            .take(n)
+            .map(Window::total)
+            .fold(f64::INFINITY, f64::min)
+    }
+
     /// Mean total pps over the history.
     pub(super) fn smooth(&self) -> f64 {
         if self.hist.is_empty() {
