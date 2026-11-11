@@ -11,11 +11,18 @@ def test_menus_between_matches_make_two_matches(rig, match):
     second, like relay pings), then another match, in one game process."""
     daemon, game = match
     time.sleep(3)
-    for _ in range(4):
+    # Where a burst lands against bpfrag's one-second readings is chance:
+    # in one, or across two. Either way the menus end the match, within a
+    # few cycles (linger_secs = 6 here, and each cycle has 2-3 quiet seconds).
+    for _ in range(8):
         game.set_rate(1)
         time.sleep(3)
         game.set_rate(40)
         time.sleep(1)
+        if daemon.logged("Match ended"):
+            break
+    else:
+        raise AssertionError("the menus never ended the match:\n" + daemon.log()[-1500:])
     game.set_rate(64)
     # once the detector's history holds game traffic again, plus three
     # steady seconds: about 11 s, longer on a slow machine

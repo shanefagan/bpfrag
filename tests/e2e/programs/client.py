@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Fake netcode: send `rate` packets/s of `size` bytes to the echo server and
 # read the echoes. The rate can be changed live by writing a number to the
-# control file. DEST overrides the server address (an IPv6 one selects v6);
+# control file (it's read every 50 ms). DEST overrides the server address (an IPv6 one selects v6);
 # with DEST2 and SWITCH_AFTER, the same socket moves to DEST2 after that
 # many seconds, the way a game goes straight into its next match.
 # PHASES="local:12,remote:20,..." alternates between the server and a
@@ -46,28 +46,35 @@ nxt = time.monotonic()
 last_ctl = 0
 while True:
     now = time.monotonic()
-    if ctl and now - last_ctl > 1:
+    # A new rate takes effect within 50 ms, whatever the old one was: at a
+    # packet a second, waiting for the next send would make a one-second
+    # burst start up to a second late and last up to two.
+    if ctl and now - last_ctl > 0.05:
         last_ctl = now
         try:
-            rate = float(open(ctl).read())
+            new = float(open(ctl).read())
         except Exception:
-            pass
-    if rate > 0:
+            new = rate
+        if new != rate:
+            rate = new
+            if rate > 0:
+                nxt = min(nxt, now + 1.0 / rate)
+    if rate <= 0:
+        nxt = now + 0.05
+    elif now >= nxt:
         moved = dest2 and switch_after and now - t0 >= switch_after
         if phase(now - t0) == "local":
             s.sendto(payload, local_addr)
         else:
             s.sendto(payload, (dest2 if moved else dest, 27015))
         nxt += 1.0 / rate
-    else:
-        nxt = now + 0.1
+        if nxt < now:  # fell behind (the process was stopped): don't catch up
+            nxt = now
     while True:
         try:
             s.recv(4096)
         except BlockingIOError:
             break
-    d = nxt - time.monotonic()
+    d = min(nxt - time.monotonic(), 0.05)
     if d > 0:
         time.sleep(d)
-    else:
-        nxt = time.monotonic()
