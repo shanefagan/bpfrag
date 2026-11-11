@@ -1,3 +1,9 @@
+bpfrag (0.16.2-1) unstable; urgency=medium
+
+  * A relay the game had left, still pinging it, no longer holds a match open on the end screen or raises its tier: peers other than the server are left out of the match's traffic from outside.
+
+ -- Shane Fagan <mail@shanefagan.com>  Wed, 11 Nov 2026 23:55:10 +0000
+
 bpfrag (0.16.1-1) unstable; urgency=medium
 
   * A burst of traffic that fell across two readings (relay pings in a menu) no longer keeps a match going into the next one: the quiet count starts over only once traffic has stayed for three readings in a row.
