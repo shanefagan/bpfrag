@@ -331,6 +331,31 @@ fn a_short_menu_between_games_splits_them() {
 }
 
 #[test]
+fn a_spare_relays_pings_dont_hold_the_match_open() {
+    // Deadlock, 2026-11-11 12:59: it moved relays twice, and the relay it
+    // had left kept pinging it, 5 to 10 packets a second on top of the
+    // server, through the match and after it. On the end screen, with the
+    // game back on its own server over loopback, those pings alone kept
+    // the traffic from outside at about the threshold: the match didn't
+    // end, and the loopback traffic raised its tier.
+    let mut sim = Sim::with_paths(&[7]);
+    sim.arrivals = outside(64.0 + 9.0);
+    sim.others = 9.0;
+    let a = sim.run(8, &[(7, 73, 73, 200)]);
+    assert_eq!(starts(&a).len(), 1, "{a:?}");
+    sim.run(60, &[(7, 73, 73, 200)]);
+    // the end screen: the server stops, the spare relay doesn't
+    sim.arrivals = Arrivals {
+        outside_pps: 11.0,
+        local_pps: 128.0,
+    };
+    sim.others = 11.0;
+    let a = sim.run(15, &[(7, 139, 139, 220)]);
+    assert!(!has(&a, |x| matches!(x, Action::Retier { .. })), "{a:?}");
+    assert!(has(&a, |x| matches!(x, Action::End { .. })), "{a:?}");
+}
+
+#[test]
 fn relay_pings_dont_raise_the_tier() {
     // every couple of minutes the client pings a couple of dozen
     // relays: 100 more packets a second for two seconds

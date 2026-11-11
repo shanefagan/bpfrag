@@ -418,7 +418,14 @@ impl Detector {
         procs: &mut dyn ProcessLookup,
     ) -> Vec<Action> {
         let dt = dt.max(0.001);
-        if let Some(p) = self.pending_paths.take() {
+        if let Some(mut p) = self.pending_paths.take() {
+            // During a match, what arrives from peers other than its server
+            // (a relay the game left, still pinging it) isn't the match:
+            // judged as outside traffic, it held a match open on the end
+            // screen (2026-11-11 12:59).
+            if self.session.is_some() {
+                p.outside_pps = (p.outside_pps - self.pending_others).max(0.0);
+            }
             self.paths.push_back(p);
             while self.paths.len() > 2 * QUIET_WINDOWS {
                 self.paths.pop_front();
