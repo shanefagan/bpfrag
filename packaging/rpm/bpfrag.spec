@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.16.0
+Version:        0.16.1
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Wed Nov 11 2026 Shane Fagan <mail@shanefagan.com> - 0.16.1-1
+- A burst of traffic that fell across two readings (relay pings in a menu) no longer keeps a match going into the next one: the quiet count starts over only once traffic has stayed for three readings in a row.
+
 * Tue Nov 10 2026 Shane Fagan <mail@shanefagan.com> - 0.16.0-1
 - Fewer settings: the receive backlog and budget and NIC interrupt coalescing are no longer set, after matches with each on and off measured the same; each can still be set per tier. The backlog, budget and busy_polling experiment names and the busy-polled packets figure go with them. general.hook and general.tick_ms are no longer accepted: delete those lines. The end-to-end tests are now pytest (tests/e2e), and the detector's code is split into smaller files.
 
