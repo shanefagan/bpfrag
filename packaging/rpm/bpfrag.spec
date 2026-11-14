@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.16.3
+Version:        0.17.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Sat Nov 14 2026 Shane Fagan <mail@shanefagan.com> - 0.17.0-1
+- Games that talk TCP (Path of Exile 2, MMOs) are tuned like a match once their traffic looks like a multiplayer game's; TCP to this machine isn't counted.
+
 * Sat Nov 14 2026 Shane Fagan <mail@shanefagan.com> - 0.16.3-1
 - A game whose state arrives after the first minute no longer counts its start as play: a second of more updates than usual at under half the usual interval, and the second before it, are left out of the figures as loading.
 

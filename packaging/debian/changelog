@@ -1,3 +1,9 @@
+bpfrag (0.17.0-1) unstable; urgency=medium
+
+  * Games that talk TCP (Path of Exile 2, MMOs) are tuned like a match once their traffic looks like a multiplayer game's; TCP to this machine isn't counted.
+
+ -- Shane Fagan <mail@shanefagan.com>  Sat, 14 Nov 2026 17:36:11 +0000
+
 bpfrag (0.16.3-1) unstable; urgency=medium
 
   * A game whose state arrives after the first minute no longer counts its start as play: a second of more updates than usual at under half the usual interval, and the second before it, are left out of the figures as loading.
