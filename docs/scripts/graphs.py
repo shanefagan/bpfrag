@@ -259,10 +259,25 @@ def match_svg(m):
             48,
             f"{m.when}, bpfrag {m.version}. Shaded: left out of the figures (the game starting, the end screen).",
         ),
+        text(
+            left,
+            66,
+            f"Good looks like flat lines: updates steady at the server's rate, gaps near "
+            f"{1000 / m.rate:.0f} ms. Lower gaps are better."
+            if m.rate
+            else "Lower gaps are better.",
+        ),
     ]
     panels = [
-        ("Updates a second from the server", 90, 130, lambda i: m.updates[i], False, (0, None)),
-        ("Longest gap in each second, ms (log scale)", 268, 130, lambda i: m.longest[i], True, (10, 2000)),
+        ("Updates a second from the server", 108, 130, lambda i: m.updates[i], False, (0, None)),
+        (
+            "Longest gap in each second, ms (log scale; lower is better)",
+            286,
+            130,
+            lambda i: m.longest[i],
+            True,
+            (10, 2000),
+        ),
     ]
     # shading: before play and after it
     first_play = m.play[0] if m.play else 0
@@ -317,12 +332,12 @@ def match_svg(m):
                 body.append(f'<polyline class="s1" points="{" ".join(p)}"/>')
         body.append(f'<line class="axis" x1="{left}" x2="{left + pw}" y1="{top + h}" y2="{top + h}"/>')
     # time axis
-    base = 268 + 130
-    for v in nice_ticks(0, tmax / 60, 8):
+    base = 286 + 130
+    for v in (v for v in nice_ticks(0, tmax / 60, 8) if v * 60 <= tmax):
         xx = x(v * 60)
         body.append(text(xx, base + 18, f"{fmt(v)} min", "muted", "middle"))
     # selective labels on the top panel
-    top, h = 90, 130
+    top, h = 108, 130
     hi = nice_ticks(0, max(200, max(m.updates)), 4)[-1]
     ylab = lambda v: top + h - h * v / hi
     if m.play:
@@ -353,7 +368,7 @@ def hitches_svg(matches):
     ms = sorted(matches, key=lambda m: m.name)
     W, left, right = 760, 112, 24
     pw = W - left - right
-    top, row = 104, 16
+    top, row = 122, 16
     tmax = max(m.t[-1] for m in ms) or 1
     ticks = nice_ticks(0, tmax / 60, 6)
     x = lambda t: left + pw * t / (ticks[-1] * 60)
@@ -396,10 +411,11 @@ def hitches_svg(matches):
             f"{long_play} of them in play.",
         ),
         text(24, 66, "Shaded: the game starting and the end screen, left out of the match's figures."),
-        f'<circle class="s1fill dotring" cx="{left + 6}" cy="86" r="4"/>',
-        text(left + 16, 90, f"{LONG_MS}–99 ms", "ink2"),
-        f'<circle class="s2fill dotring" cx="{left + 96}" cy="86" r="5"/>',
-        text(left + 106, 90, "a stall, 100 ms or more", "ink2"),
+        text(24, 84, "Fewer dots between the shaded parts is better: those are the gaps you feel in play."),
+        f'<circle class="s1fill dotring" cx="{left + 6}" cy="104" r="4"/>',
+        text(left + 16, 108, f"{LONG_MS}–99 ms", "ink2"),
+        f'<circle class="s2fill dotring" cx="{left + 96}" cy="104" r="5"/>',
+        text(left + 106, 108, "a stall, 100 ms or more", "ink2"),
     ]
     body += rows
     for v in ticks:
@@ -444,7 +460,7 @@ def onoff_svg(matches):
     )
     W, left, right = 760, 64, 24
     pw = W - left - right
-    top, h = 112, 220
+    top, h = 130, 220
     hi = max(max(v) for v in share.values()) or 1
     ticks = nice_ticks(0, hi, 4)
     y = lambda v: top + h - h * v / ticks[-1]
@@ -458,10 +474,11 @@ def onoff_svg(matches):
             f"tuned, {len(sides[False])} not;",
         ),
         text(24, 66, f"{how}. A stall is a gap of 100 ms or more."),
-        f'<rect class="s1fill" x="{left}" y="80" width="12" height="12" rx="2"/>',
-        text(left + 18, 90, "bpfrag tuning", "ink2"),
-        f'<rect class="s2fill" x="{left + 120}" y="80" width="12" height="12" rx="2"/>',
-        text(left + 138, 90, "nothing changed", "ink2"),
+        text(24, 84, "Lower is better. 1% is about 12 seconds of a 20-minute match."),
+        f'<rect class="s1fill" x="{left}" y="98" width="12" height="12" rx="2"/>',
+        text(left + 18, 108, "bpfrag tuning", "ink2"),
+        f'<rect class="s2fill" x="{left + 120}" y="98" width="12" height="12" rx="2"/>',
+        text(left + 138, 108, "nothing changed", "ink2"),
     ]
     for v in ticks:
         body.append(f'<line class="grid" x1="{left}" x2="{left + pw}" y1="{y(v):.1f}" y2="{y(v):.1f}"/>')
@@ -504,10 +521,10 @@ def experiments_svg(matches):
     W, left, gapx = 760, 150, 40
     pw = (W - left - 24 - gapx) // 2
     top, row = 104, 64
-    metrics = [("longest", "Longest gap in play, ms"), ("jitter", "Jitter, µs")]
+    metrics = [("longest", "Longest gap in play, ms (lower is better)"), ("jitter", "Jitter, µs (lower is better)")]
     body = [
         text(24, 28, "Each experiment, one dot per match", "ink", size=15, weight=600),
-        text(24, 48, "Setting on or off, picked at random per match. Bars: each side's median."),
+        text(24, 48, "Setting on or off, picked at random per match. Bars: each side's median. Further left is better."),
     ]
     # legend
     body.append(f'<circle class="s1fill dotring" cx="{left + 6}" cy="66" r="5"/>')

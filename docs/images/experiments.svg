@@ -35,12 +35,12 @@
 </style>
 <rect class="surface" width="760" height="262" rx="8"/>
 <text x="24.0" y="28.0" class="ink" text-anchor="start" font-size="15" font-weight="600">Each experiment, one dot per match</text>
-<text x="24.0" y="48.0" class="ink2" text-anchor="start">Setting on or off, picked at random per match. Bars: each side&#x27;s median.</text>
+<text x="24.0" y="48.0" class="ink2" text-anchor="start">Setting on or off, picked at random per match. Bars: each side&#x27;s median. Further left is better.</text>
 <circle class="s1fill dotring" cx="156" cy="66" r="5"/>
 <text x="166.0" y="70.0" class="ink2" text-anchor="start">on</text>
 <circle class="s2ring" cx="206" cy="66" r="4"/>
 <text x="216.0" y="70.0" class="ink2" text-anchor="start">off</text>
-<text x="150.0" y="90.0" class="ink" text-anchor="start">Longest gap in play, ms</text>
+<text x="150.0" y="90.0" class="ink" text-anchor="start">Longest gap in play, ms (lower is better)</text>
 <line class="grid" x1="150.0" x2="150.0" y1="104" y2="232"/>
 <text x="150.0" y="248.0" class="muted" text-anchor="middle">35</text>
 <line class="grid" x1="218.2" x2="218.2" y1="104" y2="232"/>
@@ -85,7 +85,7 @@
 <line class="mark" x1="231.9" x2="231.9" y1="201" y2="219"/>
 <text x="138.0" y="214.0" class="muted" text-anchor="end">off (6)</text>
 <text x="24.0" y="202.0" class="ink" text-anchor="start">writeback</text>
-<text x="463.0" y="90.0" class="ink" text-anchor="start">Jitter, µs</text>
+<text x="463.0" y="90.0" class="ink" text-anchor="start">Jitter, µs (lower is better)</text>
 <line class="grid" x1="463.0" x2="463.0" y1="104" y2="232"/>
 <text x="463.0" y="248.0" class="muted" text-anchor="middle">400</text>
 <line class="grid" x1="531.2" x2="531.2" y1="104" y2="232"/>
