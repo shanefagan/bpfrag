@@ -178,24 +178,23 @@ static __always_inline void stat_inc(__u32 idx)
 }
 
 /*
- * Remember a bulk process's socket so the tc programs can find its packets.
- * IPv4-mapped IPv6 sockets send IPv4 packets, so they are keyed as IPv4.
+ * A socket's flow as the tc programs see its packets: addresses as they
+ * appear in the packet, ports in host order, local first. IPv4-mapped IPv6
+ * sockets send IPv4 packets, so they are keyed as IPv4. An unconnected UDP
+ * socket gets protocol and local port only. False for a socket that can't
+ * be keyed (no local port, an unconnected TCP socket, another family).
  */
-static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short family,
-					    __u16 proto, __u32 tgid)
+static __always_inline bool sock_flow_key(struct sock *sk, unsigned short family,
+					  __u16 proto, struct flow_key *k)
 {
-	struct bulk_flow v = { .tgid = tgid }, *old;
-	struct flow_key k = {};
-
-	k.proto = proto;
-	k.lport = BPF_CORE_READ(sk, __sk_common.skc_num);
-	k.rport = bpf_ntohs(BPF_CORE_READ(sk, __sk_common.skc_dport));
-	if (!k.lport)
-		return;
-	if (!k.rport) {
+	k->proto = proto;
+	k->lport = BPF_CORE_READ(sk, __sk_common.skc_num);
+	k->rport = bpf_ntohs(BPF_CORE_READ(sk, __sk_common.skc_dport));
+	if (!k->lport)
+		return false;
+	if (!k->rport) {
 		/* unconnected: protocol and local port only */
-		if (proto != IPPROTO_UDP)
-			return;
+		return proto == IPPROTO_UDP;
 	} else if (family == AF_INET6 &&
 		   bpf_core_field_exists(sk->__sk_common.skc_v6_daddr)) {
 		struct in6_addr d = {}, l = {};
@@ -203,22 +202,34 @@ static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short fami
 		BPF_CORE_READ_INTO(&d, sk, __sk_common.skc_v6_daddr);
 		if (d.in6_u.u6_addr32[0] == 0 && d.in6_u.u6_addr32[1] == 0 &&
 		    d.in6_u.u6_addr32[2] == bpf_htonl(0x0000ffff)) {
-			k.family = AF_INET;
-			k.raddr[0] = d.in6_u.u6_addr32[3];
-			k.laddr[0] = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+			k->family = AF_INET;
+			k->raddr[0] = d.in6_u.u6_addr32[3];
+			k->laddr[0] = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
 		} else {
 			BPF_CORE_READ_INTO(&l, sk, __sk_common.skc_v6_rcv_saddr);
-			k.family = AF_INET6;
-			__builtin_memcpy(k.raddr, d.in6_u.u6_addr32, 16);
-			__builtin_memcpy(k.laddr, l.in6_u.u6_addr32, 16);
+			k->family = AF_INET6;
+			__builtin_memcpy(k->raddr, d.in6_u.u6_addr32, 16);
+			__builtin_memcpy(k->laddr, l.in6_u.u6_addr32, 16);
 		}
 	} else if (family == AF_INET) {
-		k.family = AF_INET;
-		k.raddr[0] = BPF_CORE_READ(sk, __sk_common.skc_daddr);
-		k.laddr[0] = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
+		k->family = AF_INET;
+		k->raddr[0] = BPF_CORE_READ(sk, __sk_common.skc_daddr);
+		k->laddr[0] = BPF_CORE_READ(sk, __sk_common.skc_rcv_saddr);
 	} else {
-		return;
+		return false;
 	}
+	return true;
+}
+
+/* Remember a bulk process's socket so the tc programs can find its packets. */
+static __always_inline void learn_bulk_flow(struct sock *sk, unsigned short family,
+					    __u16 proto, __u32 tgid)
+{
+	struct bulk_flow v = { .tgid = tgid }, *old;
+	struct flow_key k = {};
+
+	if (!sock_flow_key(sk, family, proto, &k))
+		return;
 	old = bpf_map_lookup_elem(&bulk_flows, &k);
 	if (old && old->tgid == tgid)
 		return; /* known: a lookup is far cheaper than an update */
