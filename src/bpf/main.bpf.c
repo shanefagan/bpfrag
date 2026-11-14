@@ -297,6 +297,27 @@ static __always_inline void record_departure(__u32 port)
 	pt->resume_n = 0;
 }
 
+/* Is this TCP socket connected to this machine (127.0.0.0/8, ::1, or
+ * ::ffff:127.x)? That isn't network traffic, so it isn't counted: a game
+ * talking to a launcher or a local service over TCP isn't playing online. */
+static __always_inline bool tcp_peer_local(struct sock *sk, unsigned short family)
+{
+	struct in6_addr d = {};
+
+	if (family == AF_INET)
+		return (bpf_ntohl(BPF_CORE_READ(sk, __sk_common.skc_daddr)) >> 24) == 127;
+	if (family != AF_INET6 || !bpf_core_field_exists(sk->__sk_common.skc_v6_daddr))
+		return false;
+	BPF_CORE_READ_INTO(&d, sk, __sk_common.skc_v6_daddr);
+	if (d.in6_u.u6_addr32[0] || d.in6_u.u6_addr32[1])
+		return false;
+	if (d.in6_u.u6_addr32[2] == 0)
+		return d.in6_u.u6_addr32[3] == bpf_htonl(1);
+	if (d.in6_u.u6_addr32[2] == bpf_htonl(0x0000ffff))
+		return (bpf_ntohl(d.in6_u.u6_addr32[3]) >> 24) == 127;
+	return false;
+}
+
 static __always_inline void account(struct sock *sk, long ret, bool tx)
 {
 	struct proc_stats *st;
@@ -320,6 +341,8 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 	if (proto == IPPROTO_TCP && !count_tcp &&
 	    !(observe_on && bpf_map_lookup_elem(&observe_tgids, &tgid)))
 		return; /* no match on, not watching TCP games, not tagged */
+	if (proto == IPPROTO_TCP && tcp_peer_local(sk, family))
+		return;
 	if (bulk_on && bpf_map_lookup_elem(&bulk_tgids, &tgid))
 		learn_bulk_flow(sk, family, proto, tgid);
 
