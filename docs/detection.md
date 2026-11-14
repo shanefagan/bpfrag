@@ -209,7 +209,10 @@ connection (addresses and ports), since a game that opens a new connection
 per zone leaves local ports behind that other processes soon reuse. Bulk
 demotion, Wi-Fi power save and the experiments work as for any match. There
 are no packet gap figures yet; the end-of-match line is the session's
-rates, message sizes and how steady it was. Rates are of send and receive
+rates, message sizes and how steady it was, and with `[capture] timeline
+= true` its timeline has the game's TCP bytes each second
+(`docs/scripts/graphs.py` lists such timelines but leaves them out of its
+graphs). Rates are of send and receive
 calls, not packets. "Rate variation" is the mean deviation of the
 per-second rate over its mean: near 0 for a game that ticks like a
 metronome, far above 1 for a download.

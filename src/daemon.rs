@@ -570,10 +570,8 @@ impl<'a> Tuner<'a> {
                 self.started_unix = stats::now_unix();
                 self.app_id = self.procs.app_id(s.tgid);
                 self.started_at_ms = self.unix_ms(s.began);
-                // the timeline's columns are the UDP meter's
-                if s.transport == Transport::Udp {
-                    self.start_timeline(&s);
-                }
+                // a TCP game's has its TCP bytes a second, and no gaps
+                self.start_timeline(&s);
                 self.apply_tier(&s);
                 // Properties first, so a listener that reads them when the
                 // signal arrives sees this match.

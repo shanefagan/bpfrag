@@ -7,7 +7,9 @@ import time
 from rig import SERVER, dscps
 
 
-def test_a_tcp_game_is_tuned_and_marked_until_it_exits(rig, daemon):
+def test_a_tcp_game_is_tuned_and_marked_until_it_exits(rig):
+    rig.clear_timelines()
+    daemon = rig.daemon(rig.config("tcp-timeline", append="[capture]\ntimeline = true\n"))
     # 20 small messages a second each way, to a server elsewhere
     game = rig.tcp_game(20)
     daemon.wait_for(
@@ -28,6 +30,11 @@ def test_a_tcp_game_is_tuned_and_marked_until_it_exits(rig, daemon):
     rig.wait_restored()
     # the match's lines report the session; the observer doesn't again
     assert not daemon.logged("TCP game session"), daemon.log()
+    # its timeline has its TCP a second, and no gaps
+    [timeline] = rig.timelines("fakemmo")
+    rows = timeline.read_text().splitlines()
+    assert "match detected (COMPETITIVE)" in rows[2], rows[:3]
+    assert "match ended (game exited)" in rows[-1], rows[-1]
 
 
 def test_a_tagged_tcp_game_is_still_tuned(rig, daemon):

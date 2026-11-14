@@ -630,6 +630,19 @@ def main():
             print(f"skipped {p}: {e}", file=sys.stderr)
     if not matches:
         sys.exit("no timelines")
+    # A game that talks TCP has a timeline with no gap figures: listed in
+    # the CSV, left out of the graphs, where it would look like a match
+    # with no long gaps at all.
+    every = matches
+    matches = [m for m in matches if m.play]
+    if len(matches) < len(every):
+        print(
+            f"left out of the graphs: {len(every) - len(matches)} timelines with no gap "
+            "figures (TCP games, or too short to have play)",
+            file=sys.stderr,
+        )
+    if not matches:
+        sys.exit("no timelines with gap figures")
     os.makedirs(a.out, exist_ok=True)
     if a.match:
         one = next((m for m in matches if m.name.endswith(os.path.basename(a.match))), None) or Match(a.match)
@@ -658,7 +671,7 @@ def main():
     w.writerow(
         ["match", "game", "version", "dry_run", "setting", "arm", "minutes", "p99_ms", "longest_ms", "stalls", "jitter_us"]
     )
-    for m in sorted(matches, key=lambda m: m.name):
+    for m in sorted(every, key=lambda m: m.name):
         fg = m.figures() or {}
         w.writerow(
             [
