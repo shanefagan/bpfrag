@@ -67,6 +67,7 @@ tests/e2e/                   end-to-end tests in a throwaway netns (root, pytest
                              the echo and bulk server and the pcap check
 docs/                        why each setting, how to measure, findings, internals
 docs/scripts/matches.py      the log as a CSV of matches
+docs/scripts/graphs.py       graphs from match timelines (docs/images)
 AGENTS.md                    notes for coding agents (CLAUDE.md imports it)
 .github/workflows/ci.yml     the justfile's recipes: fmt, clippy, tests, --selftest and
                              the e2e rig as root, MSRV check, .deb/.rpm builds,

@@ -9,7 +9,8 @@ setting. Results from other people come in through the "Share match
 data" issue form.
 
 Most data so far is one wired CachyOS desktop on a gigabit line, playing
-Deadlock, with some Trackmania.
+Deadlock, with some Trackmania. The graphs are drawn from the match
+timelines by `docs/scripts/graphs.py` (2026-11-11 to -14, 25 matches).
 
 ## Summary
 
@@ -48,7 +49,11 @@ Deadlock, with some Trackmania.
   demote), no comparison came closer than p 0.4, and jitter ranged from
   0.49 to 1.15 ms with the relay. A setting has to beat that to show.
 
+![Each experiment, one dot per match: the longest gap in play and the jitter, on against off](images/experiments.svg)
+
 ### Games observed
+
+![One Deadlock match second by second: 64 updates a second in play, 32 while dead, the game's state arriving 100 s in](images/match.svg)
 
 - **Deadlock** (Valve, through Steam's relays): 64 updates a second
   against people, 32 while the player is dead, on the end screen, or in
@@ -81,6 +86,8 @@ happens mid-game.
 ### Where hitches come from
 
 On this line, almost none come from the machine:
+
+![Every second with a gap of 50 ms or more in 25 Deadlock matches: nearly all while the game was starting or on the end screen](images/gaps.svg)
 
 - **Loading** (the first minute; Trackmania's maps mid-session) and the
   **end screen**: every stall and long gap before 0.10.0 was one of

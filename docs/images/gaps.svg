@@ -1,0 +1,199 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="534" viewBox="0 0 760 534" role="img">
+<title>Where the long gaps fall, in 25 matches</title>
+<desc>48 seconds with a gap of 50 ms or more, 2 in play; 28 of them stalls. Stalls by when: game starting 28, relay change 0, end screen 0, play 0</desc>
+
+<style>
+  svg { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 12px; }
+  .surface { fill: #fcfcfb; }
+  .ink { fill: #0b0b0b; }
+  .ink2 { fill: #52514e; }
+  .muted { fill: #898781; }
+  .grid { stroke: #e1e0d9; stroke-width: 1; }
+  .axis { stroke: #c3c2b7; stroke-width: 1; }
+  .band { fill: #0b0b0b; fill-opacity: 0.05; }
+  .s1 { stroke: #2a78d6; fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .s1fill { fill: #2a78d6; }
+  .s2ring { fill: #fcfcfb; stroke: #eb6834; stroke-width: 2; }
+  .s2fill { fill: #eb6834; }
+  .dotring { stroke: #fcfcfb; stroke-width: 2; }
+  .mark { stroke: #0b0b0b; stroke-width: 2; }
+  .threshold { stroke: #898781; stroke-width: 1; }
+  @media (prefers-color-scheme: dark) {
+    .surface { fill: #1a1a19; }
+    .ink { fill: #f0efec; }
+    .ink2 { fill: #c3c2b7; }
+    .grid { stroke: #2c2c2a; }
+    .axis { stroke: #383835; }
+    .band { fill: #f0efec; fill-opacity: 0.07; }
+    .s1 { stroke: #3987e5; }
+    .s1fill { fill: #3987e5; }
+    .s2ring { fill: #1a1a19; stroke: #d95926; }
+    .s2fill { fill: #d95926; }
+    .dotring { stroke: #1a1a19; }
+    .mark { stroke: #f0efec; }
+  }
+</style>
+<rect class="surface" width="760" height="534" rx="8"/>
+<text x="24.0" y="28.0" class="ink" text-anchor="start" font-size="15" font-weight="600">Where the long gaps fall, in 25 matches</text>
+<text x="24.0" y="48.0" class="ink2" text-anchor="start">Every second with a gap of 50 ms or more from the server (Deadlock): 48, 2 of them in play.</text>
+<text x="24.0" y="66.0" class="ink2" text-anchor="start">Shaded: the game starting and the end screen, left out of the match&#x27;s figures.</text>
+<circle class="s1fill dotring" cx="118" cy="86" r="4"/>
+<text x="128.0" y="90.0" class="ink2" text-anchor="start">50–99 ms</text>
+<circle class="s2fill dotring" cx="208" cy="86" r="5"/>
+<text x="218.0" y="90.0" class="ink2" text-anchor="start">a stall, 100 ms or more</text>
+<text x="102.0" y="116.0" class="muted" text-anchor="end">2026-11-11 17:58</text>
+<line class="grid" x1="112.0" x2="679.2" y1="112.0" y2="112.0"/>
+<rect class="band" x="112.0" y="106.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="670.5" y="106.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="112.7" cy="112.0" r="5"/>
+<circle class="s2fill dotring" cx="116.5" cy="112.0" r="5"/>
+<circle class="s1fill dotring" cx="672.6" cy="112.0" r="4"/>
+<text x="102.0" y="132.0" class="muted" text-anchor="end">2026-11-11 18:26</text>
+<line class="grid" x1="112.0" x2="507.9" y1="128.0" y2="128.0"/>
+<rect class="band" x="112.0" y="122.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="499.6" y="122.0" width="8.3" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="112.3" cy="128.0" r="5"/>
+<circle class="s2fill dotring" cx="117.9" cy="128.0" r="5"/>
+<circle class="s1fill dotring" cx="128.3" cy="128.0" r="4"/>
+<circle class="s1fill dotring" cx="365.8" cy="128.0" r="4"/>
+<circle class="s1fill dotring" cx="501.3" cy="128.0" r="4"/>
+<text x="102.0" y="148.0" class="muted" text-anchor="end">2026-11-11 22:11</text>
+<line class="grid" x1="112.0" x2="428.2" y1="144.0" y2="144.0"/>
+<rect class="band" x="112.0" y="138.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="419.5" y="138.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="114.4" cy="144.0" r="5"/>
+<text x="102.0" y="164.0" class="muted" text-anchor="end">2026-11-11 22:26</text>
+<line class="grid" x1="112.0" x2="297.1" y1="160.0" y2="160.0"/>
+<rect class="band" x="112.0" y="154.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="288.5" y="154.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="112.7" cy="160.0" r="5"/>
+<circle class="s2fill dotring" cx="116.9" cy="160.0" r="5"/>
+<text x="102.0" y="180.0" class="muted" text-anchor="end">2026-11-11 22:36</text>
+<line class="grid" x1="112.0" x2="429.9" y1="176.0" y2="176.0"/>
+<rect class="band" x="112.0" y="170.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="421.2" y="170.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="124.1" cy="176.0" r="5"/>
+<text x="102.0" y="196.0" class="muted" text-anchor="end">2026-11-11 23:05</text>
+<line class="grid" x1="112.0" x2="617.5" y1="192.0" y2="192.0"/>
+<rect class="band" x="112.0" y="186.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="608.8" y="186.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="122.4" cy="192.0" r="5"/>
+<circle class="s1fill dotring" cx="610.9" cy="192.0" r="4"/>
+<text x="102.0" y="212.0" class="muted" text-anchor="end">2026-11-11 23:30</text>
+<line class="grid" x1="112.0" x2="345.7" y1="208.0" y2="208.0"/>
+<rect class="band" x="112.0" y="202.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="337.0" y="202.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="114.1" cy="208.0" r="5"/>
+<circle class="s1fill dotring" cx="338.7" cy="208.0" r="4"/>
+<text x="102.0" y="228.0" class="muted" text-anchor="end">2026-11-12 20:28</text>
+<line class="grid" x1="112.0" x2="477.7" y1="224.0" y2="224.0"/>
+<rect class="band" x="112.0" y="218.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="469.1" y="218.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="116.5" cy="224.0" r="5"/>
+<text x="102.0" y="244.0" class="muted" text-anchor="end">2026-11-12 20:47</text>
+<line class="grid" x1="112.0" x2="460.4" y1="240.0" y2="240.0"/>
+<rect class="band" x="112.0" y="234.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="452.1" y="234.0" width="8.3" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="118.2" cy="240.0" r="5"/>
+<circle class="s1fill dotring" cx="180.3" cy="240.0" r="4"/>
+<circle class="s1fill dotring" cx="453.8" cy="240.0" r="4"/>
+<text x="102.0" y="260.0" class="muted" text-anchor="end">2026-11-12 21:28</text>
+<line class="grid" x1="112.0" x2="411.6" y1="256.0" y2="256.0"/>
+<rect class="band" x="112.0" y="250.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="402.9" y="250.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="114.8" cy="256.0" r="5"/>
+<circle class="s1fill dotring" cx="404.9" cy="256.0" r="4"/>
+<text x="102.0" y="276.0" class="muted" text-anchor="end">2026-11-12 21:43</text>
+<line class="grid" x1="112.0" x2="272.9" y1="272.0" y2="272.0"/>
+<rect class="band" x="112.0" y="266.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="264.2" y="266.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="118.6" cy="272.0" r="5"/>
+<circle class="s1fill dotring" cx="265.9" cy="272.0" r="4"/>
+<text x="102.0" y="292.0" class="muted" text-anchor="end">2026-11-12 21:51</text>
+<line class="grid" x1="112.0" x2="330.4" y1="288.0" y2="288.0"/>
+<rect class="band" x="112.0" y="282.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="321.7" y="282.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="120.7" cy="288.0" r="5"/>
+<circle class="s1fill dotring" cx="323.8" cy="288.0" r="4"/>
+<text x="102.0" y="308.0" class="muted" text-anchor="end">2026-11-13 12:54</text>
+<line class="grid" x1="112.0" x2="477.4" y1="304.0" y2="304.0"/>
+<rect class="band" x="112.0" y="298.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="469.1" y="298.0" width="8.3" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="117.5" cy="304.0" r="5"/>
+<text x="102.0" y="324.0" class="muted" text-anchor="end">2026-11-13 13:13</text>
+<line class="grid" x1="112.0" x2="517.1" y1="320.0" y2="320.0"/>
+<rect class="band" x="112.0" y="314.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="512.4" y="314.0" width="4.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="146.7" cy="320.0" r="5"/>
+<circle class="s1fill dotring" cx="514.5" cy="320.0" r="4"/>
+<text x="102.0" y="340.0" class="muted" text-anchor="end">2026-11-13 15:35</text>
+<line class="grid" x1="112.0" x2="479.8" y1="336.0" y2="336.0"/>
+<rect class="band" x="112.0" y="330.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="470.1" y="330.0" width="9.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="113.4" cy="336.0" r="5"/>
+<circle class="s1fill dotring" cx="472.2" cy="336.0" r="4"/>
+<text x="102.0" y="356.0" class="muted" text-anchor="end">2026-11-13 15:52</text>
+<line class="grid" x1="112.0" x2="534.2" y1="352.0" y2="352.0"/>
+<rect class="band" x="112.0" y="346.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="525.6" y="346.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="112.7" cy="352.0" r="5"/>
+<circle class="s2fill dotring" cx="116.2" cy="352.0" r="5"/>
+<circle class="s1fill dotring" cx="527.7" cy="352.0" r="4"/>
+<text x="102.0" y="372.0" class="muted" text-anchor="end">2026-11-13 16:13</text>
+<line class="grid" x1="112.0" x2="399.7" y1="368.0" y2="368.0"/>
+<rect class="band" x="112.0" y="362.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="391.1" y="362.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="118.9" cy="368.0" r="5"/>
+<text x="102.0" y="388.0" class="muted" text-anchor="end">2026-11-13 18:41</text>
+<line class="grid" x1="112.0" x2="156.0" y1="384.0" y2="384.0"/>
+<rect class="band" x="112.0" y="378.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="151.2" y="378.0" width="4.9" height="12" rx="2"/>
+<text x="102.0" y="404.0" class="muted" text-anchor="end">2026-11-13 18:44</text>
+<line class="grid" x1="112.0" x2="436.5" y1="400.0" y2="400.0"/>
+<rect class="band" x="112.0" y="394.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="428.2" y="394.0" width="8.3" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="130.7" cy="400.0" r="5"/>
+<circle class="s1fill dotring" cx="429.9" cy="400.0" r="4"/>
+<text x="102.0" y="420.0" class="muted" text-anchor="end">2026-11-14 11:02</text>
+<line class="grid" x1="112.0" x2="403.2" y1="416.0" y2="416.0"/>
+<rect class="band" x="112.0" y="410.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="394.5" y="410.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="114.8" cy="416.0" r="5"/>
+<circle class="s1fill dotring" cx="396.6" cy="416.0" r="4"/>
+<text x="102.0" y="436.0" class="muted" text-anchor="end">2026-11-14 11:17</text>
+<line class="grid" x1="112.0" x2="288.1" y1="432.0" y2="432.0"/>
+<rect class="band" x="112.0" y="426.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="279.4" y="426.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="113.0" cy="432.0" r="5"/>
+<circle class="s1fill dotring" cx="281.5" cy="432.0" r="4"/>
+<text x="102.0" y="452.0" class="muted" text-anchor="end">2026-11-14 11:26</text>
+<line class="grid" x1="112.0" x2="518.7" y1="448.0" y2="448.0"/>
+<rect class="band" x="112.0" y="442.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="510.0" y="442.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="116.2" cy="448.0" r="5"/>
+<text x="102.0" y="468.0" class="muted" text-anchor="end">2026-11-14 12:54</text>
+<line class="grid" x1="112.0" x2="381.7" y1="464.0" y2="464.0"/>
+<rect class="band" x="112.0" y="458.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="373.0" y="458.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="122.4" cy="464.0" r="5"/>
+<circle class="s1fill dotring" cx="375.1" cy="464.0" r="4"/>
+<text x="102.0" y="484.0" class="muted" text-anchor="end">2026-11-14 13:07</text>
+<line class="grid" x1="112.0" x2="303.0" y1="480.0" y2="480.0"/>
+<rect class="band" x="112.0" y="474.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="294.3" y="474.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="114.8" cy="480.0" r="5"/>
+<circle class="s1fill dotring" cx="296.4" cy="480.0" r="4"/>
+<circle class="s1fill dotring" cx="298.2" cy="480.0" r="4"/>
+<text x="102.0" y="500.0" class="muted" text-anchor="end">2026-11-14 13:17</text>
+<line class="grid" x1="112.0" x2="308.2" y1="496.0" y2="496.0"/>
+<rect class="band" x="112.0" y="490.0" width="20.8" height="12" rx="2"/>
+<rect class="band" x="299.5" y="490.0" width="8.7" height="12" rx="2"/>
+<circle class="s2fill dotring" cx="116.9" cy="496.0" r="5"/>
+<text x="112.0" y="520.0" class="muted" text-anchor="middle">0 min</text>
+<text x="216.0" y="520.0" class="muted" text-anchor="middle">5 min</text>
+<text x="320.0" y="520.0" class="muted" text-anchor="middle">10 min</text>
+<text x="424.0" y="520.0" class="muted" text-anchor="middle">15 min</text>
+<text x="528.0" y="520.0" class="muted" text-anchor="middle">20 min</text>
+<text x="632.0" y="520.0" class="muted" text-anchor="middle">25 min</text>
+<text x="736.0" y="520.0" class="muted" text-anchor="middle">30 min</text>
+</svg>

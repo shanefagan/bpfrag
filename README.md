@@ -124,6 +124,16 @@ Deadlock: packet gaps half ≤16 ms, 99% ≤23 ms, longest 48 ms, 0 stalls (100 
 - **The receive queue** is where the game's packets come in, and which IRQ
   serves it.
 
+![Every second with a gap of 50 ms or more in 25 Deadlock matches: nearly all while the game was starting or on the end screen](docs/images/gaps.svg)
+
+On a wired gigabit line, almost every long gap in 25 Deadlock matches came
+while the game was starting or on its end screen, not in play, and none
+of bpfrag's settings measured so far changed the figures. On a line like
+that, what bpfrag tells you is whether a bad match came from this machine
+or from the network and the server. Where its settings are meant to
+matter, a download sharing the line or Wi-Fi, is still being measured:
+[docs/findings.md](docs/findings.md).
+
 Most of the spread in packet gaps comes from the internet and the game
 server, so one match proves little either way. To find out what each
 setting does, let bpfrag run an experiment: each day it picks one setting

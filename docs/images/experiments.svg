@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="262" viewBox="0 0 760 262" role="img">
+<title>Each experiment, one dot per match</title>
+<desc>bulk: on 3 matches, median longest gap 40 ms, off 3 matches, median longest gap 41 ms; writeback: on 12 matches, median longest gap 41 ms, off 6 matches, median longest gap 41 ms</desc>
+
+<style>
+  svg { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 12px; }
+  .surface { fill: #fcfcfb; }
+  .ink { fill: #0b0b0b; }
+  .ink2 { fill: #52514e; }
+  .muted { fill: #898781; }
+  .grid { stroke: #e1e0d9; stroke-width: 1; }
+  .axis { stroke: #c3c2b7; stroke-width: 1; }
+  .band { fill: #0b0b0b; fill-opacity: 0.05; }
+  .s1 { stroke: #2a78d6; fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .s1fill { fill: #2a78d6; }
+  .s2ring { fill: #fcfcfb; stroke: #eb6834; stroke-width: 2; }
+  .s2fill { fill: #eb6834; }
+  .dotring { stroke: #fcfcfb; stroke-width: 2; }
+  .mark { stroke: #0b0b0b; stroke-width: 2; }
+  .threshold { stroke: #898781; stroke-width: 1; }
+  @media (prefers-color-scheme: dark) {
+    .surface { fill: #1a1a19; }
+    .ink { fill: #f0efec; }
+    .ink2 { fill: #c3c2b7; }
+    .grid { stroke: #2c2c2a; }
+    .axis { stroke: #383835; }
+    .band { fill: #f0efec; fill-opacity: 0.07; }
+    .s1 { stroke: #3987e5; }
+    .s1fill { fill: #3987e5; }
+    .s2ring { fill: #1a1a19; stroke: #d95926; }
+    .s2fill { fill: #d95926; }
+    .dotring { stroke: #1a1a19; }
+    .mark { stroke: #f0efec; }
+  }
+</style>
+<rect class="surface" width="760" height="262" rx="8"/>
+<text x="24.0" y="28.0" class="ink" text-anchor="start" font-size="15" font-weight="600">Each experiment, one dot per match</text>
+<text x="24.0" y="48.0" class="ink2" text-anchor="start">Setting on or off, picked at random per match. Bars: each side&#x27;s median.</text>
+<circle class="s1fill dotring" cx="156" cy="66" r="5"/>
+<text x="166.0" y="70.0" class="ink2" text-anchor="start">on</text>
+<circle class="s2ring" cx="206" cy="66" r="4"/>
+<text x="216.0" y="70.0" class="ink2" text-anchor="start">off</text>
+<text x="150.0" y="90.0" class="ink" text-anchor="start">Longest gap in play, ms</text>
+<line class="grid" x1="150.0" x2="150.0" y1="104" y2="232"/>
+<text x="150.0" y="248.0" class="muted" text-anchor="middle">35</text>
+<line class="grid" x1="218.2" x2="218.2" y1="104" y2="232"/>
+<text x="218.2" y="248.0" class="muted" text-anchor="middle">40</text>
+<line class="grid" x1="286.5" x2="286.5" y1="104" y2="232"/>
+<text x="286.5" y="248.0" class="muted" text-anchor="middle">45</text>
+<line class="grid" x1="354.8" x2="354.8" y1="104" y2="232"/>
+<text x="354.8" y="248.0" class="muted" text-anchor="middle">50</text>
+<line class="grid" x1="423.0" x2="423.0" y1="104" y2="232"/>
+<text x="423.0" y="248.0" class="muted" text-anchor="middle">55</text>
+<circle class="s1fill dotring" cx="204.6" cy="122" r="5"/>
+<circle class="s1fill dotring" cx="218.2" cy="122" r="5"/>
+<circle class="s1fill dotring" cx="231.9" cy="122" r="5"/>
+<line class="mark" x1="218.2" x2="218.2" y1="113" y2="131"/>
+<text x="138.0" y="126.0" class="muted" text-anchor="end">on (3)</text>
+<circle class="s2ring" cx="218.2" cy="146" r="4"/>
+<circle class="s2ring" cx="231.9" cy="146" r="4"/>
+<circle class="s2ring" cx="327.4" cy="146" r="4"/>
+<line class="mark" x1="231.9" x2="231.9" y1="137" y2="155"/>
+<text x="138.0" y="150.0" class="muted" text-anchor="end">off (3)</text>
+<text x="24.0" y="138.0" class="ink" text-anchor="start">bulk</text>
+<circle class="s1fill dotring" cx="204.6" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="204.6" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="204.6" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="204.6" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="218.2" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="218.2" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="245.6" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="259.2" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="286.5" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="341.1" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="354.8" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="423.0" cy="186" r="5"/>
+<line class="mark" x1="231.9" x2="231.9" y1="177" y2="195"/>
+<text x="138.0" y="190.0" class="muted" text-anchor="end">on (12)</text>
+<circle class="s2ring" cx="204.6" cy="210" r="4"/>
+<circle class="s2ring" cx="231.9" cy="210" r="4"/>
+<circle class="s2ring" cx="231.9" cy="210" r="4"/>
+<circle class="s2ring" cx="231.9" cy="210" r="4"/>
+<circle class="s2ring" cx="231.9" cy="210" r="4"/>
+<circle class="s2ring" cx="341.1" cy="210" r="4"/>
+<line class="mark" x1="231.9" x2="231.9" y1="201" y2="219"/>
+<text x="138.0" y="214.0" class="muted" text-anchor="end">off (6)</text>
+<text x="24.0" y="202.0" class="ink" text-anchor="start">writeback</text>
+<text x="463.0" y="90.0" class="ink" text-anchor="start">Jitter, µs</text>
+<line class="grid" x1="463.0" x2="463.0" y1="104" y2="232"/>
+<text x="463.0" y="248.0" class="muted" text-anchor="middle">400</text>
+<line class="grid" x1="531.2" x2="531.2" y1="104" y2="232"/>
+<text x="531.2" y="248.0" class="muted" text-anchor="middle">600</text>
+<line class="grid" x1="599.5" x2="599.5" y1="104" y2="232"/>
+<text x="599.5" y="248.0" class="muted" text-anchor="middle">800</text>
+<line class="grid" x1="667.8" x2="667.8" y1="104" y2="232"/>
+<text x="667.8" y="248.0" class="muted" text-anchor="middle">1,000</text>
+<line class="grid" x1="736.0" x2="736.0" y1="104" y2="232"/>
+<text x="736.0" y="248.0" class="muted" text-anchor="middle">1,200</text>
+<circle class="s1fill dotring" cx="493.7" cy="122" r="5"/>
+<circle class="s1fill dotring" cx="560.3" cy="122" r="5"/>
+<circle class="s1fill dotring" cx="590.0" cy="122" r="5"/>
+<line class="mark" x1="560.3" x2="560.3" y1="113" y2="131"/>
+<circle class="s2ring" cx="550.8" cy="146" r="4"/>
+<circle class="s2ring" cx="552.5" cy="146" r="4"/>
+<circle class="s2ring" cx="552.5" cy="146" r="4"/>
+<line class="mark" x1="552.5" x2="552.5" y1="137" y2="155"/>
+<circle class="s1fill dotring" cx="511.9" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="512.2" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="534.5" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="535.0" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="537.6" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="550.9" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="557.9" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="567.5" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="615.5" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="635.0" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="644.1" cy="186" r="5"/>
+<circle class="s1fill dotring" cx="717.8" cy="186" r="5"/>
+<line class="mark" x1="554.4" x2="554.4" y1="177" y2="195"/>
+<circle class="s2ring" cx="516.3" cy="210" r="4"/>
+<circle class="s2ring" cx="520.5" cy="210" r="4"/>
+<circle class="s2ring" cx="538.9" cy="210" r="4"/>
+<circle class="s2ring" cx="546.4" cy="210" r="4"/>
+<circle class="s2ring" cx="581.4" cy="210" r="4"/>
+<circle class="s2ring" cx="598.8" cy="210" r="4"/>
+<line class="mark" x1="542.7" x2="542.7" y1="201" y2="219"/>
+</svg>

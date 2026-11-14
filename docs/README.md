@@ -8,7 +8,8 @@ use it. These pages go deeper.
   expect, when nothing will happen, and how sure we are.
 - [measuring.md](measuring.md): how to tell whether a setting helps: what
   the health numbers mean, how to run a comparison that can be trusted, and
-  `scripts/matches.py`, which turns the log into a CSV of matches.
+  `scripts/matches.py`, which turns the log into a CSV of matches, and
+  `scripts/graphs.py`, which draws graphs from the match timelines.
 - [distros.md](distros.md): what Ubuntu, CachyOS, Bazzite and the kernel
   ship by default, which of bpfrag's settings that leaves to do, and the
   sources.
