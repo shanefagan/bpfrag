@@ -14,6 +14,13 @@ Reads timeline CSVs (`[capture] timeline = true` writes one per match to
   relay change, the end screen, play) are printed.
 - experiments.svg: each A/B experiment in the matches given, one dot per
   match, on against off: the longest gap in play and the jitter.
+- onoff.svg: bpfrag tuning against changing nothing, the share of seconds
+  of play with a gap over 40, 60 and 100 ms. "Nothing changed" is the
+  off arm of `[experiment] setting = "all"`, or a --dry-run; "tuning" is
+  a match with nothing switched off. Matches with one setting off are
+  left out. Drawn only with matches on both sides; the "all" experiment
+  is the fair test (picked at random per match, so the server, the time
+  of day and the relay even out).
 
 It also prints the numbers behind each graph, as the table to go with
 it. Play is worked out as the daemon does (health/mod.rs): from a minute
@@ -42,7 +49,11 @@ END_TRIM = 5  # readings before the last at the usual rate
 LOADING_HOLD = 3
 STALL_MS = 100
 
-HEADER = re.compile(r"^# bpfrag (\S+); (.+?) \(pid (\d+)\)(?: \[.*?\])?(?:; experiment: (.+?) (on|off))?$")
+# "# bpfrag 0.16.3 (dry run); Deadlock (pid 1) [Steam app 1422450]; experiment: writeback off"
+HEADER = re.compile(
+    r"^# bpfrag (\S+)( \(dry run\))?; (.+?) \(pid (\d+)\)(?: \[.*?\])?"
+    r"(?:; experiment: (?:none|(.+?) (on|off)))?$"
+)
 
 # Colours: categorical slots 1 and 2 of the dataviz reference palette,
 # validated for colour-blind separation in light and dark.
@@ -100,7 +111,8 @@ class Match:
         m = HEADER.match(first)
         if not m:
             raise ValueError(f"{path}: not a bpfrag timeline")
-        self.version, self.game, _, self.setting, self.arm = m.groups()
+        self.version, dry, self.game, _, self.setting, self.arm = m.groups()
+        self.dry_run = dry is not None
         stamp = re.match(r"(\d{4}-\d\d-\d\d)_(\d\d)-(\d\d)", self.name)
         self.when = f"{stamp[1]} {stamp[2]}:{stamp[3]}" if stamp else self.name
         self.t = [num(r["t"]) or 0.0 for r in self.rows]
@@ -140,6 +152,20 @@ class Match:
         self.upto = usual[-1] - END_TRIM if usual else None
         self.play = [i for i in play if i not in loading and self.upto is not None and i <= self.upto]
         self.usual_play = [i for i in self.play if self.usual(i)]
+
+    def tuned(self):
+        """True if bpfrag tuned everything it would, False if it changed
+        nothing (a dry run, or the "all" experiment's off arm), None if
+        an experiment switched one setting off."""
+        if self.dry_run or (self.setting == "all" and self.arm == "off"):
+            return False
+        if self.arm in (None, "on"):
+            return True
+        return None
+
+    def play_seconds_over(self, ms):
+        """Seconds of play, and how many had a gap longer than `ms`."""
+        return len(self.play), sum(1 for i in self.play if (self.longest[i] or 0) > ms)
 
     def usual(self, i):
         p50 = self.p50[i]
@@ -390,6 +416,85 @@ def hitches_svg(matches):
     return svg(W, ybot + 30, title, desc, body), causes
 
 
+def pct(v):
+    """A share as two significant figures: 0.14%, 4.9%, 12%; 0% for none."""
+    return "0%" if v == 0 else f"{v:.2g}%"
+
+
+ONOFF_MS = (40, 60, 100)  # 40: past the 32 ms gaps while dead
+
+
+def onoff_svg(matches):
+    """bpfrag tuning against changing nothing: the share of seconds of
+    play with a gap longer than each of ONOFF_MS. None without matches on
+    both sides."""
+    usable = [m for m in matches if m.minutes >= MIN_MINUTES and m.play]
+    sides = {True: [m for m in usable if m.tuned() is True], False: [m for m in usable if m.tuned() is False]}
+    if not sides[True] or not sides[False]:
+        return None, sides
+    share = {}
+    for side, ms in sides.items():
+        secs = sum(m.play_seconds_over(0)[0] for m in ms)
+        share[side] = [100 * sum(m.play_seconds_over(t)[1] for m in ms) / secs for t in ONOFF_MS]
+    random_off = sum(1 for m in sides[False] if m.setting == "all")
+    how = (
+        "picked at random per match (experiment all)"
+        if random_off == len(sides[False]) and all(m.setting == "all" for m in sides[True])
+        else "tuning against dry runs and the experiment's off arm"
+    )
+    W, left, right = 760, 64, 24
+    pw = W - left - right
+    top, h = 112, 220
+    hi = max(max(v) for v in share.values()) or 1
+    ticks = nice_ticks(0, hi, 4)
+    y = lambda v: top + h - h * v / ticks[-1]
+    title = "bpfrag on and off"
+    body = [
+        text(24, 28, title, "ink", size=15, weight=600),
+        text(
+            24,
+            48,
+            f"Seconds of play with a gap from the server longer than each length. {len(sides[True])} matches "
+            f"tuned, {len(sides[False])} not;",
+        ),
+        text(24, 66, f"{how}. A stall is a gap of 100 ms or more."),
+        f'<rect class="s1fill" x="{left}" y="80" width="12" height="12" rx="2"/>',
+        text(left + 18, 90, "bpfrag tuning", "ink2"),
+        f'<rect class="s2fill" x="{left + 120}" y="80" width="12" height="12" rx="2"/>',
+        text(left + 138, 90, "nothing changed", "ink2"),
+    ]
+    for v in ticks:
+        body.append(f'<line class="grid" x1="{left}" x2="{left + pw}" y1="{y(v):.1f}" y2="{y(v):.1f}"/>')
+        body.append(text(left - 8, y(v) + 4, f"{v:g}%", "muted", "end"))
+    group = pw / len(ONOFF_MS)
+    bw = 24
+    for k, t in enumerate(ONOFF_MS):
+        cx = left + group * (k + 0.5)
+        for j, side in enumerate((True, False)):
+            v = share[side][k]
+            x0 = cx - bw - 1 if j == 0 else cx + 1  # a 2px gap between the pair
+            top_y = y(v)
+            hh = top + h - top_y
+            cls = "s1fill" if side else "s2fill"
+            if hh > 0:
+                r = min(4, hh, bw / 2)
+                body.append(
+                    f'<path class="{cls}" d="M{x0:.1f},{top + h} v{-(hh - r):.1f} a{r},{r} 0 0 1 {r},{-r} '
+                    f'h{bw - 2 * r} a{r},{r} 0 0 1 {r},{r} v{hh - r:.1f} z"/>'
+                )
+            # each pair's labels lean away from the gap between them
+            lx, anchor = (x0 + bw, "end") if j == 0 else (x0, "start")
+            body.append(text(lx, top_y - 6, pct(v), "ink", anchor))
+        label = f"over {t} ms" if t < STALL_MS else f"{t} ms or more (a stall)"
+        body.append(text(cx, top + h + 18, label, "muted", "middle"))
+    body.append(f'<line class="axis" x1="{left}" x2="{left + pw}" y1="{top + h}" y2="{top + h}"/>')
+    desc = "; ".join(
+        f"over {t} ms: tuning {share[True][k]:.2f}%, nothing changed {share[False][k]:.2f}%"
+        for k, t in enumerate(ONOFF_MS)
+    )
+    return svg(W, top + h + 34, title, desc, body), sides
+
+
 def experiments_svg(matches):
     groups = {}
     for m in matches:
@@ -482,12 +587,24 @@ def main():
     s, counts = hitches_svg(matches)
     with open(os.path.join(a.out, "gaps.svg"), "w") as f:
         f.write(s)
+    o, sides = onoff_svg(matches)
+    if o:
+        with open(os.path.join(a.out, "onoff.svg"), "w") as f:
+            f.write(o)
+    else:
+        print(
+            f"onoff.svg not drawn: {len(sides[True])} tuned matches, {len(sides[False])} with nothing changed "
+            "(needs both: [experiment] setting = \"all\", or --dry-run)",
+            file=sys.stderr,
+        )
     e, groups = experiments_svg(matches)
     with open(os.path.join(a.out, "experiments.svg"), "w") as f:
         f.write(e)
 
     w = csv.writer(sys.stdout)
-    w.writerow(["match", "game", "version", "setting", "arm", "minutes", "p99_ms", "longest_ms", "stalls", "jitter_us"])
+    w.writerow(
+        ["match", "game", "version", "dry_run", "setting", "arm", "minutes", "p99_ms", "longest_ms", "stalls", "jitter_us"]
+    )
     for m in sorted(matches, key=lambda m: m.name):
         fg = m.figures() or {}
         w.writerow(
@@ -495,6 +612,7 @@ def main():
                 m.when,
                 m.game,
                 m.version,
+                "yes" if m.dry_run else "",
                 m.setting or "",
                 m.arm or "",
                 f"{m.minutes:.1f}",
@@ -514,7 +632,17 @@ def main():
                     f" jitter {statistics.median(f['jitter'] for f in side if f['jitter']):.0f} µs",
                     file=sys.stderr,
                 )
-    print(f"wrote match.svg ({one.when}), gaps.svg, experiments.svg to {a.out}", file=sys.stderr)
+    for side, name in ((True, "tuning"), (False, "nothing changed")):
+        ms = sides[side]
+        if ms:
+            over = [100 * sum(m.play_seconds_over(t)[1] for m in ms) / sum(len(m.play) for m in ms) for t in ONOFF_MS]
+            print(
+                f"{name}: {len(ms)} matches, seconds of play over "
+                + ", ".join(f"{t} ms {v:.2f}%" for t, v in zip(ONOFF_MS, over)),
+                file=sys.stderr,
+            )
+    drawn = "match.svg, gaps.svg, experiments.svg" + (", onoff.svg" if o else "")
+    print(f"wrote {drawn} to {a.out} (match.svg: {one.when})", file=sys.stderr)
 
 
 if __name__ == "__main__":

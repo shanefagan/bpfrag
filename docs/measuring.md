@@ -192,8 +192,9 @@ docs/scripts/matches.py -`.
 
 `docs/scripts/graphs.py` draws graphs from the match timelines
 (`[capture] timeline = true`): one match second by second, where the long
-gaps fall in each match, and each experiment's matches on against off,
-with the numbers behind them as CSV:
+gaps fall in each match, each experiment's matches on against off, and
+bpfrag tuning against changing nothing (from `setting = "all"` or dry
+runs), with the numbers behind them as CSV:
 `docs/scripts/graphs.py --out graphs /run/bpfrag/captures/*.csv`.
 
 To compare an experiment's two arms directly (with `random`, each setting

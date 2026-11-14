@@ -462,6 +462,9 @@ honest prediction is "no difference".
 game, nothing big downloading.
 
 **Read it:** `matches.py --compare arm`: 99% gap, longest gap, stalls.
+With `[capture] timeline = true`, `graphs.py` draws it as `onoff.svg`:
+the share of seconds of play with a gap over 40, 60 and 100 ms, tuned
+against not.
 
 **Decides:** no difference is a useful result: it tells wired users with
 fast lines what to expect, and it's the reference the other experiments
