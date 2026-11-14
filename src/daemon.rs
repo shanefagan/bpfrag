@@ -879,35 +879,34 @@ impl<'a> Tuner<'a> {
             return;
         };
         let procs = &mut self.procs;
-        // Tagged processes are logged in full by track_tagged, and a UDP
-        // match's game has its own report. A TCP match's game is this
-        // observer's: its session ending ends the match.
-        let tagged = &self.tagged;
+        // A UDP match's game has its own report. A TCP match's game is this
+        // observer's: its session ending ends the match. Tagged processes
+        // are followed like any other (BPFRAG_OBSERVE=1 adds logging, it
+        // doesn't stop a game being tuned: 0.17.0 left them out, and a
+        // tagged Path of Exile 2 was never tuned), but track_tagged logs
+        // them, so their lines here are left out.
         let exclude: Vec<u32> = session
             .filter(|(_, t)| *t == Transport::Udp)
             .map(|(t, _)| t)
             .into_iter()
-            .chain(
-                samples
-                    .iter()
-                    .map(|s| s.tgid)
-                    .filter(|t| tagged.contains(*t)),
-            )
             .collect();
         let events = obs.tick(dt, samples, &exclude, |tgid| match procs.verdict(tgid) {
             (Verdict::Game(reason), name) => Some((name, reason)),
             _ => None,
         });
         let mut ended = Vec::new();
+        let tagged = &self.tagged;
         let rest: Vec<ObsEvent> = events
             .into_iter()
             .filter(|e| match e {
-                ObsEvent::Seen { tgid, .. } => !self.tcp_matched.contains(tgid),
+                ObsEvent::Seen { tgid, .. } => {
+                    !self.tcp_matched.contains(tgid) && !tagged.contains(*tgid)
+                }
                 ObsEvent::Ended { tgid, summary } if self.tcp_matched.remove(tgid) => {
                     ended.push((*tgid, summary.clone()));
                     false
                 }
-                ObsEvent::Ended { .. } => true,
+                ObsEvent::Ended { tgid, .. } => !tagged.contains(*tgid),
             })
             .collect();
         log_tcp_events(&rest, self.tcp_tune);

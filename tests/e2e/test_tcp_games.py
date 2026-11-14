@@ -30,6 +30,21 @@ def test_a_tcp_game_is_tuned_and_marked_until_it_exits(rig, daemon):
     assert not daemon.logged("TCP game session"), daemon.log()
 
 
+def test_a_tagged_tcp_game_is_still_tuned(rig, daemon):
+    """BPFRAG_OBSERVE=1 adds logging; the game is detected and tuned as
+    usual. 0.17.0 left tagged processes out of TCP game detection, and a
+    tagged Path of Exile 2 was never tuned."""
+    game = rig.tcp_game(20, env={"BPFRAG_OBSERVE": "1"})
+    daemon.wait_for(
+        rf"Match detected: fakemmo \(pid {game.pid}\) talks TCP like a multiplayer game",
+        timeout=30,
+    )
+    daemon.wait_for(rf"Observing fakemmo \(pid {game.pid}\): TCP", timeout=30)
+    game.exit()
+    daemon.wait_for(r"Match ended after .* \(game exited\); settings restored")
+    daemon.wait_for(rf"Observed fakemmo \(pid {game.pid}\): TCP for \d+s")
+
+
 def test_a_tcp_game_barely_talking_isnt_tuned(rig, daemon):
     """Two messages a second each way: a launcher's or a store page's
     connection, not a game being played online. The scenario is time

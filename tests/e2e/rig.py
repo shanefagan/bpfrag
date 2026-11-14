@@ -402,10 +402,11 @@ class Rig:
         self._started.append(p)
         return p
 
-    def tcp_game(self, rate=20, appid="4243"):
+    def tcp_game(self, rate=20, appid="4243", env=None):
         """A Steam game that talks TCP (an MMO client)."""
         p = Process(
-            [self.fakemmo, self.work / "tcpgame.py", rate], env={"SteamAppId": appid}
+            [self.fakemmo, self.work / "tcpgame.py", rate],
+            env={"SteamAppId": appid, **(env or {})},
         )
         self._started.append(p)
         return p
