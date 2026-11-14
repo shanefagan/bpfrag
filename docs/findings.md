@@ -35,8 +35,18 @@ Deadlock, with some Trackmania.
   Trackmania was closing: it stopped reading its socket for two seconds
   while the server kept sending. The machine-wide count (about one drop a
   second) belongs to something else and didn't change either way.
+- **Writeback:** no difference over 24 Deadlock matches (2026-11-11 to
+  -13). On CachyOS it can't make one: the distribution already ships
+  bpfrag's values ([distros.md](distros.md)), so both arms were the same
+  system. It needs testing elsewhere, during a big download
+  ([experiment 14](experiments.md#14-writeback-during-a-big-download)).
 - **DSCP, bulk demotion, Wi-Fi power save:** not measured yet. On a
-  wired line with no queue (as here), there's nothing for them to do.
+  wired line with no queue (as here), there's nothing for them to do. A
+  day of bulk-demotion matches (2026-11-14) had nothing to demote.
+- **How much matches differ by chance:** in 17 matches where both arms
+  were the same system (writeback on CachyOS, bulk with nothing to
+  demote), no comparison came closer than p 0.4, and jitter ranged from
+  0.49 to 1.15 ms with the relay. A setting has to beat that to show.
 
 ### Games observed
 
@@ -74,7 +84,10 @@ On this line, almost none come from the machine:
 
 - **Loading** (the first minute; Trackmania's maps mid-session) and the
   **end screen**: every stall and long gap before 0.10.0 was one of
-  these. The figures now cover play only.
+  these. The figures now cover play only. As each Deadlock game starts,
+  its server goes quiet for half a second to a second, then sends the
+  game's state in a second or two (400–800 KB, updates 5 ms apart):
+  4 to 100 s after the match is detected.
 - **Relay changes** (Deadlock): sometimes one gap of 64–100 ms, a couple
   of seconds before bpfrag logs the change; sometimes nothing.
 - **A lost connection:** twice in about 40 Deadlock matches, the server
@@ -88,7 +101,7 @@ On this line, almost none come from the machine:
   fell to 37 in a second, then a burst caught up), and two while racing
   in Trackmania.
 
-Typical Deadlock play: 99% of gaps within 17–18 ms, longest 25–40 ms,
+Typical Deadlock play: 99% of gaps within 17–18 ms, longest 25–50 ms,
 no stalls.
 
 ## Match comparisons
@@ -105,6 +118,8 @@ conditions, the number of matches on each side, and the medians.
 | 2026-11-04 to -10 | The same, bpfrag 0.12.0 to 0.14.0 | `netdev_max_backlog` raised to 5000 (on) / left at CachyOS's 4096 (off) | 2 / 8 | 18 / 18 ms | 81 / 62 ms | 0 / 0 | No difference, with too few "on" matches to say more than that. The matches differed by relay: one "off" match on a worse one had 2.5 ms of jitter against 0.7–0.9 ms in the others. Taken out of the random pool in 0.15.0: on a NIC with NAPI and no RPS the queue it sizes isn't used ([knobs.md](knobs.md#netdev_max_backlog)), and here the default was already 4096 |
 | 2026-11-11 | CachyOS, wired (`eno1`), bpfrag 0.16.0–0.16.1 tuning, Deadlock, nothing large being written to disk; figures from the timelines | writeback tightened (on) / left at the distribution's (off) | 6 / 7 | 18 / 18 ms | 61 / 49 ms | 0 / 0 | No difference, as expected: writeback only matters while something writes a lot. Jitter 742 / 622 µs, the "on" side raised by two matches on one evening relay |
 | 2026-11-09 to -11 | The same, bpfrag 0.14.0 / 0.16.x | all of 0.14.0's settings (busy polling, backlog, budget, coalescing) / 0.16's fewer | 15 / 13 | 18 / 18 ms | 64 / 50 ms | 0 / 0 | No difference: removing those four settings cost nothing measurable. Jitter 657 / 649 µs. The longest-gap difference (p 0.03) is one of ten comparisons, and 0.16's matches were shorter |
+| 2026-11-12 and -13 | The same, bpfrag 0.16.2; figures recomputed the daemon's way from the timelines | writeback tightened (on) / left at the distribution's (off) | 7 / 4 | 18 / 18 ms | 40 / 41 ms | 0 / 0 | No difference, and none possible: CachyOS ships bpfrag's writeback values, so both arms were the same system. With 2026-11-11, 13 on and 11 off. Jitter 658 / 696 µs; the highest (1.15 ms, an "on" match) was one evening's relay |
+| 2026-11-14 | The same, nothing moving bulk data | bulk demotion on / off (`[bulk] enabled = true`) | 3 / 3 | 18 / 18 ms | 40 / 41 ms | 0 / 0 | No difference, and none possible: no process was bulk in any match (the health line names any), so nothing was demoted. Not a test of bulk demotion; [experiment 10](experiments.md#10-bulk-demotion-with-a-full-upload) is |
 
 ## Open questions
 
@@ -136,6 +151,16 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-12 to -14** (0.16.2, Deadlock, wired): 17 matches of 5
+  minutes or more, all clean: 99% 17–20 ms, longest 39–50 ms, no stalls
+  in play. Neither experiment could change anything (writeback is
+  CachyOS's own value; nothing was bulk), which makes them the noise
+  floor in the summary. Once the game's state arrived 100 s in, and the
+  465 ms quiet before it counted as a stall in play (fixed in 0.16.3).
+  One evening relay ran at twice the usual jitter, the game's own
+  sending as regular as ever. A 343 ms pause in the game's sending while
+  the player was dead, the server's updates arriving normally: the game,
+  not the network.
 - **2026-11-09 to -11** (0.14.0 to 0.16.1, Deadlock, wired): 30 matches
   of 5 minutes or more, all clean: no stall in play after 0.14.0. Removing
   busy polling, the backlog, the budget and coalescing changed nothing,
@@ -215,6 +240,13 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 
 ## Bugs found and what they taught
 
+- **0.16.2: a game that started after the first minute counted its
+  start as play.** Play counts from a minute in, and Deadlock's game
+  state usually arrives well before that. Once it came 100 s in, and the
+  465 ms quiet before it was a stall in play. 0.16.3 leaves out a second
+  of more updates than usual at under half the usual interval, and the
+  second before it. A server catching up after a real hiccup doesn't
+  look like that: its queued packets arrive together, one update.
 - **0.16.1: a spare relay's pings held a match open.** After two relay
   moves, Deadlock kept answering pings from a relay it had left, 5 to 10
   a second. On the end screen they kept the traffic from outside at the
