@@ -37,6 +37,7 @@ import csv
 import html
 import math
 import os
+import random
 import re
 import statistics
 import sys
@@ -448,10 +449,12 @@ def onoff_svg(matches):
     sides = {True: [m for m in usable if m.tuned() is True], False: [m for m in usable if m.tuned() is False]}
     if not sides[True] or not sides[False]:
         return None, sides
-    share = {}
+    share, over, secs = {}, {}, {}
     for side, ms in sides.items():
-        secs = sum(m.play_seconds_over(0)[0] for m in ms)
-        share[side] = [100 * sum(m.play_seconds_over(t)[1] for m in ms) / secs for t in ONOFF_MS]
+        secs[side] = sum(m.play_seconds_over(0)[0] for m in ms)
+        over[side] = [sum(m.play_seconds_over(t)[1] for m in ms) for t in ONOFF_MS]
+        share[side] = [100 * n / secs[side] for n in over[side]]
+    chance = [shuffled(sides, t) for t in ONOFF_MS]
     random_off = sum(1 for m in sides[False] if m.setting == "all")
     how = (
         "picked at random per match (experiment all)"
@@ -460,7 +463,7 @@ def onoff_svg(matches):
     )
     W, left, right = 760, 64, 24
     pw = W - left - right
-    top, h = 130, 220
+    top, h = 152, 220
     hi = max(max(v) for v in share.values()) or 1
     ticks = nice_ticks(0, hi, 4)
     y = lambda v: top + h - h * v / ticks[-1]
@@ -474,11 +477,17 @@ def onoff_svg(matches):
             f"tuned, {len(sides[False])} not;",
         ),
         text(24, 66, f"{how}. A stall is a gap of 100 ms or more."),
-        text(24, 84, "Lower is better. 1% is about 12 seconds of a 20-minute match."),
-        f'<rect class="s1fill" x="{left}" y="98" width="12" height="12" rx="2"/>',
-        text(left + 18, 108, "bpfrag tuning", "ink2"),
-        f'<rect class="s2fill" x="{left + 120}" y="98" width="12" height="12" rx="2"/>',
-        text(left + 138, 108, "nothing changed", "ink2"),
+        text(
+            24,
+            84,
+            "Lower is better. 1% is about 12 seconds of a 20-minute match. Under each: how often shuffling "
+            "the matches gives",
+        ),
+        text(24, 102, "a difference this big. Under 5% is unlikely to be chance; above it, the two sides can't be told apart."),
+        f'<rect class="s1fill" x="{left}" y="116" width="12" height="12" rx="2"/>',
+        text(left + 18, 126, "bpfrag tuning", "ink2"),
+        f'<rect class="s2fill" x="{left + 120}" y="116" width="12" height="12" rx="2"/>',
+        text(left + 138, 126, "nothing changed", "ink2"),
     ]
     for v in ticks:
         body.append(f'<line class="grid" x1="{left}" x2="{left + pw}" y1="{y(v):.1f}" y2="{y(v):.1f}"/>')
@@ -501,15 +510,42 @@ def onoff_svg(matches):
                 )
             # each pair's labels lean away from the gap between them
             lx, anchor = (x0 + bw, "end") if j == 0 else (x0, "start")
-            body.append(text(lx, top_y - 6, pct(v), "ink", anchor))
+            label = f"{pct(v)} ({over[side][k]:,} s)" if over[side][k] else "0"
+            body.append(text(lx, top_y - 6, label, "ink", anchor))
         label = f"over {t} ms" if t < STALL_MS else f"{t} ms or more (a stall)"
         body.append(text(cx, top + h + 18, label, "muted", "middle"))
+        p = chance[k]
+        verdict = "no difference" if p is None else f"by chance {p:.0%} of the time"
+        body.append(text(cx, top + h + 36, verdict, "ink2", "middle"))
     body.append(f'<line class="axis" x1="{left}" x2="{left + pw}" y1="{top + h}" y2="{top + h}"/>')
     desc = "; ".join(
-        f"over {t} ms: tuning {share[True][k]:.2f}%, nothing changed {share[False][k]:.2f}%"
+        f"over {t} ms: tuning {over[True][k]} of {secs[True]} s, nothing changed {over[False][k]} of "
+        f"{secs[False]} s" + ("" if chance[k] is None else f", a difference this big by chance {chance[k]:.0%} of the time")
         for k, t in enumerate(ONOFF_MS)
     )
-    return svg(W, top + h + 34, title, desc, body), sides
+    return svg(W, top + h + 52, title, desc, body), sides
+
+
+def shuffled(sides, ms, n=5000):
+    """How often shuffling the matches between the two sides gives a
+    difference in the share of seconds over `ms` at least as big as the
+    real one; None if neither side had any."""
+    rows = [(m.play_seconds_over(ms)[1], len(m.play)) for side in (True, False) for m in sides[side]]
+    k = len(sides[True])
+    if not any(o for o, _ in rows):
+        return None
+
+    def diff(rs):
+        a, b = rs[:k], rs[k:]
+        return abs(sum(o for o, _ in a) / sum(s for _, s in a) - sum(o for o, _ in b) / sum(s for _, s in b))
+
+    real = diff(rows)
+    rng = random.Random(1)
+    hits = 0
+    for _ in range(n):
+        rng.shuffle(rows)
+        hits += diff(rows) >= real - 1e-12
+    return hits / n
 
 
 def experiments_svg(matches):
