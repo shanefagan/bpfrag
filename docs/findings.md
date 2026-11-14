@@ -68,9 +68,11 @@ timelines by `docs/scripts/graphs.py` (2026-11-11 to -14, 25 matches).
   It stays in one session for an hour, moving between rooms (servers),
   and loads each map mid-session over TCP at 10–65 MB a second, with UDP
   paused for 2–4 seconds.
-- **Path of Exile 2** talks only TCP: about 30 small messages a second
-  each way, a thin stream. bpfrag doesn't tune TCP games yet
-  ([experiment 20](experiments.md#20-tcp-games)).
+- **Path of Exile 2** talks only TCP: the server about 30 messages a
+  second (about 160 bytes each), the client about 13 (about 11 bytes). A
+  thin, steady stream: rate variation 0.09 over 21 minutes, 6 MB in all.
+  No TCP retransmission or timeout on this line through a session. Tuned
+  like a match since 0.17 ([experiment 20](experiments.md#20-tcp-games)).
 
 ### Back-to-back games
 
@@ -158,6 +160,12 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-14** (0.16.3, Path of Exile 2, observed): one 21-minute
+  session, TCP only. The client sends about 13 small messages a second
+  against the server's 30, not 30 each way as noted before. Steady (rate
+  variation 0.09), 6 MB. No TCP retransmission or timeout on the machine
+  through a later session (`nstat` before and after). On this, 0.17 tunes
+  a game whose TCP looks like that.
 - **2026-11-12 to -14** (0.16.2, Deadlock, wired): 17 matches of 5
   minutes or more, all clean: 99% 17–20 ms, longest 39–50 ms, no stalls
   in play. Neither experiment could change anything (writeback is

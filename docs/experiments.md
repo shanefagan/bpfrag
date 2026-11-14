@@ -44,7 +44,7 @@ There are four kinds:
 | 17 | [How much do time of day and the server matter?](#17-time-of-day-and-server) | analysis, needs M7 | any |
 | 18 | [Is BQL letting this machine queue much in the NIC?](#18-byte-queue-limits) | Check | wired, uploading from this PC |
 | 19 | [Would `tcp_notsent_lowat` help? (expected: no)](#19-tcp_notsent_lowat) | not planned | none |
-| 20 | [What does a TCP game's traffic look like?](#20-tcp-games) | observe (runs today) | MMO players |
+| 20 | [What does a TCP game's traffic look like?](#20-tcp-games) | tuned since 0.17; observe for data | MMO players |
 | 21 | [Do thin-stream timeouts help a game that talks TCP?](#21-thin-stream-tcp-timeouts) | Check, then Setup | TCP games on Wi-Fi |
 | 22 | [Where does one game end when the next starts straight away?](#22-back-to-back-games) | timelines (run today) | Deadlock Street Brawl, any queue-straight-in game |
 | 23 | [Can both ends of a match together say where a hitch happened?](#23-both-ends-of-a-match) | timelines on two machines (runs today) | anyone who can play on a server they or a friend host |
@@ -240,21 +240,27 @@ also answers whether a game is UDP or TCP in the first place (Path of
 Exile 2, say). Several sessions of normal play, in towns, in raids, idle,
 is the data. Send it with the "Share match data" issue form.
 
-**Results so far:** Path of Exile 2 talks TCP, about 30 small messages a
-second each way ([findings.md](findings.md#games-observed)).
+**Results so far:** Path of Exile 2 talks TCP: the server about 30
+messages a second of about 160 bytes, the client about 13 of about 11,
+rate variation 0.09 ([findings.md](findings.md#games-observed)). Steady and
+distinct from a download, so since 0.17 a game whose TCP looks like that is
+tuned like a match ([detection.md](detection.md#games-that-talk-tcp)), at
+the competitive tier. More games' sessions (World of Warcraft, Path of
+Exile 2 in towns, maps and idle) would check the thresholds: what's
+wanted is a game that should be tuned and wasn't (its "not tuned" line),
+or a process that was tuned and isn't a game being played online.
 
-**Decides:** steady and distinct: a TCP match detector, then
-experiments for any settings it gets. Indistinguishable from background
-TCP: leave TCP games alone, and say so.
+**Decides:** whether the thresholds hold across games; then
+`setting = "all"` on TCP games, as for UDP ones.
 
 ### 21. Thin-stream TCP timeouts
 
 **Question:** does `net.ipv4.tcp_thin_linear_timeouts = 1` shorten the
 worst freezes of a game that talks TCP?
 
-**Why:** a game sending about 30 small messages a second, like Path of
-Exile 2 ([findings.md](findings.md#games-observed)), rarely has 4 or more
-packets in flight: a thin stream
+**Why:** a game sending a few small messages a second, like Path of
+Exile 2 (about 13 a second; [findings.md](findings.md#games-observed)),
+rarely has 4 or more packets in flight: a thin stream
 ([`Documentation/networking/tcp-thin.rst`](https://docs.kernel.org/networking/tcp-thin.html)).
 It can't collect the three duplicate acknowledgements fast retransmit
 needs, so a lost packet waits for the tail loss probe (RACK-TLP, on by
@@ -283,11 +289,16 @@ rare.
 (machine-wide, so quiet the rest of the machine), or `ss -ti` on the
 game's connection (`retrans:` and `backoff:`). If they do, compare
 sessions with the sysctl set by hand, reading the game's own latency
-display. For bpfrag to set it per match, it first needs a tier for TCP
-games (entry 20), which makes this A/B+.
+display. TCP games are tuned at the competitive tier since 0.17 (entry
+20), so the sysctl can also go in that tier's profile and be tested with
+`setting = "sysctl:net.ipv4.tcp_thin_linear_timeouts"`.
 
 **Read it:** retransmission timeouts per hour of play; with the setting
 on, whether the longest freezes get shorter.
+
+**Results so far:** 2026-11-14, wired: no TCP retransmission or timeout
+on the machine through a Path of Exile 2 session (`nstat` before and
+after), so nothing for the setting to act on. Untested on Wi-Fi.
 
 **Decides:** timeouts happen and it shortens them: a setting for TCP
 games, with a knobs.md section and an `[experiment]` name. Timeouts never
