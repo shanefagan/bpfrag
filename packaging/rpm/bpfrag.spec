@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.16.2
+Version:        0.16.3
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Sat Nov 14 2026 Shane Fagan <mail@shanefagan.com> - 0.16.3-1
+- A game whose state arrives after the first minute no longer counts its start as play: a second of more updates than usual at under half the usual interval, and the second before it, are left out of the figures as loading.
+
 * Wed Nov 11 2026 Shane Fagan <mail@shanefagan.com> - 0.16.2-1
 - A relay the game had left, still pinging it, no longer holds a match open on the end screen or raises its tier: peers other than the server are left out of the match's traffic from outside.
 
