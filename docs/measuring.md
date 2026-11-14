@@ -60,7 +60,10 @@ Limits to keep in mind:
   brought in a megabyte or more to the first second back at the game's
   usual rate (Trackmania loads every map that way while the session
   carries on; from 0.12.1, as 0.12.0 stopped after three seconds and a
-  load comes in bursts). Don't compare gap figures
+  load comes in bursts). From 0.16.3, so is a second in which the server
+  sends more updates than usual at under half the usual interval (the
+  game's state arriving as a game starts, usually in the first minute but
+  once 100 s in), with the second before it. Don't compare gap figures
   across 0.10.0, 0.11.0 or 0.12.0.
 - **Pauses count as play.** A paused Deadlock match keeps its full 64
   updates a second, each one tiny, so it's indistinguishable from play

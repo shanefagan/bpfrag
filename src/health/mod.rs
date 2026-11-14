@@ -404,7 +404,9 @@ pub struct Tracker {
 
 /// Seconds after a match starts before its gaps count. Loading a map
 /// arrives in bursts with pauses between (2026-11-02: every stall of 13
-/// Deadlock matches fell in the first 50 seconds or the last one).
+/// Deadlock matches fell in the first 50 seconds or the last one). A game
+/// that starts later than this is caught by its state arriving (see
+/// [`Play::update`]).
 const SETTLE: Duration = Duration::from_secs(60);
 /// Readings left out before the last one at the game's usual rate: the
 /// last moments before the end screen.
@@ -455,7 +457,10 @@ struct Reading {
 /// - **Loading:** from a reading in which the game's own TCP brought in a
 ///   megabyte or more to the first one back at the usual rate (Trackmania
 ///   loads each map while the session carries on, and six of its seven
-///   stalls in an hour were loads). Left out of everything.
+///   stalls in an hour were loads). Also from a reading in which the
+///   server sent its updates faster than usual and closer together (the
+///   game's state arriving as a game starts), the reading before it
+///   included. Left out of everything.
 /// - **Usual rate:** Deadlock sends 32 updates a second instead of 64
 ///   while the player is dead and on the end screen; at more than 1% of
 ///   the gaps those stretches set the 99% figure. The half and 99% figures
@@ -490,6 +495,8 @@ struct Play {
     /// Readings in a row sending with nothing back, and at the usual rate.
     unanswered: u32,
     usual_run: u32,
+    /// Did the previous reading's gaps go to `pending` (its back)?
+    prev_pending: bool,
     /// Readings the current load still lasts at least, and at most.
     loading_left: u32,
     loading_max: u32,
@@ -574,6 +581,14 @@ impl Play {
         d.updates * 2 >= rate && interval.is_some_and(|ms| ms * 2 <= usual_ms * 3)
     }
 
+    /// Is this reading the game's state arriving: more updates than usual,
+    /// under half the usual interval apart? Only once the usual is known.
+    fn state_arriving(&self, d: &Gaps) -> bool {
+        let rate = median(&self.rates).unwrap_or(0);
+        let usual_ms = median(&self.intervals).unwrap_or(0);
+        d.updates > rate && d.quantile_ms(0.5).is_some_and(|ms| ms * 2 < usual_ms)
+    }
+
     /// Was a quiet stretch of `quiet_ns` that just ended an outage: the
     /// server's packets stopped while the game went on sending at its
     /// usual rate? The meter leaves stretches of GAP_IDLE_MS or more out
@@ -654,7 +669,16 @@ impl Play {
         // - the game sending under a quarter of its usual UDP;
         // - the game sending with nothing coming back for SILENT_READINGS
         //   in a row: a lost server, which health counts on its own
-        //   (silence.rs), and the handshake with the next one isn't play.
+        //   (silence.rs), and the handshake with the next one isn't play;
+        // - the server sending more updates than usual, under half the
+        //   usual interval apart: the game's state arriving as a game
+        //   starts. In 24 Deadlock matches (2026-11-11 to -14) it came 4 to
+        //   100 s after the match was detected: up to a second of nothing,
+        //   then 70 to 220 updates a second about 5 ms apart for a second
+        //   or two, against at most 86, 12 ms or more apart, in the
+        //   busiest play. A server catching up after a hiccup doesn't look
+        //   like this: its queued packets arrive back to back, one update
+        //   to the meter.
         let sent_now = sent.unwrap_or(0);
         let updates_now = gaps.as_ref().map_or(0, |d| d.updates);
         self.unanswered = if sent_now > 0 && updates_now == 0 {
@@ -667,7 +691,17 @@ impl Play {
             && sent
                 .is_some_and(|d| d.saturating_mul(QUIET_SENDING) < median(&self.sent).unwrap_or(0));
         let big_tcp = tcp.is_some_and(|d| d >= LOADING_BYTES) && !(learned && usual_now);
-        let burst = quiet || big_tcp || self.unanswered >= SILENT_READINGS;
+        let state = learned && gaps.as_ref().is_some_and(|d| self.state_arriving(d));
+        let burst = quiet || big_tcp || state || self.unanswered >= SILENT_READINGS;
+        if state {
+            // the quiet before the state often ends in the reading before
+            if let Some(last) = self.readings.last_mut() {
+                last.loading = true;
+            }
+            if self.prev_pending {
+                self.pending.pop_back();
+            }
+        }
         if burst {
             self.loading_left = LOADING_HOLD + 1;
             self.loading_max = LOADING_MAX + 1;
@@ -720,6 +754,7 @@ impl Play {
         }
         self.recent.push_back((sent_now, updates_now));
         self.readings.push(rec);
+        self.prev_pending = false;
         if let Some(d) = gaps {
             let interval = d.quantile_ms(0.5);
             let usual = !loading && self.usual(&d, interval);
@@ -735,6 +770,7 @@ impl Play {
             if usual {
                 self.upto = self.readings.len().checked_sub(END_TRIM + 1);
                 self.pending.push_back(d);
+                self.prev_pending = true;
                 if self.pending.len() > END_TRIM {
                     let done = self.pending.pop_front();
                     self.count(done);
@@ -1126,10 +1162,23 @@ mod tests {
 
         /// A hiccup: the flow paused for `ms`, then came back.
         fn stall(&mut self, p: &mut Play, ms: u64) -> Option<Gaps> {
+            self.after_quiet(p, ms, 50, 15, 1)
+        }
+
+        /// The flow quiet for `ms`, then the rest of the second as
+        /// [`Port::second`].
+        fn after_quiet(
+            &mut self,
+            p: &mut Play,
+            ms: u64,
+            n: u32,
+            gap_ms: usize,
+            split: u64,
+        ) -> Option<Gaps> {
             self.r.stalls += 1;
             self.r.hist[BUCKETS - 1] += 1;
             self.gap(ms * 1_000_000);
-            self.second(p, 50, 15, 1)
+            self.second(p, n, gap_ms, split)
         }
 
         /// The server's packets coming back after `ms` of nothing, longer
@@ -1236,6 +1285,50 @@ mod tests {
         let g = port.silent(&mut p).unwrap();
         assert_eq!(g.stalls, 0, "{g:?}");
         assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn the_games_state_arriving_isnt_play() {
+        // Deadlock, 2026-11-13 13:13, 100 s in: half a second of nothing,
+        // then the game's state, updates 5 ms apart, for two seconds
+        let mut port = Port::new();
+        let mut p = playing(&mut port);
+        port.after_quiet(&mut p, 465, 82, 4, 3);
+        port.second(&mut p, 189, 4, 3);
+        for _ in 0..60 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 0, "{g:?}");
+        assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+        assert_eq!(g.quantile_ms(0.99), Some(16), "{g:?}");
+
+        // 2026-11-12 21:43: the quiet ended in the second before the state
+        let mut port = Port::new();
+        let mut p = playing(&mut port);
+        port.after_quiet(&mut p, 780, 19, 15, 1);
+        port.second(&mut p, 217, 4, 3);
+        for _ in 0..60 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 0, "{g:?}");
+        assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn a_hiccup_in_a_big_fight_is_play() {
+        // the busiest second of 25 Deadlock matches had 86 updates, 12 ms
+        // apart: not the game's state, so a hiccup before it counts
+        let mut port = Port::new();
+        let mut p = playing(&mut port);
+        port.after_quiet(&mut p, 300, 86, 11, 3);
+        for _ in 0..60 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 1, "{g:?}");
+        assert_eq!(g.max_gap_ns, 300_000_000, "{g:?}");
     }
 
     /// Settled, then two minutes racing at 90 updates a second.
