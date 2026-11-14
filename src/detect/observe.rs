@@ -4,10 +4,13 @@
 //! Watching a game's traffic without tuning anything, so there is data to
 //! decide whether, and how, to detect and tune games like it later.
 //!
-//! - `[detect] tcp = "observe"`: games that talk TCP (World of Warcraft,
-//!   older games). A process counts when the classifier says it's a game (a
-//!   launcher parent, a Steam app, a game path, the allow list) and it keeps
-//!   talking TCP both ways for `SEEN_SECS`.
+//! - `[detect] tcp = "observe"` or `"tune"`: games that talk TCP (Path of
+//!   Exile 2, World of Warcraft, older games). A process counts when the
+//!   classifier says it's a game (a launcher parent, a Steam app, a game
+//!   path, the allow list) and it keeps talking TCP both ways for
+//!   `SEEN_SECS`. With "tune", the daemon then asks [`Observer::recent`]
+//!   every second whether its traffic looks like a multiplayer game's
+//!   ([`Summary::looks_multiplayer`]), and tunes it like a match if so.
 //! - `BPFRAG_OBSERVE=1` in a process's environment ([`super::tagged`]):
 //!   its UDP and its TCP, whatever they look like, one way or both. A
 //!   session is reported once it has had traffic for `SEEN_SECS`, or when
@@ -26,11 +29,24 @@ use super::Sample;
 /// Active seconds before a session is reported.
 const SEEN_SECS: u32 = 10;
 /// Seconds without traffic before a session is summed up.
-const QUIET_SECS: u32 = 30;
+pub const QUIET_SECS: u32 = 30;
 /// Processes tracked at once; more than this and the rest wait.
 const MAX_TRACKED: usize = 64;
 /// Per-second rates kept for a session's summary (two hours' worth).
 const MAX_SECONDS: usize = 7200;
+/// Seconds of a TCP game's traffic judged for "looks like a multiplayer
+/// game".
+pub const SHAPE_SECS: usize = 10;
+
+/// What a multiplayer game's TCP looks like, from Path of Exile 2
+/// (2026-11-14, 21 minutes: the server 30 messages a second of about 160
+/// bytes, the client 13 of about 11, rate variation 0.09). A patch or map
+/// download moves kilobytes a call and swings in rate; a launcher's or an
+/// overlay's connection talks a few times a minute.
+const MP_MIN_RX_PER_S: f64 = 5.0;
+const MP_MIN_TX_PER_S: f64 = 1.0;
+const MP_MAX_SIZE: f64 = 1500.0;
+const MP_MAX_VARIATION: f64 = 0.5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Proto {
@@ -123,6 +139,17 @@ pub struct Summary {
 }
 
 impl Summary {
+    /// Does this look like a multiplayer game's traffic: messages coming in
+    /// several times a second and going out at least once, small, at a
+    /// steady rate?
+    pub fn looks_multiplayer(&self) -> bool {
+        self.rx_per_s >= MP_MIN_RX_PER_S
+            && self.tx_per_s >= MP_MIN_TX_PER_S
+            && self.rx_size <= MP_MAX_SIZE
+            && self.tx_size <= MP_MAX_SIZE
+            && self.jitter <= MP_MAX_VARIATION
+    }
+
     /// "Wow.exe for 1h12m03s: typically ...".
     pub fn describe(&self) -> String {
         format!("{} {}", self.name, self.details())
@@ -164,8 +191,11 @@ struct Track {
     quiet_run: u32,
     seen: bool,
     secs: u64,
+    /// Per active second: calls each way, and bytes each way.
     tx: Vec<f64>,
     rx: Vec<f64>,
+    txb: Vec<f64>,
+    rxb: Vec<f64>,
     tx_calls: u64,
     rx_calls: u64,
     tx_bytes: u64,
@@ -183,6 +213,8 @@ impl Track {
             secs: 0,
             tx: Vec::new(),
             rx: Vec::new(),
+            txb: Vec::new(),
+            rxb: Vec::new(),
             tx_calls: 0,
             rx_calls: 0,
             tx_bytes: 0,
@@ -199,24 +231,52 @@ impl Track {
     }
 
     fn summary(&self) -> Summary {
+        let per = |b: u64, c: u64| if c == 0 { 0.0 } else { b as f64 / c as f64 };
+        Summary {
+            secs: self.secs,
+            tx_size: per(self.tx_bytes, self.tx_calls),
+            rx_size: per(self.rx_bytes, self.rx_calls),
+            bytes: self.tx_bytes + self.rx_bytes,
+            ..self.shape(&self.tx, &self.rx)
+        }
+    }
+
+    /// The last `n` active seconds (fewer if the session is shorter; the
+    /// per-second record stops growing after MAX_SECONDS, so for a session
+    /// longer than that, the last `n` it kept).
+    fn recent(&self, n: usize) -> Summary {
+        let from = self.tx.len().saturating_sub(n);
+        let sum = |v: &[f64]| v[from..].iter().sum::<f64>();
+        let per = |b: f64, c: f64| if c <= 0.0 { 0.0 } else { b / c };
+        let (tx, rx) = (sum(&self.tx), sum(&self.rx));
+        Summary {
+            secs: (self.tx.len() - from) as u64,
+            tx_size: per(sum(&self.txb), tx),
+            rx_size: per(sum(&self.rxb), rx),
+            bytes: (sum(&self.txb) + sum(&self.rxb)) as u64,
+            ..self.shape(&self.tx[from..], &self.rx[from..])
+        }
+    }
+
+    /// Name, median rates and rate variation over these seconds.
+    fn shape(&self, tx: &[f64], rx: &[f64]) -> Summary {
         let (name, _) = self.game.clone().flatten().unwrap_or_default();
-        let totals: Vec<f64> = self.tx.iter().zip(&self.rx).map(|(a, b)| a + b).collect();
+        let totals: Vec<f64> = tx.iter().zip(rx).map(|(a, b)| a + b).collect();
         let mean = totals.iter().sum::<f64>() / totals.len().max(1) as f64;
         let jitter = if mean > 0.0 {
             totals.iter().map(|t| (t - mean).abs()).sum::<f64>() / totals.len() as f64 / mean
         } else {
             0.0
         };
-        let per = |b: u64, c: u64| if c == 0 { 0.0 } else { b as f64 / c as f64 };
         Summary {
             name,
-            secs: self.secs,
-            tx_per_s: median(&self.tx),
-            rx_per_s: median(&self.rx),
-            tx_size: per(self.tx_bytes, self.tx_calls),
-            rx_size: per(self.rx_bytes, self.rx_calls),
+            secs: 0,
+            tx_per_s: median(tx),
+            rx_per_s: median(rx),
+            tx_size: 0.0,
+            rx_size: 0.0,
             jitter,
-            bytes: self.tx_bytes + self.rx_bytes,
+            bytes: 0,
         }
     }
 }
@@ -303,6 +363,8 @@ impl Observer {
                 if t.tx.len() < MAX_SECONDS {
                     t.tx.push(tx as f64 / dt);
                     t.rx.push(rx as f64 / dt);
+                    t.txb.push(txb as f64 / dt);
+                    t.rxb.push(rxb as f64 / dt);
                 }
                 t.tx_calls += tx;
                 t.rx_calls += rx;
@@ -360,6 +422,23 @@ impl Observer {
 
     pub fn proto(&self) -> Proto {
         self.rules.proto
+    }
+
+    /// The last `n` active seconds of a reported session that has had at
+    /// least that many.
+    pub fn recent(&self, tgid: u32, n: usize) -> Option<Summary> {
+        self.tracks
+            .get(&tgid)
+            .filter(|t| t.seen && t.tx.len() >= n)
+            .map(|t| t.recent(n))
+    }
+
+    /// A reported session so far, as its summary will read.
+    pub fn current(&self, tgid: u32) -> Option<Summary> {
+        self.tracks
+            .get(&tgid)
+            .filter(|t| t.seen)
+            .map(Track::summary)
     }
 
     /// (pid, name) of the processes whose sessions have been reported
@@ -427,6 +506,94 @@ mod tests {
         fn run(&mut self, secs: usize, rates: &[(u32, u64, u64, u64)]) -> Vec<ObsEvent> {
             (0..secs).flat_map(|_| self.step(rates)).collect()
         }
+
+        /// One second with each direction's message size: (tgid, sends,
+        /// receives, bytes per send, bytes per receive).
+        fn step_sized(&mut self, rates: &[(u32, u64, u64, u64, u64)]) -> Vec<ObsEvent> {
+            for &(tgid, tx, rx, tx_size, rx_size) in rates {
+                let c = self.counters.entry(tgid).or_insert(Sample {
+                    tgid,
+                    ..Default::default()
+                });
+                c.tcp_tx_msgs += tx;
+                c.tcp_rx_msgs += rx;
+                c.tcp_tx_bytes += tx * tx_size;
+                c.tcp_rx_bytes += rx * rx_size;
+            }
+            let samples: Vec<Sample> = self.counters.values().copied().collect();
+            self.obs.tick(1.0, &samples, &[], |tgid| {
+                (tgid == 7).then(|| ("PathOfExileSteam".to_string(), "Steam app".to_string()))
+            })
+        }
+    }
+
+    /// Path of Exile 2, 2026-11-14: 13 sends of about 11 bytes and 30
+    /// receives of about 158 a second.
+    const POE2: (u32, u64, u64, u64, u64) = (7, 13, 30, 11, 158);
+
+    #[test]
+    fn path_of_exile_2_looks_like_a_multiplayer_game() {
+        let mut sim = Sim::new();
+        // the first sample is a baseline; ten seconds of traffic after it
+        for _ in 0..10 {
+            sim.step_sized(&[POE2]);
+        }
+        assert!(
+            sim.obs.recent(7, SHAPE_SECS).is_none(),
+            "not ten seconds yet"
+        );
+        sim.step_sized(&[POE2]);
+        let s = sim.obs.recent(7, SHAPE_SECS).unwrap();
+        assert!(s.looks_multiplayer(), "{s:?}");
+        assert_eq!((s.tx_per_s, s.rx_per_s), (13.0, 30.0));
+        assert_eq!((s.tx_size, s.rx_size), (11.0, 158.0));
+        assert_eq!(s.secs, 10);
+        assert!(sim.obs.current(7).is_some());
+    }
+
+    #[test]
+    fn downloads_and_launchers_dont_look_like_multiplayer_games() {
+        // a patch download: hundreds of 16 KB reads a second, swinging
+        let mut sim = Sim::new();
+        for i in 0..12 {
+            let rx = if i % 2 == 0 { 300 } else { 60 };
+            sim.step_sized(&[(7, 2, rx, 100, 16_000)]);
+        }
+        let s = sim.obs.recent(7, SHAPE_SECS).unwrap();
+        assert!(!s.looks_multiplayer(), "{s:?}");
+        // a launcher's connection: a couple of small messages a second
+        let mut sim = Sim::new();
+        for _ in 0..12 {
+            sim.step_sized(&[(7, 1, 2, 60, 200)]);
+        }
+        let s = sim.obs.recent(7, SHAPE_SECS).unwrap();
+        assert!(!s.looks_multiplayer(), "{s:?}");
+        // the same rates as Path of Exile 2, but bursty: 0 and 80 in turn
+        let mut sim = Sim::new();
+        for i in 0..12 {
+            let rx = if i % 2 == 0 { 1 } else { 80 };
+            sim.step_sized(&[(7, 13, rx, 11, 158)]);
+        }
+        let s = sim.obs.recent(7, SHAPE_SECS).unwrap();
+        assert!(!s.looks_multiplayer(), "{s:?}");
+    }
+
+    #[test]
+    fn play_after_a_download_is_judged_on_the_play() {
+        let mut sim = Sim::new();
+        for _ in 0..30 {
+            sim.step_sized(&[(7, 2, 200, 100, 16_000)]);
+        }
+        assert!(!sim.obs.recent(7, SHAPE_SECS).unwrap().looks_multiplayer());
+        for _ in 0..9 {
+            sim.step_sized(&[POE2]);
+        }
+        assert!(
+            !sim.obs.recent(7, SHAPE_SECS).unwrap().looks_multiplayer(),
+            "a second of the download is still in the window"
+        );
+        sim.step_sized(&[POE2]);
+        assert!(sim.obs.recent(7, SHAPE_SECS).unwrap().looks_multiplayer());
     }
 
     #[test]

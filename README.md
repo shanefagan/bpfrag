@@ -94,11 +94,12 @@ does), or checking in with relays as it starts, isn't a match. The tier
 follows the rate of updates (about twice the server's tick rate) and
 only goes up within a match. A match ends the moment the game exits,
 after 15 quiet seconds, or once its traffic stays on the machine for 6
-seconds. Games that talk only TCP (World of Warcraft, older games)
-aren't tuned yet; `[detect] tcp = "observe"` logs what their
-traffic looks like, to gather the data for that. To log one game's UDP and
-TCP, whatever they look like, put `BPFRAG_OBSERVE=1 %command%` in its Steam
-launch options.
+seconds. A game that talks TCP instead (Path of Exile 2, World of
+Warcraft, older games) is tuned too, once its traffic looks like a
+multiplayer game's: steady, both ways, small messages, to a server
+elsewhere. It stays at the competitive tier until it exits or goes quiet
+for 30 seconds. To log one game's UDP and TCP, whatever they look like,
+put `BPFRAG_OBSERVE=1 %command%` in its Steam launch options.
 
 `sudo bpfrag --dry-run -v` with `bpfrag --monitor 1` in another terminal
 shows the detector's view. [docs/detection.md](docs/detection.md) has the

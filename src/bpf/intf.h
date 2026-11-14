@@ -13,7 +13,7 @@ enum consts {
 	MAX_PROCS = 8192,	/* tracked processes using UDP or TCP */
 	MAX_WATCH = 64,		/* processes we want exit events for */
 	MAX_OBSERVE = 256,	/* processes tagged BPFRAG_OBSERVE=1 */
-	MAX_PORTS = 1024,	/* game UDP ports being DSCP marked */
+	MAX_PORTS = 1024,	/* game UDP ports (and TCP connections) being DSCP marked */
 	MAX_PEERS = 512,	/* (game port, remote address) pairs counted per match */
 	MAX_IFACES = 64,
 	MAX_BULK_FLOWS = 16384,	/* sockets of bulk processes being demoted */

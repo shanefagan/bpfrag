@@ -8,8 +8,14 @@
 //! - `track`: each process's traffic over the last few windows;
 //! - [`classify`]: "is this process a game?";
 //! - [`egress`]: which network links the game's packets actually use.
-//! - [`observe`] and [`tagged`]: logging traffic without tuning, for TCP
-//!   games (`tcp = "observe"`) and processes tagged `BPFRAG_OBSERVE=1`.
+//! - [`observe`] and [`tagged`]: TCP games (`tcp = "tune"` or "observe")
+//!   and processes tagged `BPFRAG_OBSERVE=1`.
+//!
+//! A game that talks TCP (Path of Exile 2) has no UDP for any of the below.
+//! The daemon's TCP observer decides that its traffic looks like a
+//! multiplayer game's, and [`Detector::start_tcp`] makes it a match at the
+//! competitive tier, with none of the UDP logic: it lasts until the game
+//! exits or its TCP goes quiet ([`Detector::end_tcp`]).
 //!
 //! The detector is the userspace port of the window/hysteresis logic from
 //! the original bpftune gaming tuner's BPF program, with two structural
@@ -128,6 +134,25 @@ fn where_now(paths: &VecDeque<Arrivals>, n: usize, idle_pps: f64) -> Where {
     }
 }
 
+/// How the match's game talks to its server.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Transport {
+    #[default]
+    Udp,
+    /// A game that talks TCP: detected by the TCP observer, not the UDP
+    /// logic, and held at one tier until it stops.
+    Tcp,
+}
+
+impl std::fmt::Display for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Transport::Udp => "UDP",
+            Transport::Tcp => "TCP",
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionInfo {
     pub tgid: u32,
@@ -150,6 +175,7 @@ pub struct SessionInfo {
     /// cut by these.
     pub began: f64,
     pub last_seen: f64,
+    pub transport: Transport,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -634,6 +660,7 @@ impl Detector {
             peak_pps: pps,
             began,
             last_seen: now,
+            transport: Transport::Udp,
         };
         self.paths.clear();
         self.session = Some(Session {
@@ -767,6 +794,23 @@ impl Detector {
         let Some(sess) = self.session.as_mut() else {
             return Vec::new();
         };
+        if sess.info.transport == Transport::Tcp {
+            // Ended by end_tcp() or on_exit(), or by the game starting UDP
+            // that looks like a match (TCP in its menus, UDP in play): its
+            // UDP then decides, from the next window.
+            let tgid = sess.info.tgid;
+            let udp = self
+                .tracks
+                .get(&tgid)
+                .is_some_and(|t| t.steady >= self.cfg.steady_windows);
+            return if udp {
+                self.end("it started talking UDP like a match".into())
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        }
         let tgid = sess.info.tgid;
         // The match's traffic has stayed on this machine (a menu, a local
         // server): the match is over, but the game is still worth watching.
@@ -907,6 +951,84 @@ impl Detector {
             from: reported,
             to: cand,
         })
+    }
+
+    /// A game whose TCP looks like a multiplayer game's (the daemon's TCP
+    /// observer decides): a match at the competitive tier (or `pin_tier`),
+    /// unless there already is one, a UDP game is being checked, or the
+    /// process has UDP traffic of its own (a UDP game's side TCP, such as
+    /// Deadlock's in its menu: its UDP decides). Taking over from a game
+    /// sitting in its menu, the actions are Unwatch, then Start.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_tcp(
+        &mut self,
+        now: f64,
+        began: f64,
+        tgid: u32,
+        name: String,
+        reason: String,
+        (tx_per_s, rx_per_s): (f64, f64),
+        ifindex: u32,
+    ) -> Vec<Action> {
+        let mut out = Vec::new();
+        if self.session.is_some() {
+            return out;
+        }
+        let idle = self.cfg.idle_pps as f64;
+        if self
+            .tracks
+            .get(&tgid)
+            .is_some_and(|t| t.recent_median(QUIET_WINDOWS) > idle)
+        {
+            return out;
+        }
+        match &self.watched {
+            Some(w) if w.tgid == tgid || !w.local => return out,
+            Some(w) => {
+                out.push(Action::Unwatch { tgid: w.tgid });
+                self.watched = None;
+            }
+            None => {}
+        }
+        let tier = self.cfg.pin_tier.unwrap_or(Tier::Competitive);
+        let pps = tx_per_s + rx_per_s;
+        let info = SessionInfo {
+            tgid,
+            name,
+            reason,
+            tier,
+            pps,
+            tx_pps: tx_per_s,
+            rx_pps: rx_per_s,
+            ifindex,
+            peak_tier: tier,
+            peak_pps: pps,
+            began,
+            last_seen: now,
+            transport: Transport::Tcp,
+        };
+        self.paths.clear();
+        self.session = Some(Session {
+            info: info.clone(),
+            candidate: tier,
+            confidence: 1,
+            last_change: now,
+            quiet_secs: 0.0,
+            last_load: f64::NEG_INFINITY,
+            local_secs: 0.0,
+            saw_outside: false,
+        });
+        out.push(Action::Start(info));
+        out
+    }
+
+    /// The TCP match's game went quiet (the TCP observer decides): End.
+    pub fn end_tcp(&mut self, tgid: u32, reason: String) -> Option<Action> {
+        let s = self.session.as_ref()?;
+        if s.info.tgid != tgid || s.info.transport != Transport::Tcp {
+            return None;
+        }
+        self.end(reason)
     }
 
     /// The BPF exit hook fired for a watched process.

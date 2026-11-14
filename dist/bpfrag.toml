@@ -20,13 +20,15 @@
 # linger_secs = 15       # quiet time before the match is over
 # launch_secs = 20       # no match in a game's first seconds (launch pings)
 # pin_tier = "competitive"   # ignore the tick rate, always use this tier
-# Games that talk TCP (World of Warcraft, older games) aren't detected as
-# matches. "observe" logs what their traffic looks like (rates, message
-# sizes, how steady), tuning nothing, to gather data on them. It counts
-# TCP for every process all the time, which costs a little CPU. To log
-# one game's UDP and TCP instead, tag it: BPFRAG_OBSERVE=1 %command% in
+# Games that talk TCP (Path of Exile 2, World of Warcraft, older games):
+# "tune" (the default) tunes a game whose TCP looks like a multiplayer
+# game's (steady both ways, small messages, to a server elsewhere) at the
+# competitive tier until it stops; "observe" only logs what their traffic
+# looks like; "off" doesn't look. "tune" and "observe" count TCP for every
+# process all the time, about a microsecond per send or receive. To log
+# one game's UDP and TCP in full, tag it: BPFRAG_OBSERVE=1 %command% in
 # its Steam launch options (docs/detection.md).
-# tcp = "observe"
+# tcp = "tune"
 
 [classify]
 # Native games launched outside Steam/Lutris/Heroic etc. can also be tagged

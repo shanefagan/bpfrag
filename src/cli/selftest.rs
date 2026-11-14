@@ -8,7 +8,9 @@
 //! For the DSCP marker it checks the rewritten DSCP / traffic class, that
 //! ECN bits and the IPv6 flow label survive, that the IPv4 header checksum
 //! is still valid, and that non-game, stale-owner and fragment packets are
-//! left untouched; then that a bulk process's TCP and UDP flows are demoted
+//! left untouched; that the game's TCP connections are marked, and only
+//! those (not another connection on the same local port, not TCP from the
+//! game's UDP port); then that a bulk process's TCP and UDP flows are demoted
 //! to the bulk class, unless the app marked them itself. For the arrival
 //! meter, that packets to the game's port are counted, timed and counted
 //! per sender, and nothing else is.
@@ -27,6 +29,7 @@ const GAME_TGID: u32 = 4242;
 const GAME_PORT: u16 = 27015;
 const STALE_PORT: u16 = 27016; // owner no longer marked
 const OTHER_PORT: u16 = 5000;
+const GAME_TCP_PORT: u16 = 40100; // the game's TCP connection to PEER:443
 const LOOPBACK_IFINDEX: u32 = 1; // test_run skbs come in on lo
 
 fn csum16(bytes: &[u8]) -> u16 {
@@ -880,8 +883,18 @@ pub fn run(cfg: &Config) -> Result<bool> {
             .update(&u32::from(port).to_ne_bytes(), bytes, MapFlags::ANY)?;
     }
 
+    for key in [
+        flow_key(AF_INET, TCP, &HOST_V4, GAME_TCP_PORT, &PEER_V4, 443),
+        flow_key(AF_INET6, TCP, &HOST_V6, GAME_TCP_PORT, &PEER_V6, 443),
+    ] {
+        let owner = bpf_intf::game_port { tgid: GAME_TGID };
+        m.game_tcp_flows
+            .update(&key, as_bytes(&owner), MapFlags::ANY)?;
+    }
+
     let d = dscp << 2;
     let ef = 46u8 << 2;
+    let other_v4 = [10, 99, 0, 3];
     let cases = vec![
         Case {
             name: "IPv4 game port, unmarked".into(),
@@ -939,6 +952,26 @@ pub fn run(cfg: &Config) -> Result<bool> {
         Case {
             name: "IPv6 other process's port untouched".into(),
             pkt: ipv6(0x00, 0x1, OTHER_PORT),
+            expect: 0,
+        },
+        Case {
+            name: "IPv4 game port, the game's TCP connection".into(),
+            pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, GAME_TCP_PORT, 443)),
+            expect: d,
+        },
+        Case {
+            name: "IPv6 game port, the game's TCP connection".into(),
+            pkt: pkt6(0, TCP, HOST_V6, PEER_V6, l4(TCP, GAME_TCP_PORT, 443)),
+            expect: d,
+        },
+        Case {
+            name: "IPv4 TCP on the same local port to another server untouched".into(),
+            pkt: pkt4(0, TCP, HOST_V4, other_v4, l4(TCP, GAME_TCP_PORT, 443)),
+            expect: 0,
+        },
+        Case {
+            name: "IPv4 TCP from the number of the game's UDP port untouched".into(),
+            pkt: pkt4(0, TCP, HOST_V4, PEER_V4, l4(TCP, GAME_PORT, 443)),
             expect: 0,
         },
     ];

@@ -169,29 +169,67 @@ monitor lists the busiest UDP processes, their rates and the verdict for each.
 
 ## Games that talk TCP
 
-Match detection looks for a steady two-way UDP stream, which is how most
-competitive games talk. Some games use TCP instead (World of Warcraft and
-other MMOs, many older games), and UDP games also use TCP on the side (a
-map or replay download). bpfrag doesn't tune for TCP games yet: what
-their traffic looks like across games isn't known well enough to detect
-them reliably.
+Match detection above looks for a steady two-way UDP stream, which is how
+most competitive games talk. Some games use TCP instead (Path of Exile 2,
+World of Warcraft and other MMOs, many older games), and UDP games also
+use TCP on the side (a map or replay download).
 
-`[detect] tcp = "observe"` gathers that data. With it, bpfrag counts TCP
-send and receive calls per process all the time (which costs a little CPU
-on every TCP send and receive), and for any process the classifier calls
-a game (a launcher parent, a Steam app, a game path, the allow list) that
-keeps talking TCP both ways for 10 seconds, it logs:
+With `[detect] tcp = "tune"` (the default), bpfrag counts TCP send and
+receive calls per process all the time, about a microsecond each. TCP to
+this machine (loopback) isn't counted: a game talking to its launcher or a
+local service isn't playing online. A process the classifier calls a game
+(a launcher parent, a Steam app, a game path, the allow list) that keeps
+talking TCP both ways for 10 seconds is followed, and once its last 10
+seconds look like a multiplayer game's, it's a match:
+
+- at least 5 messages a second coming in and 1 going out (the median
+  second);
+- messages of 1,500 bytes or less on average, each way;
+- a steady rate: a rate variation of 0.5 or less.
+
+Path of Exile 2 (2026-11-14) receives about 30 messages a second of about
+160 bytes and sends about 13 of about 11, with a rate variation of 0.09.
+A patch or map download moves kilobytes a call and swings in rate; a
+launcher's or a store page's connection talks a few times a minute. A
+game that's downloading first is judged on its last 10 seconds, so it
+becomes a match once the download is over and play starts.
 
 ```
-TCP game seen: Wow.exe (pid 4242) at ~18 sends/s and ~25 receives/s [launched by lutris]; observing only, nothing is tuned
-TCP game session: Wow.exe for 1h12m03s: typically 18 sends/s and 25 receives/s, 64 and 210 bytes each, rate variation 0.41, 38 MB in all
+Match detected: Path of Exile 2 (pid 4242) talks TCP like a multiplayer game, ~13 sends/s and ~30 receives/s -> COMPETITIVE until it stops [Steam app 2694490]
+COMPETITIVE profile: rmem_max=..., dscp=CS4 on eno1
+Match ended after 1h02m11s (game exited); settings restored
+Path of Exile 2: TCP for 1h02m01s: typically 13 sends/s and 30 receives/s, 11 and 158 bytes each, rate variation 0.09, 18 MB in all
 ```
 
-The session ends after 30 quiet seconds or when the game exits. Rates are
-of send and receive calls, not packets. "Rate variation" is the mean
-deviation of the per-second rate over its mean: near 0 for a game that
-ticks like a metronome, far above 1 for a download. Nothing is changed for
-these games in any mode.
+A TCP game's match is simpler than a UDP one: it's held at the
+competitive tier (or `pin_tier`) from start to end, and ends when the game
+exits or its TCP goes quiet for 30 seconds. Its packets are marked like a
+UDP game's: every TCP connection the game sends on, matched by the whole
+connection (addresses and ports), since a game that opens a new connection
+per zone leaves local ports behind that other processes soon reuse. Bulk
+demotion, Wi-Fi power save and the experiments work as for any match. There
+are no packet gap figures yet; the end-of-match line is the session's
+rates, message sizes and how steady it was. Rates are of send and receive
+calls, not packets. "Rate variation" is the mean deviation of the
+per-second rate over its mean: near 0 for a game that ticks like a
+metronome, far above 1 for a download.
+
+A game that also has UDP traffic of its own (Deadlock talks TCP to
+Valve's servers while its menu runs over UDP) is left to the UDP
+detection: its TCP never starts a match. There's one match at a time, so
+a TCP game doesn't start one while a UDP match is on; it does take over
+from a game sitting in its menu.
+
+A game that talks TCP but doesn't look like a multiplayer game is summed
+up when its session ends, so it's clear why it wasn't tuned:
+
+```
+TCP game session, not tuned (it didn't look like a multiplayer game): SomeGame for 12m03s: typically 1 sends/s and 2 receives/s, 60 and 420 bytes each, rate variation 0.80, <1 MB in all
+```
+
+`tcp = "observe"` logs TCP games without tuning them, as before 0.17
+(a "TCP game seen" line after 10 seconds, a "TCP game session" summary at
+the end); `tcp = "off"` counts no TCP outside a match at all.
 
 During a UDP match, the game's own TCP traffic is always counted, and the
 match's health line says how much it moved when it's over 1 MB ("the
@@ -200,8 +238,8 @@ game's own TCP: 120 MB"), so a map download during a match shows up.
 ## Observing one game: `BPFRAG_OBSERVE=1`
 
 For a game whose traffic isn't known (UDP or TCP, steady or bursty), tag
-it in its environment rather than turning on `tcp = "observe"` for every
-process. In Steam, put this in the game's launch options:
+it in its environment: everything it sends and receives is logged, steady
+or not, one way or both. In Steam, put this in the game's launch options:
 
 ```
 BPFRAG_OBSERVE=1 %command%

@@ -821,3 +821,118 @@ fn a_watched_game_that_exits_or_goes_quiet_is_let_go() {
     );
     assert!(sim.det.watched().is_none());
 }
+
+/// What the daemon does once the TCP observer says a game's traffic looks
+/// like a multiplayer game's (Path of Exile 2's rates).
+fn start_tcp(sim: &mut Sim, tgid: u32) -> Vec<Action> {
+    let now = sim.now;
+    sim.det.start_tcp(
+        now,
+        now - 10.0,
+        tgid,
+        format!("game{tgid}"),
+        "test".into(),
+        (13.0, 30.0),
+        0,
+    )
+}
+
+#[test]
+fn a_tcp_game_is_a_match_until_it_goes_quiet_or_exits() {
+    let mut sim = Sim::new(&[7]);
+    sim.run(5, &[]);
+    let a = start_tcp(&mut sim, 7);
+    let s = starts(&a);
+    assert_eq!(s.len(), 1, "{a:?}");
+    assert_eq!(
+        (s[0].tier, s[0].transport),
+        (Tier::Competitive, Transport::Tcp)
+    );
+    assert_eq!((s[0].tx_pps, s[0].rx_pps), (13.0, 30.0));
+    // it has no UDP, and the UDP logic doesn't end it for that
+    let a = sim.run(60, &[]);
+    assert!(a.is_empty(), "{a:?}");
+    assert!(sim.det.session().is_some());
+    // nor does another process's TCP going quiet
+    assert!(
+        sim.det
+            .end_tcp(8, "no TCP traffic for 30s".into())
+            .is_none()
+    );
+    match sim.det.end_tcp(7, "no TCP traffic for 30s".into()) {
+        Some(Action::End { session, reason }) => {
+            assert_eq!(session.transport, Transport::Tcp);
+            assert_eq!(reason, "no TCP traffic for 30s");
+        }
+        other => panic!("{other:?}"),
+    }
+    // an exit ends one at once
+    assert_eq!(starts(&start_tcp(&mut sim, 7)).len(), 1);
+    assert!(matches!(sim.det.on_exit(7), Some(Action::End { .. })));
+    assert!(sim.det.session().is_none());
+}
+
+#[test]
+fn a_udp_games_tcp_doesnt_start_a_match() {
+    // Deadlock in its menu: UDP to itself over loopback, TCP to Valve's
+    // servers. Its UDP decides when it's in a match.
+    let mut sim = Sim::with_paths(&[7]);
+    sim.arrivals = local(128.0);
+    sim.run(10, &[(7, 128, 128, 220)]);
+    assert_eq!(sim.det.watched(), Some((7, "game7", true)));
+    assert!(start_tcp(&mut sim, 7).is_empty());
+    // and with a UDP match on, no TCP match starts beside it
+    let mut sim = Sim::new(&[7, 8]);
+    let a = sim.run(6, &[(7, 64, 64, 60)]);
+    assert_eq!(starts(&a).len(), 1, "{a:?}");
+    assert!(start_tcp(&mut sim, 8).is_empty());
+    assert_eq!(sim.det.session().map(|s| s.tgid), Some(7));
+}
+
+#[test]
+fn a_tcp_game_takes_over_from_a_game_in_its_menu() {
+    let mut sim = Sim::with_paths(&[7, 8]);
+    sim.arrivals = local(128.0);
+    sim.run(10, &[(7, 128, 128, 220)]);
+    assert_eq!(sim.det.watched(), Some((7, "game7", true)));
+    let a = start_tcp(&mut sim, 8);
+    assert!(
+        matches!(a[..], [Action::Unwatch { tgid: 7 }, Action::Start(_)]),
+        "{a:?}"
+    );
+    // the menu carrying on doesn't disturb the match
+    let a = sim.run(20, &[(7, 128, 128, 220)]);
+    assert!(
+        starts(&a).is_empty() && !has(&a, |x| matches!(x, Action::End { .. })),
+        "{a:?}"
+    );
+    assert_eq!(sim.det.session().map(|s| s.tgid), Some(8));
+}
+
+#[test]
+fn a_pinned_tier_holds_for_tcp_games_too() {
+    let mut sim = Sim::new(&[7]);
+    sim.det = Detector::new(Detect {
+        pin_tier: Some(Tier::Intense),
+        ..Detect::default()
+    });
+    assert_eq!(starts(&start_tcp(&mut sim, 7))[0].tier, Tier::Intense);
+}
+
+#[test]
+fn a_tcp_match_hands_over_when_the_game_starts_udp_netcode() {
+    // a game talking TCP in its menus and UDP in play
+    let mut sim = Sim::new(&[7]);
+    assert_eq!(starts(&start_tcp(&mut sim, 7)).len(), 1);
+    let a = sim.run(8, &[(7, 64, 64, 60)]);
+    let end = a.iter().position(|x| {
+        matches!(x, Action::End { reason, .. } if reason == "it started talking UDP like a match")
+    });
+    let start = a
+        .iter()
+        .position(|x| matches!(x, Action::Start(s) if s.transport == Transport::Udp));
+    match (end, start) {
+        (Some(e), Some(s)) => assert!(e < s, "{a:?}"),
+        _ => panic!("the TCP match should end and a UDP one start: {a:?}"),
+    }
+}

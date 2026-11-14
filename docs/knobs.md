@@ -37,9 +37,10 @@ compared real matches with and without it. That comparison is what
 
 ## DSCP CS4 on the game's packets
 
-**Changes:** the DSCP field of every packet leaving the game's UDP ports is
-set to CS4 (32), in all tiers. A packet the game already marked is left
-alone unless `override = true`.
+**Changes:** the DSCP field of every packet leaving the game's UDP ports,
+or its TCP connections for a game that talks TCP, is set to CS4 (32), in
+all tiers. A packet the game already marked is left alone unless
+`override = true`.
 
 **Mechanism:**
 

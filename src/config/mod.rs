@@ -136,18 +136,22 @@ pub struct Detect {
     pub launch_secs: u64,
     /// Use this tier for every match instead of following the tick rate.
     pub pin_tier: Option<Tier>,
-    /// Games that talk TCP (MMOs, older games): "off", or "observe" to log
-    /// what their traffic looks like without tuning anything.
+    /// Games that talk TCP (Path of Exile 2, MMOs, older games): "tune"
+    /// (a game talking TCP like a multiplayer game is tuned like a match),
+    /// "observe" (logged, nothing tuned), or "off".
     pub tcp: TcpMode,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum TcpMode {
-    #[default]
+    /// TCP games aren't looked for.
     Off,
     /// Log TCP games' traffic; tune nothing for them.
     Observe,
+    /// Tune a game talking TCP like a multiplayer game until it stops.
+    #[default]
+    Tune,
 }
 
 impl Default for Detect {
@@ -167,7 +171,7 @@ impl Default for Detect {
             dwell_secs: 5,
             launch_secs: 20,
             pin_tier: None,
-            tcp: TcpMode::Off,
+            tcp: TcpMode::Tune,
         }
     }
 }

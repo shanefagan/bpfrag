@@ -50,9 +50,12 @@ from. These extend that.
 
 ## Next: detection
 
-- **TCP games.** They're observed today (`[detect] tcp = "observe"`) and
-  not tuned. Step one is the game's own retransmissions and timeouts (M9)
-  in the health line; tuning only if those show something to fix.
+- **TCP games' health.** Since 0.17 a game whose TCP looks like a
+  multiplayer game's is tuned like a match, with a summary of its
+  session at the end but no gap figures. Next: time the game's receives
+  (what it feels when a lost segment holds the rest back; arrival gaps at
+  the NIC don't show that) and count its retransmissions and timeouts
+  (M9), so its health line can say where a freeze came from.
 - **Back-to-back games** (experiment 22): where one match ends when the
   next starts in the same process, from the timelines already collected.
 - **Hosted servers** (experiment 24): what a game server on the same

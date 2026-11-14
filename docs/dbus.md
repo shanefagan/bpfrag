@@ -96,10 +96,12 @@ match to another tier and its settings have been re-applied.
 **`MatchEnded(u pid, s game, s reason, t duration_secs, s peak_tier,
 s experiment, a{sv} health)`**, after the match's settings have been
 restored. `reason` is what ended it: `game exited`, `netcode quiet for 15s`,
-or `bpfrag stopped` when the daemon shuts down mid-match. `health` holds
-the match's connection health, the same numbers as the log line (see
+`no TCP traffic for 30s` (a game that talks TCP), or `bpfrag stopped` when
+the daemon shuts down mid-match. `health` holds the match's connection
+health, the same numbers as the log line (see
 [measuring.md](measuring.md)); a key is missing when there is nothing to
-report, and the dict is empty when bpfrag stopped:
+report, and the dict is empty when bpfrag stopped, and for a game that
+talks TCP (no gap figures for those yet):
 
 | Key | Type | Meaning |
 |---|---|---|

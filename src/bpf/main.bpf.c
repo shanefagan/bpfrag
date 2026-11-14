@@ -6,14 +6,15 @@
  *
  * Keep the kernel side dumb and cheap: count traffic per process, tell
  * userspace when a watched game exits, rewrite DSCP on packets leaving a
- * game's UDP ports, and demote the flows of processes userspace has
- * declared bulk. All the "is this a match, which tier" decisions live in
+ * game's UDP ports and TCP connections, and demote the flows of processes
+ * userspace has declared bulk. All the "is this a match, which tier" decisions live in
  * the Rust side, where they are easy to test and cannot upset the verifier.
  *
  * Hooks (kernel 6.6+):
  *   raw_tp/sock_send_length, raw_tp/sock_recv_length  UDP and TCP counting per process
  *   raw_tp/sched_process_exit                         game exit -> revert now
- *   tc egress (tcx link)                              DSCP marking
+ *   tc egress (tcx link)                              DSCP marking (game UDP ports,
+ *                                                     game TCP connections, bulk flows)
  *   tc ingress (tcx link)                             arrival gaps per game port,
  *                                                     arrivals per game peer and
  *                                                     per interface (loopback
@@ -93,6 +94,16 @@ struct {
 	__type(key, __u32);
 	__type(value, struct game_port);
 } game_ports SEC(".maps");
+
+/* a game's TCP connection -> the game, learned from the counting hooks. Keyed
+ * by the whole connection, not the local port: a game that opens a new
+ * connection per zone leaves ports behind that another process soon reuses. */
+struct {
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
+	__uint(max_entries, MAX_PORTS);
+	__type(key, struct flow_key);
+	__type(value, struct game_port);
+} game_tcp_flows SEC(".maps");
 
 /*
  * ifindex -> interface the marker is attached to: its L2 header length and
@@ -297,6 +308,20 @@ static __always_inline void record_departure(__u32 port)
 	pt->resume_n = 0;
 }
 
+/* Remember a game's TCP connection so the marker can find its packets. */
+static __always_inline void learn_game_flow(struct sock *sk, unsigned short family, __u32 tgid)
+{
+	struct game_port v = { .tgid = tgid }, *old;
+	struct flow_key k = {};
+
+	if (!sock_flow_key(sk, family, IPPROTO_TCP, &k))
+		return;
+	old = bpf_map_lookup_elem(&game_tcp_flows, &k);
+	if (old && old->tgid == tgid)
+		return; /* known: a lookup is far cheaper than an update */
+	bpf_map_update_elem(&game_tcp_flows, &k, &v, BPF_ANY);
+}
+
 /* Is this TCP socket connected to this machine (127.0.0.0/8, ::1, or
  * ::ffff:127.x)? That isn't network traffic, so it isn't counted: a game
  * talking to a launcher or a local service over TCP isn't playing online. */
@@ -364,6 +389,21 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 		} else {
 			st->tcp_rx_msgs++;
 			st->tcp_rx_bytes += ret;
+		}
+		if (!bpf_map_lookup_elem(&game_tgids, &tgid))
+			return;
+		/* the game's own TCP: marked like its UDP. A game that talks
+		 * only TCP has no UDP send to learn its device from. */
+		learn_game_flow(sk, family, tgid);
+		if (tx && !st->tx_pkts && (st->tcp_tx_msgs & 63) == 1) {
+			struct dst_entry *dst = BPF_CORE_READ(sk, sk_dst_cache);
+
+			if (dst) {
+				int ifindex = BPF_CORE_READ(dst, dev, ifindex);
+
+				if (ifindex > 0)
+					st->ifindex = ifindex;
+			}
 		}
 		return;
 	}
@@ -472,11 +512,25 @@ static __always_inline bool game_owns(__u32 port)
 	return pm && bpf_map_lookup_elem(&game_tgids, &pm->tgid);
 }
 
-/* Is this a game's port? Counts the packet against the interface if so. */
-static __always_inline bool is_game_port(__be16 sport, struct mark_iface *mi)
+/* Is this one of the current game's TCP connections? Only while its owner
+ * is still in game_tgids, as for game_owns(). */
+static __always_inline bool game_owns_flow(struct flow_key *k)
 {
-	if (!game_owns(bpf_ntohs(sport)))
+	struct game_port *pm = bpf_map_lookup_elem(&game_tcp_flows, k);
+
+	return pm && bpf_map_lookup_elem(&game_tgids, &pm->tgid);
+}
+
+/* Is this packet leaving one of the game's UDP ports or TCP connections
+ * (`k` is its flow, local first)? Counts it against the interface if so. */
+static __always_inline bool is_game_packet(struct flow_key *k, struct mark_iface *mi)
+{
+	if (k->proto == IPPROTO_UDP) {
+		if (!game_owns(k->lport))
+			return false;
+	} else if (!game_owns_flow(k)) {
 		return false;
+	}
 	__sync_fetch_and_add(&mi->game_pkts, 1);
 	stat_inc(STAT_TC_SEEN);
 	return true;
@@ -569,9 +623,9 @@ static __always_inline int bulk_marked(struct __sk_buff *skb)
 }
 
 /*
- * Egress: game packets (UDP from the game's ports) get the game's DSCP;
- * packets of a bulk process's flows get the bulk DSCP. Bulk packets an app
- * already marked are always left alone.
+ * Egress: game packets (UDP from the game's ports, and its TCP connections)
+ * get the game's DSCP; packets of a bulk process's flows get the bulk DSCP.
+ * Bulk packets an app already marked are always left alone.
  */
 SEC("tc")
 int bpfrag_dscp(struct __sk_buff *skb)
@@ -610,7 +664,13 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		if ((void *)(pt + 1) > data_end)
 			return TCX_NEXT;
 		old_tos = ip->tos;
-		if (proto == IPPROTO_UDP && is_game_port(pt->source, mi)) {
+		k.family = AF_INET;
+		k.proto = proto;
+		k.lport = bpf_ntohs(pt->source);
+		k.rport = bpf_ntohs(pt->dest);
+		k.laddr[0] = ip->saddr;
+		k.raddr[0] = ip->daddr;
+		if (is_game_packet(&k, mi)) {
 			if (!want_rewrite(old_tos))
 				return TCX_NEXT;
 			set_dscp4(skb, l2, old_tos, dscp);
@@ -618,12 +678,6 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		}
 		if (!bulk_active() || (old_tos >> 2))
 			return TCX_NEXT;
-		k.family = AF_INET;
-		k.proto = proto;
-		k.lport = bpf_ntohs(pt->source);
-		k.rport = bpf_ntohs(pt->dest);
-		k.laddr[0] = ip->saddr;
-		k.raddr[0] = ip->daddr;
 		if (!is_bulk_flow(&k))
 			return TCX_NEXT;
 		set_dscp4(skb, l2, old_tos, bulk_dscp);
@@ -643,7 +697,13 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		b0 = ip6->vtc_flow[0];
 		b1 = ip6->vtc_flow[1];
 		old_tc = ((b0 & 0x0f) << 4) | (b1 >> 4);
-		if (proto == IPPROTO_UDP && is_game_port(pt->source, mi)) {
+		k.family = AF_INET6;
+		k.proto = proto;
+		k.lport = bpf_ntohs(pt->source);
+		k.rport = bpf_ntohs(pt->dest);
+		__builtin_memcpy(k.laddr, ip6->saddr, 16);
+		__builtin_memcpy(k.raddr, ip6->daddr, 16);
+		if (is_game_packet(&k, mi)) {
 			if (!want_rewrite(old_tc))
 				return TCX_NEXT;
 			set_dscp6(skb, l2, b0, b1, dscp);
@@ -651,12 +711,6 @@ int bpfrag_dscp(struct __sk_buff *skb)
 		}
 		if (!bulk_active() || (old_tc >> 2))
 			return TCX_NEXT;
-		k.family = AF_INET6;
-		k.proto = proto;
-		k.lport = bpf_ntohs(pt->source);
-		k.rport = bpf_ntohs(pt->dest);
-		__builtin_memcpy(k.laddr, ip6->saddr, 16);
-		__builtin_memcpy(k.raddr, ip6->daddr, 16);
 		if (!is_bulk_flow(&k))
 			return TCX_NEXT;
 		set_dscp6(skb, l2, b0, b1, bulk_dscp);

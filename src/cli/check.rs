@@ -158,12 +158,21 @@ pub fn run(cfg: &Config) -> bool {
             format!("random, one setting per {:?} ({saved})", e.period).to_lowercase(),
         );
     }
-    if cfg.detect.tcp == crate::config::TcpMode::Observe {
-        line(
+    match cfg.detect.tcp {
+        crate::config::TcpMode::Tune => line(
+            None,
+            "TCP games",
+            "tuned like a match while they talk like a multiplayer game (TCP is counted all \
+             the time)",
+        ),
+        crate::config::TcpMode::Observe => line(
             None,
             "TCP games",
             "observed and logged, never tuned (TCP is counted all the time)",
-        );
+        ),
+        crate::config::TcpMode::Off => {
+            line(None, "TCP games", "not looked for ([detect] tcp = \"off\")")
+        }
     }
     if cfg.general.dbus {
         let (ok, detail) = crate::bus::check();
