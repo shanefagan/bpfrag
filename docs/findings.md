@@ -37,9 +37,9 @@ timelines by `docs/scripts/graphs.py` (2026-11-11 to -14, 25 matches).
   while the server kept sending. The machine-wide count (about one drop a
   second) belongs to something else and didn't change either way.
 - **Writeback:** no difference in the gaps over 24 Deadlock matches (13
-  on, 11 off, 2026-11-11 to -13). It was a real comparison: this machine
-  runs at `vm.dirty_ratio` 10 and background 3 (a setting of its own, not
-  CachyOS's 256 and 64 MiB), so bpfrag tightened it in the "on" matches.
+  on, 11 off, 2026-11-11 to -13). It was a real comparison: CachyOS now
+  ships `vm.dirty_ratio` 10 and background 3 (it used to ship 256 and
+  64 MiB, bpfrag's values), so bpfrag tightened it in the "on" matches.
   Nothing large was being written, and packet gaps aren't where writeback
   would show: frame times during a big download are
   ([experiment 14](experiments.md#14-writeback-during-a-big-download)).
@@ -130,7 +130,7 @@ conditions, the number of matches on each side, and the medians.
 | 2026-11-04 to -10 | The same, bpfrag 0.12.0 to 0.14.0 | `netdev_max_backlog` raised to 5000 (on) / left at CachyOS's 4096 (off) | 2 / 8 | 18 / 18 ms | 81 / 62 ms | 0 / 0 | No difference, with too few "on" matches to say more than that. The matches differed by relay: one "off" match on a worse one had 2.5 ms of jitter against 0.7–0.9 ms in the others. Taken out of the random pool in 0.15.0: on a NIC with NAPI and no RPS the queue it sizes isn't used ([knobs.md](knobs.md#netdev_max_backlog)), and here the default was already 4096 |
 | 2026-11-11 | CachyOS, wired (`eno1`), bpfrag 0.16.0–0.16.1 tuning, Deadlock, nothing large being written to disk; figures from the timelines | writeback tightened (on) / left at the distribution's (off) | 6 / 7 | 18 / 18 ms | 61 / 49 ms | 0 / 0 | No difference, as expected: writeback only matters while something writes a lot. Jitter 742 / 622 µs, the "on" side raised by two matches on one evening relay |
 | 2026-11-09 to -11 | The same, bpfrag 0.14.0 / 0.16.x | all of 0.14.0's settings (busy polling, backlog, budget, coalescing) / 0.16's fewer | 15 / 13 | 18 / 18 ms | 64 / 50 ms | 0 / 0 | No difference: removing those four settings cost nothing measurable. Jitter 657 / 649 µs. The longest-gap difference (p 0.03) is one of ten comparisons, and 0.16's matches were shorter |
-| 2026-11-12 and -13 | The same, bpfrag 0.16.2; figures recomputed the daemon's way from the timelines | writeback tightened (on) / left at the distribution's (off) | 7 / 4 | 18 / 18 ms | 40 / 41 ms | 0 / 0 | No difference. The machine's own limits are `vm.dirty_ratio` 10 and background 3, so the "on" matches were tightened to 256 and 64 MiB; nothing large was being written. With 2026-11-11, 13 on and 11 off. Jitter 658 / 696 µs; the highest (1.15 ms, an "on" match) was one evening's relay |
+| 2026-11-12 and -13 | The same, bpfrag 0.16.2; figures recomputed the daemon's way from the timelines | writeback tightened (on) / left at the distribution's (off) | 7 / 4 | 18 / 18 ms | 40 / 41 ms | 0 / 0 | No difference. CachyOS's limits are now `vm.dirty_ratio` 10 and background 3, so the "on" matches were tightened to 256 and 64 MiB; nothing large was being written. With 2026-11-11, 13 on and 11 off. Jitter 658 / 696 µs; the highest (1.15 ms, an "on" match) was one evening's relay |
 | 2026-11-14 | The same, nothing moving bulk data | bulk demotion on / off (`[bulk] enabled = true`) | 3 / 3 | 18 / 18 ms | 40 / 41 ms | 0 / 0 | No difference, and none possible: no process was bulk in any match (the health line names any), so nothing was demoted. Not a test of bulk demotion; [experiment 10](experiments.md#10-bulk-demotion-with-a-full-upload) is |
 
 ## Open questions
@@ -183,7 +183,7 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
   minutes or more, all clean: 99% 17–20 ms, longest 39–50 ms, no stalls
   in play. Neither experiment showed a difference: writeback with
   nothing writing much, and bulk with nothing to demote (corrected
-  2026-11-16: writeback wasn't a no-op here, the machine runs its own
+  2026-11-16: writeback wasn't a no-op here, CachyOS having moved to
   `vm.dirty_ratio`). Once the game's state arrived 100 s in, and the
   465 ms quiet before it counted as a stall in play (fixed in 0.16.3).
   One evening relay ran at twice the usual jitter, the game's own

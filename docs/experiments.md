@@ -38,7 +38,7 @@ There are four kinds:
 | 11 | [LE or CS1 for bulk traffic on Wi-Fi?](#11-le-or-cs1-on-wi-fi) | A/B+ | Wi-Fi |
 | 12 | [Does BBR for downloads protect the game?](#12-bbr-for-downloads) | Setup | any line with a download |
 | 13 | [Does fixed coalescing matter during a download?](#13-coalescing-during-a-download) | A/B+ (finer timing) | wired |
-| 14 | [Does writeback tightening change anything in a match?](#14-writeback-during-a-big-download) | A/B (`writeback`) + frame times | non-CachyOS |
+| 14 | [Does writeback tightening change anything in a match?](#14-writeback-during-a-big-download) | A/B (`writeback`) + frame times | anyone with a big download to run |
 | 15 | [bpftune or bpfrag for the settings they share?](#15-bpftune-or-bpfrag-for-the-shared-settings) | Setup | bpftune users |
 | 16 | [How big a difference does noise alone produce?](#16-an-aa-test) | A/B+ | everyone, once |
 | 17 | [How much do time of day and the server matter?](#17-time-of-day-and-server) | analysis, needs M7 | any |
@@ -551,12 +551,12 @@ with a big download writing to disk?
 
 **Why:** large dirty-page backlogs flush in bursts; the theory is that
 those bursts stall I/O the game is waiting on. It isn't networking, and
-a stock CachyOS already ships bpfrag's values, so it's a no-op there
+CachyOS used to ship bpfrag's values and now ships ratios it tightens
 ([distros.md](distros.md)). 24 matches with it on and off (2026-11-11 to
--13, on a machine where it does tighten) showed nothing in the gaps, with
-nothing large being written.
+-13, on a current CachyOS) showed nothing in the gaps, with nothing
+large being written.
 
-**How:** `setting = "writeback"` on a distribution with kernel defaults,
+**How:** `setting = "writeback"` (kernel defaults or a current CachyOS),
 with a big Steam download to a slow disk. bpfrag's numbers won't show it;
 frame times will (M6).
 

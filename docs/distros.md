@@ -35,7 +35,7 @@ it in.
 |---|---|---|---|---|---|
 | `net.core.rmem_max`, `wmem_max` | 4 MiB from Linux 6.18, 208 KiB before [k1] | 208 KiB (Linux 6.8) | 4 MiB (Linux 7.0) | 4 MiB (current kernels) | follows its kernel |
 | `net.core.netdev_max_backlog` | 1000 | 1000 | 1000 | 4096 [c1] | 1000 |
-| `vm.dirty_*` | ratio 20% / background 10% | kernel default | kernel default | 256 MiB / background 64 MiB [c1] | kernel default; Deck image 256 MiB / 128 MiB [b3] |
+| `vm.dirty_*` | ratio 20% / background 10% | kernel default | kernel default | ratio 10% / background 3% [c4]; 256 MiB / 64 MiB before [c1] | kernel default; Deck image 256 MiB / 128 MiB [b3] |
 | Busy polling, `netdev_budget*`, `rmem_default` | 0, 300 packets / 2 jiffies, 208 KiB | kernel default | kernel default | kernel default | kernel default |
 
 ## What that means for bpfrag
@@ -59,11 +59,12 @@ it in.
   would make bulk demotion matter less there; untested.
 - **CachyOS already raises `netdev_max_backlog`** past the kernel default
   (bpfrag still raises it further, to 5000), and its writeback limits are
-  exactly bpfrag's (256 MiB, background 64 MiB), so on a stock CachyOS
-  bpfrag's writeback setting changes nothing. A machine with its own
-  `vm.dirty_ratio` in `/etc/sysctl.d` isn't stock: the one behind
-  [findings.md](findings.md) runs at 10 and 3, and there bpfrag tightens
-  it. `bpfrag --check` shows which applies.
+  were exactly bpfrag's (256 MiB, background 64 MiB), so bpfrag's
+  writeback setting changed nothing there. They aren't any more: its
+  settings file now sets `vm.dirty_ratio` 10 and background 3 [c4],
+  percentages of available memory, which on a gaming PC are well above
+  256 and 64 MiB. On a current CachyOS bpfrag tightens them during a
+  match. `bpfrag --check` shows what a machine has.
 
 ## Not checked yet
 
@@ -101,6 +102,10 @@ that is a guess until someone checks a SteamOS install.
   f79b237, `usr/lib/sysctl.d/70-cachyos-settings.conf`:
   `net.core.netdev_max_backlog = 4096`, `vm.dirty_bytes = 268435456`,
   `vm.dirty_background_bytes = 67108864`.
+- [c4] `/usr/lib/sysctl.d/70-cachyos-settings.conf` as installed on a
+  CachyOS desktop, read 2026-11-16: `vm.dirty_ratio = 10`,
+  `vm.dirty_background_ratio = 3`, and no `vm.dirty_bytes`. The
+  CachyOS-Settings commit that changed it hasn't been looked up.
 - [c2] [linux-cachyos](https://github.com/CachyOS/linux-cachyos) 523baf9,
   `linux-cachyos/PKGBUILD`: `_HZ_ticks` 1000, `_preempt` full,
   `_tcp_bbr3` no by default.
