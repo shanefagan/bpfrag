@@ -27,7 +27,7 @@ something below is a hypothesis rather than established, it says so.
 | [netdev_max_backlog](#netdev_max_backlog) | verified | No longer set (from 0.16.0): none on a NAPI NIC without RPS, and none measured | Measured: [findings.md](findings.md#match-comparisons) |
 | [netdev_budget / _usecs](#netdev_budget-and-netdev_budget_usecs) | verified | No longer set (from 0.16.0): only matters when receive processing is saturated, and none measured | Measured: [findings.md](findings.md#match-comparisons) |
 | [udp_early_demux](#udp_early_demux) | verified | None: it's already on by default | None (no-op) |
-| [Dirty writeback](#dirty-writeback-vmdirty_) | partly | Not networking; smaller writeback bursts. No-op on CachyOS | Low |
+| [Dirty writeback](#dirty-writeback-vmdirty_) | partly | Not networking; smaller writeback bursts. No-op on a stock CachyOS | Low |
 | [Bulk demotion (LE)](#bulk-demotion-dscp-le) | verified | Real with CAKE on the machine or a router that adopts client marks | High for the mechanism, unmeasured in matches |
 
 "Unmeasured in matches" means bpfrag's tests confirm it does what it says
@@ -349,7 +349,8 @@ written in bursts.
 isn't networking. The case for it is I/O-induced stutter, not packet
 latency, and there's no measurement linking it to either yet. CachyOS
 already ships these exact values (`70-cachyos-settings.conf` in
-CachyOS-Settings), so on CachyOS it changes nothing.
+CachyOS-Settings), so on a stock CachyOS it changes nothing; with other
+limits set in `/etc/sysctl.d`, it does.
 
 **Confidence:** low. It's the setting furthest from bpfrag's scope, and
 it's optional (`writeback = false` under `[tier.all]`).

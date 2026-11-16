@@ -551,8 +551,10 @@ with a big download writing to disk?
 
 **Why:** large dirty-page backlogs flush in bursts; the theory is that
 those bursts stall I/O the game is waiting on. It isn't networking, and
-CachyOS already ships bpfrag's values, so it's a no-op there
-([distros.md](distros.md)).
+a stock CachyOS already ships bpfrag's values, so it's a no-op there
+([distros.md](distros.md)). 24 matches with it on and off (2026-11-11 to
+-13, on a machine where it does tighten) showed nothing in the gaps, with
+nothing large being written.
 
 **How:** `setting = "writeback"` on a distribution with kernel defaults,
 with a big Steam download to a slow disk. bpfrag's numbers won't show it;

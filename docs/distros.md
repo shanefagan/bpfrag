@@ -59,8 +59,11 @@ it in.
   would make bulk demotion matter less there; untested.
 - **CachyOS already raises `netdev_max_backlog`** past the kernel default
   (bpfrag still raises it further, to 5000), and its writeback limits are
-  exactly bpfrag's (256 MiB, background 64 MiB), so on CachyOS bpfrag's
-  writeback setting changes nothing.
+  exactly bpfrag's (256 MiB, background 64 MiB), so on a stock CachyOS
+  bpfrag's writeback setting changes nothing. A machine with its own
+  `vm.dirty_ratio` in `/etc/sysctl.d` isn't stock: the one behind
+  [findings.md](findings.md) runs at 10 and 3, and there bpfrag tightens
+  it. `bpfrag --check` shows which applies.
 
 ## Not checked yet
 
