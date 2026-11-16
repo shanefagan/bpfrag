@@ -176,8 +176,9 @@ class Health(dict):
 
     @property
     def experiment(self):
-        """The experiment's arm the match ran with, e.g. "socket_buffers off"."""
-        m = re.search(r"; experiment: ([\w:.]+ (?:on|off))", self["line"])
+        """The experiment's arm the match ran with, e.g. "socket_buffers off",
+        with its "(no effect: ...)" note if it has one."""
+        m = re.search(r"; experiment: ([\w:.]+ (?:on|off)(?: \(no effect: [^)]*\))?)", self["line"])
         return m.group(1) if m else None
 
     def __init__(self, line):

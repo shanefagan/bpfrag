@@ -156,6 +156,14 @@ socket_buffers off for this match`), `--monitor` shows it, and the health
 line at the end says it again. `keep = 0.3` would keep the setting in 30%
 of matches.
 
+A match where the setting had nothing to do is the same on both arms, and
+its health line says so: `experiment: bulk on (no effect: nothing to
+demote)` when no process moved bulk data, `(no effect: already in place)`
+when the system had the setting's values before the match began. Its
+timeline's last row carries the same note. `matches.py --compare arm` and
+`graphs.py` leave such matches out; the CSV keeps them, with the reason in
+`no_effect`.
+
 Why random: picking which matches get which setting by hand, or running
 one evening of each, lets everything else that varies (time of day, the
 server, the map, your ISP's evening load) line up with one side. A coin

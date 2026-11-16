@@ -126,6 +126,10 @@ class Match:
         self.sent = [num(r["udp_tx_pps"]) or 0 for r in self.rows]
         self.tcp_rx = [num(r["tcp_rx_bytes_s"]) or 0 for r in self.rows]
         self.events = [r["events"] for r in self.rows]
+        # "experiment had no effect (nothing to demote)": the setting had
+        # nothing to do in this match, so it's the same on both arms
+        noted = [re.search(r"experiment had no effect \(([^)]*)\)", e) for e in self.events]
+        self.no_effect = next((n[1] for n in noted if n), None)
         self._play()
 
     def _play(self):
@@ -551,7 +555,7 @@ def shuffled(sides, ms, n=5000):
 def experiments_svg(matches):
     groups = {}
     for m in matches:
-        if m.setting and m.minutes >= MIN_MINUTES and m.figures():
+        if m.setting and not m.no_effect and m.minutes >= MIN_MINUTES and m.figures():
             groups.setdefault(m.setting, []).append(m)
     names = sorted(groups)
     W, left, gapx = 760, 150, 40
@@ -669,7 +673,20 @@ def main():
 
     w = csv.writer(sys.stdout)
     w.writerow(
-        ["match", "game", "version", "dry_run", "setting", "arm", "minutes", "p99_ms", "longest_ms", "stalls", "jitter_us"]
+        [
+            "match",
+            "game",
+            "version",
+            "dry_run",
+            "setting",
+            "arm",
+            "no_effect",
+            "minutes",
+            "p99_ms",
+            "longest_ms",
+            "stalls",
+            "jitter_us",
+        ]
     )
     for m in sorted(every, key=lambda m: m.name):
         fg = m.figures() or {}
@@ -681,6 +698,7 @@ def main():
                 "yes" if m.dry_run else "",
                 m.setting or "",
                 m.arm or "",
+                m.no_effect or "",
                 f"{m.minutes:.1f}",
                 fg.get("p99", ""),
                 fg.get("longest", ""),

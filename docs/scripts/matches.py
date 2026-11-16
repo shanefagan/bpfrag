@@ -51,7 +51,7 @@ SILENT = re.compile(
     r"nothing from the server (?:for (\d+) s once|(\d+) times while the game kept sending, "
     r"longest (\d+) s)"
 )
-EXPERIMENT = re.compile(r"; experiment: (\S+) (on|off)\b")
+EXPERIMENT = re.compile(r"; experiment: (\S+) (on|off)\b(?: \(no effect: ([^)]*)\))?")
 
 FIELDS = [
     "label", "started", "game", "mode", "version", "start_tier", "peak_tier",
@@ -61,7 +61,7 @@ FIELDS = [
     "nic_drops", "squeezed", "server_changes", "silences",
     "silence_longest_s", "rx_queue", "game_tcp", "bulk",
     "bulk_marked",
-    "experiment", "arm", "reason",
+    "experiment", "arm", "no_effect", "reason",
 ]
 
 
@@ -147,6 +147,7 @@ def parse(lines, label):
                 cur["bulk_marked"] = b.group(2).replace(" marked ", "").strip(" ()")
             if e := EXPERIMENT.search(line):
                 cur["experiment"], cur["arm"] = e.group(1), e.group(2)
+                cur["no_effect"] = e.group(3) or ""
             rows.append(cur)
             cur = None
     return rows
@@ -242,8 +243,14 @@ def main():
             # Arms only compare within one experiment: a "random" experiment
             # tests a different setting each day.
             by_exp = {}
+            # A match where the setting had nothing to do (its values were
+            # already in place, nothing was bulk) is the same on both arms.
+            same = [r for r in rows if r.get("experiment") and r.get("no_effect")]
+            if same:
+                print(f"left out: {len(same)} matches where the setting had nothing to do "
+                      "(no_effect in the CSV)\n")
             for r in rows:
-                if r.get("experiment"):
+                if r.get("experiment") and not r.get("no_effect"):
                     by_exp.setdefault(r["experiment"], []).append(r)
             if not by_exp:
                 print("no matches from an experiment")

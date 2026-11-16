@@ -220,6 +220,9 @@ pub struct Tuner<'a> {
     experiment_period: String,
     /// This match's draw.
     arm: Option<experiment::Arm>,
+    /// The arm's setting was already in place when the match began (read
+    /// before anything was applied), so both arms are the same system.
+    arm_in_place: bool,
     /// `[capture] timeline`: this match's per-second record.
     timeline: Option<Timeline>,
     /// The meter's game packets per interface at the last reading, for
@@ -300,6 +303,7 @@ impl<'a> Tuner<'a> {
             experiment_period: String::new(),
             plan,
             arm: None,
+            arm_in_place: false,
             timeline: None,
             meter_prev: HashMap::new(),
             last_paths: None,
@@ -554,6 +558,12 @@ impl<'a> Tuner<'a> {
                     .experiment
                     .as_ref()
                     .map(|(name, e)| experiment::draw(name, e, self.cfg.experiment.keep));
+                // read before the tier is applied: afterwards an "on" match
+                // would always find its own values in place
+                self.arm_in_place = self
+                    .arm
+                    .as_ref()
+                    .is_some_and(|a| !self.would_change(&a.setting));
                 if let Some(a) = &self.arm {
                     info!(
                         "Experiment: {} for this match (chosen at random)",
@@ -607,6 +617,16 @@ impl<'a> Tuner<'a> {
                 let ports = maps::read_port_rx(&self.skel);
                 let reading = maps::next_reading(&mut self.skel);
                 self.health.update(&ports, reading, Default::default());
+                // The arm as the log and the timeline give it: with a note
+                // when the setting had nothing to do in this match.
+                let no_effect = self
+                    .arm
+                    .as_ref()
+                    .and_then(|a| a.no_effect(self.arm_in_place, !self.bulk.moved().is_empty()));
+                let arm_noted = self.arm.as_ref().map(|a| a.label_with(no_effect));
+                if let (Some(why), Some(t)) = (no_effect, self.timeline.as_mut()) {
+                    t.event(format!("experiment had no effect ({why})"));
+                }
                 let timeline = self
                     .finish_timeline(&format!("match ended ({reason})"), Some((ports, reading)));
                 let mut health = self.health.finish();
@@ -623,7 +643,7 @@ impl<'a> Tuner<'a> {
                 if let Some(h) = health.as_mut() {
                     h.bulk = self.bulk.moved();
                     h.bulk_class = self.bulk_marks().then(|| self.cfg.bulk.class.clone());
-                    h.experiment = self.arm.as_ref().map(experiment::Arm::label);
+                    h.experiment = arm_noted.clone();
                     h.game_tcp_bytes = self
                         .game_tcp
                         .1
@@ -670,8 +690,8 @@ impl<'a> Tuner<'a> {
                         Some(s) => format!("TCP {}", s.details()),
                         None => "TCP, no figures".into(),
                     };
-                    if !arm.is_empty() {
-                        line += &format!("; experiment: {arm}");
+                    if let Some(a) = &arm_noted {
+                        line += &format!("; experiment: {a}");
                     }
                     info!("{}: {line}", session.name);
                 }

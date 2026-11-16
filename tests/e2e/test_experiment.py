@@ -109,3 +109,30 @@ def forget_todays_pick(rig):
     """The day's random pick is kept in the state directory."""
     yield
     (rig.work / "state" / "experiment.json").unlink(missing_ok=True)
+
+
+def test_a_match_where_the_setting_had_nothing_to_do_says_so(rig):
+    """Bulk demotion with nothing moving bulk data: both arms are the same
+    system, so the match is marked and left out of comparisons."""
+    rig.clear_timelines()
+    config = experiment(
+        rig, "exp-bulk", "bulk", 1, "[bulk]\nenabled = true\n[capture]\ntimeline = true\n"
+    )
+    daemon = rig.daemon(config)
+    game = rig.game(64)
+    daemon.wait_for_match()
+    daemon.wait_for("Experiment: bulk on for this match")
+    game.exit()
+    health = daemon.health()
+    assert health.experiment == "bulk on (no effect: nothing to demote)", health["line"]
+    [timeline] = rig.timelines()
+    assert "experiment had no effect (nothing to demote)" in timeline.read_text().splitlines()[-1]
+
+    out = subprocess.run(
+        [sys.executable, REPO / "docs/scripts/matches.py", "-"],
+        input=daemon.log(),
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout
+    assert ",bulk,on,nothing to demote," in out, out

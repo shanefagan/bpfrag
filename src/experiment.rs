@@ -154,6 +154,28 @@ impl Arm {
         format!("{} {}", self.name, if self.on { "on" } else { "off" })
     }
 
+    /// The label for the end of a match, with why this match can't count
+    /// if the setting had nothing to do in it: "bulk on (no effect: nothing
+    /// to demote)". Such a match is the same on both arms.
+    pub fn label_with(&self, no_effect: Option<&str>) -> String {
+        match no_effect {
+            Some(why) => format!("{} (no effect: {why})", self.label()),
+            None => self.label(),
+        }
+    }
+
+    /// Why this match can't show the setting's effect, if it can't.
+    /// `in_place`: the system already had the setting's values when the
+    /// match began. `bulk_moved`: some process was bulk during it.
+    pub fn no_effect(&self, in_place: bool, bulk_moved: bool) -> Option<&'static str> {
+        match self.setting {
+            Setting::Bulk if !bulk_moved => Some("nothing to demote"),
+            Setting::Bulk | Setting::Dscp | Setting::All => None,
+            _ if in_place => Some("already in place"),
+            _ => None,
+        }
+    }
+
     /// The profile this match uses.
     pub fn apply(&self, p: &mut Profile) {
         if !self.on {
@@ -440,6 +462,27 @@ mod tests {
             "only that setting"
         );
         assert!(p.dscp);
+
+        // a match where the setting had nothing to do says so
+        let arm = |setting: Setting, name: &str| Arm {
+            name: name.into(),
+            setting,
+            on: true,
+        };
+        let bulk = arm(Setting::Bulk, "bulk");
+        assert_eq!(bulk.no_effect(false, false), Some("nothing to demote"));
+        assert_eq!(bulk.no_effect(false, true), None);
+        assert_eq!(
+            bulk.label_with(bulk.no_effect(false, false)),
+            "bulk on (no effect: nothing to demote)"
+        );
+        let wb = arm(Setting::Writeback, "writeback");
+        assert_eq!(wb.no_effect(true, false), Some("already in place"));
+        assert_eq!(wb.no_effect(false, false), None);
+        assert_eq!(wb.label_with(None), "writeback on");
+        // marking and "all" always do something
+        assert_eq!(arm(Setting::Dscp, "dscp").no_effect(true, false), None);
+        assert_eq!(arm(Setting::All, "all").no_effect(true, false), None);
 
         let mut all = builtin_profiles()[2].clone();
         Setting::All.strip(&mut all);
