@@ -398,6 +398,10 @@ It collects the version, OS and kernel, `--check`, `--selftest`,
 journal and this boot's log. The hostname, user names in home paths, and
 IP and MAC addresses are replaced, but read it through before posting.
 
+For a security problem, see [SECURITY.md](SECURITY.md) instead of opening
+an issue. To contribute, data or code, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Documentation
 
 - [docs/knobs.md](docs/knobs.md): why each setting, with sources, and what to expect
