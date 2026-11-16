@@ -3,7 +3,7 @@ name = "bpfrag"
 version = "0.18.0"
 edition = "2024"
 rust-version = "1.85"
-authors = ["Shane Fagan <mail@shanefagan.com>"]
+authors = ["Shane Fagan <shane@performativenonsense.com>"]
 license = "MIT"
 description = "eBPF-driven, self-reverting network tuning for competitive gaming on Linux"
 readme = "README.md"
@@ -36,7 +36,7 @@ strip = "debuginfo"
 
 # `cargo deb` (cargo install cargo-deb) builds a .deb from this.
 [package.metadata.deb]
-maintainer = "Shane Fagan <mail@shanefagan.com>"
+maintainer = "Shane Fagan <shane@performativenonsense.com>"
 copyright = "2025-2026, Shane Fagan"
 license-file = ["LICENSE", "0"]
 extended-description = """\

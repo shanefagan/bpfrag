@@ -117,119 +117,119 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
-* Mon Nov 16 2026 Shane Fagan <mail@shanefagan.com> - 0.18.0-1
+* Mon Nov 16 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.0-1
 - A TCP game's health line has the gaps between its receives and its own retransmissions; an experiment's match says when its setting had nothing to do.
 
-* Sat Nov 14 2026 Shane Fagan <mail@shanefagan.com> - 0.17.1-1
+* Sat Nov 14 2026 Shane Fagan <shane@performativenonsense.com> - 0.17.1-1
 - A game tagged BPFRAG_OBSERVE=1 that talks TCP is tuned again, and a TCP game's match writes a timeline.
 
-* Sat Nov 14 2026 Shane Fagan <mail@shanefagan.com> - 0.17.0-1
+* Sat Nov 14 2026 Shane Fagan <shane@performativenonsense.com> - 0.17.0-1
 - Games that talk TCP (Path of Exile 2, MMOs) are tuned like a match once their traffic looks like a multiplayer game's; TCP to this machine isn't counted.
 
-* Sat Nov 14 2026 Shane Fagan <mail@shanefagan.com> - 0.16.3-1
+* Sat Nov 14 2026 Shane Fagan <shane@performativenonsense.com> - 0.16.3-1
 - A game whose state arrives after the first minute no longer counts its start as play: a second of more updates than usual at under half the usual interval, and the second before it, are left out of the figures as loading.
 
-* Wed Nov 11 2026 Shane Fagan <mail@shanefagan.com> - 0.16.2-1
+* Wed Nov 11 2026 Shane Fagan <shane@performativenonsense.com> - 0.16.2-1
 - A relay the game had left, still pinging it, no longer holds a match open on the end screen or raises its tier: peers other than the server are left out of the match's traffic from outside.
 
-* Wed Nov 11 2026 Shane Fagan <mail@shanefagan.com> - 0.16.1-1
+* Wed Nov 11 2026 Shane Fagan <shane@performativenonsense.com> - 0.16.1-1
 - A burst of traffic that fell across two readings (relay pings in a menu) no longer keeps a match going into the next one: the quiet count starts over only once traffic has stayed for three readings in a row.
 
-* Tue Nov 10 2026 Shane Fagan <mail@shanefagan.com> - 0.16.0-1
+* Tue Nov 10 2026 Shane Fagan <shane@performativenonsense.com> - 0.16.0-1
 - Fewer settings: the receive backlog and budget and NIC interrupt coalescing are no longer set, after matches with each on and off measured the same; each can still be set per tier. The backlog, budget and busy_polling experiment names and the busy-polled packets figure go with them. general.hook and general.tick_ms are no longer accepted: delete those lines. The end-to-end tests are now pytest (tests/e2e), and the detector's code is split into smaller files.
 
-* Tue Nov 10 2026 Shane Fagan <mail@shanefagan.com> - 0.15.0-1
+* Tue Nov 10 2026 Shane Fagan <shane@performativenonsense.com> - 0.15.0-1
 - Busy polling is no longer set during matches: 12 matches showed the same packet gaps with it on or off, and it costs CPU and power (a config can still set it per tier). general.tick_ms is no longer a setting: readings are a second apart (the key is still accepted). The backlog setting leaves the random experiment pools. A roadmap in docs/roadmap.md.
 
-* Tue Nov 10 2026 Shane Fagan <mail@shanefagan.com> - 0.14.1-1
+* Tue Nov 10 2026 Shane Fagan <shane@performativenonsense.com> - 0.14.1-1
 - Fixes from a full code review: an outage of 2 to 4 seconds counts as a stall; a game sitting in its menu no longer stops a second game being detected; --restore runs when the config file doesn't load; the journal records the value the kernel holds after a write; the game's send timing covers only ports that hear from outside.
 
-* Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.14.0-1
+* Mon Nov 09 2026 Shane Fagan <shane@performativenonsense.com> - 0.14.0-1
 - Hardening: process-supplied names made safe to log, no spreadsheet formulas in timelines, IPv6 prefixes redacted in reports, a packet fuzzer in the selftest (just fuzz), cargo-deny and a unit sandboxing gate in CI; the game's send stalls no longer count a lobby's keepalives; --check doesn't touch debugfs under lockdown.
 
-* Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.13.0-1
+* Mon Nov 09 2026 Shane Fagan <shane@performativenonsense.com> - 0.13.0-1
 - Jitter to the microsecond (how much each gap differs from the one before) and the game's own sending (its longest gap and stalls, timed at send) in the health line, the timeline, D-Bus and matches.py.
 
-* Mon Nov 09 2026 Shane Fagan <mail@shanefagan.com> - 0.12.6-1
+* Mon Nov 09 2026 Shane Fagan <shane@performativenonsense.com> - 0.12.6-1
 - Loading is told from play by what the game does (sending, TCP, sending with nothing back), and a match doesn't end on quiet while the game loads over TCP; relay traffic and the server rate fixes; Wine programs' names on the allow and deny lists.
 
-* Sat Nov 07 2026 Shane Fagan <mail@shanefagan.com> - 0.12.5-1
+* Sat Nov 07 2026 Shane Fagan <shane@performativenonsense.com> - 0.12.5-1
 - Nothing in a game's first 20 seconds starts a match (launch_secs): Deadlock sometimes pings Steam's relays as it launches before its menu is up.
 
-* Fri Nov 06 2026 Shane Fagan <mail@shanefagan.com> - 0.12.4-1
+* Fri Nov 06 2026 Shane Fagan <shane@performativenonsense.com> - 0.12.4-1
 - A match's tier leaves out relay pings, which moved two 64-tick Deadlock matches to INTENSE; match health counts lost connections (nothing from the server for 3 s or more while the game kept sending), which the gap figures couldn't show.
 
-* Fri Nov 06 2026 Shane Fagan <mail@shanefagan.com> - 0.12.3-1
+* Fri Nov 06 2026 Shane Fagan <shane@performativenonsense.com> - 0.12.3-1
 - Timelines give the exact length of a longest gap over 63 ms; bpfrag says plainly when kernel lockdown's confidentiality mode keeps it from loading, and --check shows the lockdown mode; the README and every release page say what each release file is for.
 
-* Wed Nov 04 2026 Shane Fagan <mail@shanefagan.com> - 0.12.2-1
+* Wed Nov 04 2026 Shane Fagan <shane@performativenonsense.com> - 0.12.2-1
 - A match needs more traffic from outside than over loopback; Deadlock's relay pings at startup no longer start one.
 
-* Wed Nov 04 2026 Shane Fagan <mail@shanefagan.com> - 0.12.1-1
+* Wed Nov 04 2026 Shane Fagan <shane@performativenonsense.com> - 0.12.1-1
 - A load lasts until the game is back at its usual rate
 
-* Tue Nov 03 2026 Shane Fagan <mail@shanefagan.com> - 0.12.0-1
+* Tue Nov 03 2026 Shane Fagan <shane@performativenonsense.com> - 0.12.0-1
 - Loading mid-match is left out of the gap figures
 
-* Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.11.1-1
+* Mon Nov 02 2026 Shane Fagan <shane@performativenonsense.com> - 0.11.1-1
 - Tier ignores relay-ping bursts; a short menu between games splits them
 
-* Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.11.0-1
+* Mon Nov 02 2026 Shane Fagan <shane@performativenonsense.com> - 0.11.0-1
 - Gaps between updates at the usual rate; tier from the update rate
 
-* Mon Nov 02 2026 Shane Fagan <mail@shanefagan.com> - 0.10.0-1
+* Mon Nov 02 2026 Shane Fagan <shane@performativenonsense.com> - 0.10.0-1
 - Gap figures cover play; tiers only go up; fewer false matches
 
-* Fri Oct 30 2026 Shane Fagan <mail@shanefagan.com> - 0.9.2-1
+* Fri Oct 30 2026 Shane Fagan <shane@performativenonsense.com> - 0.9.2-1
 - Fix a way for any user to hang the daemon; keep others' mid-match changes and unrestorable originals; unit hardening
 
-* Fri Oct 30 2026 Shane Fagan <mail@shanefagan.com> - 0.9.1-1
+* Fri Oct 30 2026 Shane Fagan <shane@performativenonsense.com> - 0.9.1-1
 - Formatting fix so CI passes; no code changes
 
-* Fri Oct 30 2026 Shane Fagan <mail@shanefagan.com> - 0.9.0-1
+* Fri Oct 30 2026 Shane Fagan <shane@performativenonsense.com> - 0.9.0-1
 - D-Bus: match state, Steam app id and real match times for clients
 
-* Fri Oct 30 2026 Shane Fagan <mail@shanefagan.com> - 0.8.0-1
+* Fri Oct 30 2026 Shane Fagan <shane@performativenonsense.com> - 0.8.0-1
 - Only traffic that reaches the network makes a match; server following and match timelines
 
-* Thu Oct 29 2026 Shane Fagan <mail@shanefagan.com> - 0.7.2-1
+* Thu Oct 29 2026 Shane Fagan <shane@performativenonsense.com> - 0.7.2-1
 - Count busy-polled packets per match
 
-* Thu Oct 29 2026 Shane Fagan <mail@shanefagan.com> - 0.7.1-1
+* Thu Oct 29 2026 Shane Fagan <shane@performativenonsense.com> - 0.7.1-1
 - Docs: Path of Exile 2 traffic findings; thin-stream TCP timeouts experiment
 
-* Thu Oct 29 2026 Shane Fagan <mail@shanefagan.com> - 0.7.0-1
+* Thu Oct 29 2026 Shane Fagan <shane@performativenonsense.com> - 0.7.0-1
 - Log a tagged game's UDP and TCP traffic (BPFRAG_OBSERVE=1)
 
-* Thu Oct 29 2026 Shane Fagan <mail@shanefagan.com> - 0.6.0-1
+* Thu Oct 29 2026 Shane Fagan <shane@performativenonsense.com> - 0.6.0-1
 - Daily random experiments; observe games that talk TCP; issue form for match data
 
-* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.5.1-1
+* Wed Oct 28 2026 Shane Fagan <shane@performativenonsense.com> - 0.5.1-1
 - Released bulk flows stop being demoted at once; IPv6 receive checksum; D-Bus empty interface name
 
-* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.5.0-1
+* Wed Oct 28 2026 Shane Fagan <shane@performativenonsense.com> - 0.5.0-1
 - Read-only D-Bus interface for following matches
 
-* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.4.1-1
+* Wed Oct 28 2026 Shane Fagan <shane@performativenonsense.com> - 0.4.1-1
 - Consecutive matches no longer merge into one
 
-* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.4.0-1
+* Wed Oct 28 2026 Shane Fagan <shane@performativenonsense.com> - 0.4.0-1
 - A/B experiments; --check shows every setting against its tier; distribution defaults
 
-* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.3.1-1
+* Wed Oct 28 2026 Shane Fagan <shane@performativenonsense.com> - 0.3.1-1
 - Stalls ignore lobbies; path holds through quiet spells; the game's own socket drops
 
-* Wed Oct 28 2026 Shane Fagan <mail@shanefagan.com> - 0.3.0-1
+* Wed Oct 28 2026 Shane Fagan <shane@performativenonsense.com> - 0.3.0-1
 - Bulk demotion during matches; docs on every setting
 
-* Tue Oct 27 2026 Shane Fagan <mail@shanefagan.com> - 0.2.1-1
+* Tue Oct 27 2026 Shane Fagan <shane@performativenonsense.com> - 0.2.1-1
 - tc programs no longer stop CAKE's IFB redirect (download shaping) during matches
 
-* Tue Oct 27 2026 Shane Fagan <mail@shanefagan.com> - 0.2.0-1
+* Tue Oct 27 2026 Shane Fagan <shane@performativenonsense.com> - 0.2.0-1
 - Requires kernel 6.6+; --report for bug reports; packages enable the service on install
 
-* Tue Oct 27 2026 Shane Fagan <mail@shanefagan.com> - 0.1.1-1
+* Tue Oct 27 2026 Shane Fagan <shane@performativenonsense.com> - 0.1.1-1
 - Build path no longer embedded in the binary
 
-* Wed Oct 21 2026 Shane Fagan <mail@shanefagan.com> - 0.1.0-1
+* Wed Oct 21 2026 Shane Fagan <shane@performativenonsense.com> - 0.1.0-1
 - Initial package

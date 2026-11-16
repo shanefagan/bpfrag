@@ -23,7 +23,7 @@ esac
 case $new in *[!0-9.]*) echo "version must look like 1.2.3" >&2; exit 2 ;; esac
 
 cd "$(dirname "$0")/.."
-maint=${MAINTAINER:-"Shane Fagan <mail@shanefagan.com>"}
+maint=${MAINTAINER:-"Shane Fagan <shane@performativenonsense.com>"}
 old=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 [ "$old" != "$new" ] || { echo "already at $new" >&2; exit 1; }
 

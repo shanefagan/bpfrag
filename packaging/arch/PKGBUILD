@@ -1,4 +1,4 @@
-# Maintainer: Shane Fagan <mail@shanefagan.com>
+# Maintainer: Shane Fagan <shane@performativenonsense.com>
 #
 # Builds bpfrag from the git checkout this PKGBUILD lives in:
 #   cd packaging/arch && makepkg -si
