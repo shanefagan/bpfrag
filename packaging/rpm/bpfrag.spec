@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.17.1
+Version:        0.18.0
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Mon Nov 16 2026 Shane Fagan <mail@shanefagan.com> - 0.18.0-1
+- A TCP game's health line has the gaps between its receives and its own retransmissions; an experiment's match says when its setting had nothing to do.
+
 * Sat Nov 14 2026 Shane Fagan <mail@shanefagan.com> - 0.17.1-1
 - A game tagged BPFRAG_OBSERVE=1 that talks TCP is tuned again, and a TCP game's match writes a timeline.
 
