@@ -28,8 +28,16 @@ the project is being worked on.
 
 ## Reporting
 
-Email <mail@shanefagan.com>. Reports are read by the maintainer and kept
-private. Say what happened and where, with links if there are any.
+There's no email address for this. Two routes, both private:
+
+- To the maintainer: the repository's
+  [private report form](https://github.com/shanefagan/bpfrag/security/advisories/new)
+  (**Security** tab, **Report a vulnerability**). It's built for
+  security reports, but only the maintainer sees what's sent, so start
+  the title with "Conduct:" and say what happened and where, with links.
+- To GitHub: the **Report content** entry in the menu on any comment,
+  issue or pull request, for abuse, spam or anything that needs GitHub
+  to act.
 
 ## What happens
 

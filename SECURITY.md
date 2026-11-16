@@ -13,7 +13,8 @@ into a new release and aren't backported.
 Please don't open a public issue. Use GitHub's private reporting: on the
 repository's **Security** tab, **Report a vulnerability**
 ([direct link](https://github.com/shanefagan/bpfrag/security/advisories/new)).
-If that isn't possible, email <mail@shanefagan.com>.
+It goes to the maintainer only, and needs a GitHub account. There's no
+email address for reports.
 
 Useful in a report: the bpfrag version (`bpfrag --version`), the
 distribution and kernel, what an attacker needs to start with (a local
