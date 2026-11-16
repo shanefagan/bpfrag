@@ -52,7 +52,7 @@ STALL_MS = 100
 
 # "# bpfrag 0.16.3 (dry run); Deadlock (pid 1) [Steam app 1422450]; experiment: writeback off"
 HEADER = re.compile(
-    r"^# bpfrag (\S+)( \(dry run\))?; (.+?) \(pid (\d+)\)(?: \[.*?\])?"
+    r"^# bpfrag (\S+)( \(dry run\))?; (.+?) \(pid (\d+)\)(?: \[.*?\])?( over TCP)?"
     r"(?:; experiment: (?:none|(.+?) (on|off)))?$"
 )
 
@@ -112,7 +112,9 @@ class Match:
         m = HEADER.match(first)
         if not m:
             raise ValueError(f"{path}: not a bpfrag timeline")
-        self.version, dry, self.game, _, self.setting, self.arm = m.groups()
+        self.version, dry, self.game, _, tcp, self.setting, self.arm = m.groups()
+        # a game that talks TCP: gaps between its receives, not arrivals
+        self.tcp = tcp is not None
         self.dry_run = dry is not None
         stamp = re.match(r"(\d{4}-\d\d-\d\d)_(\d\d)-(\d\d)", self.name)
         self.when = f"{stamp[1]} {stamp[2]}:{stamp[3]}" if stamp else self.name
@@ -634,15 +636,16 @@ def main():
             print(f"skipped {p}: {e}", file=sys.stderr)
     if not matches:
         sys.exit("no timelines")
-    # A game that talks TCP has a timeline with no gap figures: listed in
-    # the CSV, left out of the graphs, where it would look like a match
-    # with no long gaps at all.
+    # A game that talks TCP is listed in the CSV and left out of the graphs:
+    # its gaps are between its receives, at its own message rate, so they
+    # don't sit on one scale with a UDP game's (and before 0.18.0 its
+    # timeline had no gap figures at all).
     every = matches
-    matches = [m for m in matches if m.play]
+    matches = [m for m in matches if m.play and not m.tcp]
     if len(matches) < len(every):
         print(
-            f"left out of the graphs: {len(every) - len(matches)} timelines with no gap "
-            "figures (TCP games, or too short to have play)",
+            f"left out of the graphs: {len(every) - len(matches)} timelines of games that "
+            "talk TCP, or with no gap figures",
             file=sys.stderr,
         )
     if not matches:
@@ -676,6 +679,7 @@ def main():
         [
             "match",
             "game",
+            "transport",
             "version",
             "dry_run",
             "setting",
@@ -694,6 +698,7 @@ def main():
             [
                 m.when,
                 m.game,
+                "tcp" if m.tcp else "udp",
                 m.version,
                 "yes" if m.dry_run else "",
                 m.setting or "",

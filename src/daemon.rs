@@ -206,6 +206,10 @@ pub struct Tuner<'a> {
     tcp_ending: Option<Summary>,
     /// The match's game's own TCP bytes: at its first tick, and now.
     game_tcp: (Option<u64>, u64),
+    /// The game's TCP retransmissions counted when the match began.
+    tcp_retrans_base: u64,
+    /// The retransmission hook attached, so the count means something.
+    tcp_retrans_counted: bool,
     /// Processes tagged BPFRAG_OBSERVE=1, when /proc was last listed for
     /// new ones, and their UDP and TCP sessions.
     tagged: Tagged,
@@ -269,6 +273,7 @@ impl<'a> Tuner<'a> {
         }
 
         let mut links = Vec::new();
+        let mut tcp_retrans_counted = false;
         {
             let p = &skel.progs;
             for (what, prog) in [
@@ -277,6 +282,18 @@ impl<'a> Tuner<'a> {
                 ("sched_process_exit", &p.bpfrag_exit),
             ] {
                 links.push(prog.attach().with_context(|| format!("attaching {what}"))?);
+            }
+            // Only a figure in a TCP game's health line depends on this
+            // one, so bpfrag runs without it.
+            match p.bpfrag_tcp_retransmit.attach() {
+                Ok(l) => {
+                    links.push(l);
+                    tcp_retrans_counted = true;
+                }
+                Err(e) => warn!(
+                    "Can't count TCP retransmissions (attaching tcp_retransmit_skb: {e}); \
+                     a TCP game's health line will leave them out"
+                ),
             }
         }
 
@@ -293,6 +310,8 @@ impl<'a> Tuner<'a> {
             tcp_matched: HashSet::new(),
             tcp_ending: None,
             game_tcp: (None, 0),
+            tcp_retrans_base: 0,
+            tcp_retrans_counted,
             tagged: Tagged::default(),
             tagged_scan: None,
             observed: [
@@ -486,6 +505,7 @@ impl<'a> Tuner<'a> {
         self.marker.detach_all(&self.skel);
         self.meter.detach_all(&self.skel);
         maps::clear_port_rx(&self.skel);
+        maps::tcp_match(&mut self.skel, false);
         self.health.finish();
         self.egress.reset();
         self.bulk.reset();
@@ -576,6 +596,9 @@ impl<'a> Tuner<'a> {
                 // take the health baselines before anything changes.
                 maps::clear_port_rx(&self.skel);
                 maps::track_ports(&self.skel, s.tgid, true);
+                // a TCP game's receives feed the meter in place of packets
+                maps::tcp_match(&mut self.skel, s.transport == Transport::Tcp);
+                self.tcp_retrans_base = self.tcp_retransmits();
                 self.health.start(s.tgid, &self.candidates(&s));
                 self.started_unix = stats::now_unix();
                 self.app_id = self.procs.app_id(s.tgid);
@@ -630,16 +653,25 @@ impl<'a> Tuner<'a> {
                 let timeline = self
                     .finish_timeline(&format!("match ended ({reason})"), Some((ports, reading)));
                 let mut health = self.health.finish();
-                // A TCP game has no packet gaps or UDP sockets to report:
-                // its line is the TCP observer's summary.
+                // A TCP game's line also has the TCP observer's summary of
+                // its session, and its retransmissions.
                 let tcp = (session.transport == Transport::Tcp).then(|| {
-                    health = None;
-                    self.tcp_ending.take().or_else(|| {
+                    let summary = self.tcp_ending.take().or_else(|| {
                         self.tcp_games
                             .as_ref()
                             .and_then(|o| o.current(session.tgid))
-                    })
+                    });
+                    let retrans = self.tcp_retransmits().saturating_sub(self.tcp_retrans_base);
+                    (summary, retrans)
                 });
+                if let (Some((summary, retrans)), Some(h)) = (&tcp, health.as_mut()) {
+                    h.tcp = Some(
+                        summary
+                            .as_ref()
+                            .map_or_else(|| "session, no figures".into(), Summary::details),
+                    );
+                    h.tcp_retransmits = self.tcp_retrans_counted.then_some(*retrans);
+                }
                 if let Some(h) = health.as_mut() {
                     h.bulk = self.bulk.moved();
                     h.bulk_class = self.bulk_marks().then(|| self.cfg.bulk.class.clone());
@@ -684,16 +716,6 @@ impl<'a> Tuner<'a> {
                 }
                 if let Some(h) = health {
                     info!("{}: {}", session.name, h.summary());
-                }
-                if let Some(t) = tcp {
-                    let mut line = match t {
-                        Some(s) => format!("TCP {}", s.details()),
-                        None => "TCP, no figures".into(),
-                    };
-                    if let Some(a) = &arm_noted {
-                        line += &format!("; experiment: {a}");
-                    }
-                    info!("{}: {line}", session.name);
                 }
                 if let Some(p) = timeline {
                     info!("{}: timeline written to {}", session.name, p.display());
@@ -800,6 +822,9 @@ impl<'a> Tuner<'a> {
                 }
             }
         }
+        let retrans =
+            (s.transport == Transport::Tcp && self.tcp_retrans_counted && self.timeline.is_some())
+                .then(|| self.tcp_retransmits());
         if let Some(t) = self.timeline.as_mut() {
             let row = health::timeline::Row {
                 tier: s.tier.name(),
@@ -809,6 +834,7 @@ impl<'a> Tuner<'a> {
                 peers: self.health.active_peers(),
                 reading: Some(reading),
                 send: send_reading(&sends, &ports, reading),
+                tcp_retransmits: retrans,
             };
             if let Err(e) = t.row(&row) {
                 warn!("Capture: can't write {}: {e}", t.path().display());
@@ -1201,12 +1227,18 @@ impl<'a> Tuner<'a> {
         }
         let dir = Path::new(&self.cfg.general.run_dir).join("captures");
         let about = format!(
-            "bpfrag {}{}; {} (pid {}) [{}]; experiment: {}",
+            "bpfrag {}{}; {} (pid {}) [{}]{}; experiment: {}",
             env!("CARGO_PKG_VERSION"),
             if self.dry_run { " (dry run)" } else { "" },
             s.name,
             s.tgid,
             s.reason,
+            // its gaps are between receives, not arrivals
+            if s.transport == Transport::Tcp {
+                " over TCP"
+            } else {
+                ""
+            },
             self.arm
                 .as_ref()
                 .map_or_else(|| "none".to_string(), experiment::Arm::label),
@@ -1293,6 +1325,12 @@ impl<'a> Tuner<'a> {
                 }
             }
         }
+    }
+
+    /// Segments the game's TCP connections have sent again, since bpfrag
+    /// started.
+    fn tcp_retransmits(&self) -> u64 {
+        maps::read_global_stats(&self.skel)[bpf_intf::STAT_GAME_TCP_RETRANS as usize]
     }
 
     /// This match's experiment arm, or "" (for the D-Bus signals).

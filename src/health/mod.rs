@@ -260,6 +260,15 @@ pub struct Health {
     /// downloads, voice through the game's servers).
     #[serde(default)]
     pub game_tcp_bytes: u64,
+    /// A game that talks TCP: its session as the TCP observer sums it up
+    /// ("for 20m09s: typically 13 sends/s ..."). With it, the gaps are
+    /// between the game's receives, not between packets arriving.
+    #[serde(default)]
+    pub tcp: Option<String>,
+    /// Segments the game's TCP connections sent again during the match
+    /// (TCP games only).
+    #[serde(default)]
+    pub tcp_retransmits: Option<u64>,
     /// Times the game moved to another server (`peers`) without going
     /// quiet: back-to-back games the detector saw as one match, or one
     /// game moving mid-match (Steam's relays route through new ones).
@@ -308,11 +317,25 @@ impl Health {
 
     /// One line for the log and `--monitor`.
     pub fn summary(&self) -> String {
+        // a TCP game's gaps are between its receives (what it waits for
+        // when a segment is lost), a UDP game's between packets arriving
+        let what = if self.tcp.is_some() {
+            "receive gaps"
+        } else {
+            "packet gaps"
+        };
         let gaps = match &self.gaps {
-            Some(g) => format!("packet gaps {}", g.describe()),
-            None => "packet gaps not measured".into(),
+            Some(g) => format!("{what} {}", g.describe()),
+            None => format!("{what} not measured"),
         };
         let mut s = gaps;
+        if let Some(n) = self.tcp_retransmits {
+            s += &match n {
+                0 => "; none of its own segments sent again".into(),
+                1 => "; 1 of its own segments sent again".into(),
+                n => format!("; {n} of its own segments sent again"),
+            };
+        }
         if let Some(t) = &self.send {
             s += &format!(
                 "; the game's own sending: longest gap {:.0} ms, {} stall{}",
@@ -349,7 +372,9 @@ impl Health {
                 )
             }
         }
-        if self.game_tcp_bytes >= 1_000_000 {
+        if let Some(t) = &self.tcp {
+            s += &format!("; TCP {t}");
+        } else if self.game_tcp_bytes >= 1_000_000 {
             s += &format!("; the game's own TCP: {}", size(self.game_tcp_bytes));
         }
         if !self.bulk.is_empty() {
@@ -1285,6 +1310,28 @@ mod tests {
         let g = port.silent(&mut p).unwrap();
         assert_eq!(g.stalls, 0, "{g:?}");
         assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn a_tcp_games_line_says_receive_gaps_and_retransmissions() {
+        let mut h = Health {
+            tcp: Some("for 20m09s: typically 13 sends/s and 30 receives/s".into()),
+            tcp_retransmits: Some(0),
+            ..Default::default()
+        };
+        assert_eq!(
+            h.summary(),
+            "receive gaps not measured; none of its own segments sent again; no drops; \
+             TCP for 20m09s: typically 13 sends/s and 30 receives/s"
+        );
+        h.tcp_retransmits = Some(3);
+        h.experiment = Some("writeback off".into());
+        assert!(
+            h.summary().contains("; 3 of its own segments sent again; ")
+                && h.summary().ends_with("; experiment: writeback off"),
+            "{}",
+            h.summary()
+        );
     }
 
     #[test]

@@ -125,6 +125,14 @@ pub fn count_tcp(skel: &mut BpfSkel, on: bool) {
     }
 }
 
+/// The match's game talks TCP: time its receives as the meter times a UDP
+/// game's arrivals (or stop).
+pub fn tcp_match(skel: &mut BpfSkel, on: bool) {
+    if let Some(bss) = skel.maps.bss_data.as_deref_mut() {
+        bss.tcp_match = on;
+    }
+}
+
 /// Count `tgid`'s TCP at any time (or stop): it's tagged BPFRAG_OBSERVE=1.
 pub fn observe(skel: &BpfSkel, tgid: u32, on: bool) {
     set_flag(&skel.maps.observe_tgids, tgid, on, "observe");

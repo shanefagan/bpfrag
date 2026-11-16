@@ -11,7 +11,9 @@
  * the Rust side, where they are easy to test and cannot upset the verifier.
  *
  * Hooks (kernel 6.6+):
- *   raw_tp/sock_send_length, raw_tp/sock_recv_length  UDP and TCP counting per process
+ *   raw_tp/sock_send_length, raw_tp/sock_recv_length  UDP and TCP counting per process,
+ *                                                     a TCP game's receive gaps
+ *   raw_tp/tcp_retransmit_skb                         a game's own TCP retransmissions
  *   raw_tp/sched_process_exit                         game exit -> revert now
  *   tc egress (tcx link)                              DSCP marking (game UDP ports,
  *                                                     game TCP connections, bulk flows)
@@ -50,6 +52,9 @@ const volatile __u8 bulk_dscp = 1;		/* LE: RFC 8622 lower effort */
  * some process is bulk.
  */
 volatile bool count_tcp = false;
+/* The match's game talks TCP: its receives are timed like a UDP game's
+ * arrivals (per local port, into port_rx). */
+volatile bool tcp_match = false;
 volatile bool observe_on = false;
 volatile bool bulk_on = false;
 /* Which of userspace's readings (one a second) gaps fall in: each game
@@ -308,6 +313,9 @@ static __always_inline void record_departure(__u32 port)
 	pt->resume_n = 0;
 }
 
+static __always_inline void record_arrival(__u32 port, __u32 napi_id);
+static __always_inline bool game_owns_flow(struct flow_key *k);
+
 /* Remember a game's TCP connection so the marker can find its packets. */
 static __always_inline void learn_game_flow(struct sock *sk, unsigned short family, __u32 tgid)
 {
@@ -395,6 +403,16 @@ static __always_inline void account(struct sock *sk, long ret, bool tx)
 		/* the game's own TCP: marked like its UDP. A game that talks
 		 * only TCP has no UDP send to learn its device from. */
 		learn_game_flow(sk, family, tgid);
+		/* A TCP game's receives are timed where a UDP game's packets
+		 * are timed on arrival: when a segment is lost, the ones behind
+		 * it still reach the NIC, but the game gets nothing until the
+		 * retransmission lands, and that wait is what it feels. */
+		if (!tx && tcp_match) {
+			__u32 lport = BPF_CORE_READ(sk, __sk_common.skc_num);
+
+			if (lport)
+				record_arrival(lport, 0);
+		}
 		if (tx && !st->tx_pkts && (st->tcp_tx_msgs & 63) == 1) {
 			struct dst_entry *dst = BPF_CORE_READ(sk, sk_dst_cache);
 
@@ -465,6 +483,26 @@ int BPF_PROG(bpfrag_recv_tp, struct sock *sk, int ret, int flags)
 	if (flags & (MSG_PEEK | MSG_ERRQUEUE))
 		return 0;
 	account(sk, ret, false);
+	return 0;
+}
+
+/* A segment sent again on one of the game's TCP connections: what this
+ * machine sent was lost (or its acknowledgement was) on the way. The
+ * server's own retransmissions can't be seen from here; they show as gaps
+ * between the game's receives. */
+SEC("raw_tp/tcp_retransmit_skb")
+int BPF_PROG(bpfrag_tcp_retransmit, struct sock *sk)
+{
+	struct flow_key k = {};
+	unsigned short family;
+
+	if (!count_tcp)
+		return 0;
+	family = BPF_CORE_READ(sk, __sk_common.skc_family);
+	if (!sock_flow_key(sk, family, IPPROTO_TCP, &k))
+		return 0;
+	if (game_owns_flow(&k))
+		stat_inc(STAT_GAME_TCP_RETRANS);
 	return 0;
 }
 

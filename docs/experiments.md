@@ -698,7 +698,7 @@ it.
 | M6 | Frame times: a MangoHud log joined to matches by time | 14, busy polling |
 | M7 | The game's peer address (or its network) per match. Partly done: the server is followed and named by a letter per address within a match ("server A:27031"), without the address itself; comparing servers across matches would need a stable name for one | 17, 22 |
 | M8 | Sub-millisecond arrival timing. Done in 0.13.0: jitter (mean change between consecutive gaps at game rate) to the microsecond, per match and per second | 5, 13 |
-| M9 | The game's own TCP retransmissions and timeouts (the `tcp_retransmit_skb` tracepoint carries the socket, so it can be tied to the game's connection) | 21 |
+| M9 | The game's own TCP retransmissions (done in 0.18.0 for games that talk TCP: counted from the `tcp_retransmit_skb` tracepoint, in the health line and the timeline). Still to do: telling a timeout from a fast retransmission | 21 |
 | M10 | Health while a match is on: the gap figures, stalls and drops so far, as a D-Bus property refreshed every few seconds, not only in `MatchEnded`. For an overlay, a game or a support tool to say "your side is fine" during play | 23 |
 
 ## Out of scope

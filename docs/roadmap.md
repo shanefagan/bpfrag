@@ -50,12 +50,11 @@ from. These extend that.
 
 ## Next: detection
 
-- **TCP games' health.** Since 0.17 a game whose TCP looks like a
-  multiplayer game's is tuned like a match, with a summary of its
-  session at the end but no gap figures. Next: time the game's receives
-  (what it feels when a lost segment holds the rest back; arrival gaps at
-  the NIC don't show that) and count its retransmissions and timeouts
-  (M9), so its health line can say where a freeze came from.
+- **TCP games' health, checked against real play.** Since 0.18 a TCP
+  game's health line has the gaps between its receives and its own
+  retransmissions. Whether "100 ms to 2 s, then the usual rate" is the
+  right stall for games that tick 10 to 30 times a second needs sessions
+  to tell: Path of Exile 2 in maps and towns, World of Warcraft.
 - **Back-to-back games** (experiment 22): where one match ends when the
   next starts in the same process, from the timelines already collected.
 - **Hosted servers** (experiment 24): what a game server on the same

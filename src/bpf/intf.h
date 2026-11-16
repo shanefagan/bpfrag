@@ -34,6 +34,7 @@ enum stat_idx {
 	STAT_EXITS,		/* exit events delivered */
 	STAT_EVENTS_DROPPED,	/* ring buffer full */
 	STAT_BULK_MARKED,	/* bulk packets demoted (egress and ingress) */
+	STAT_GAME_TCP_RETRANS,	/* segments the game's TCP connections sent again */
 	NR_STATS,
 };
 

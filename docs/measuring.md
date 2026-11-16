@@ -276,6 +276,8 @@ bpfrag version, the game and the experiment arm, then a row a second:
 | `stalls` | stalls that finished that second |
 | `jitter_us` | how much each gap at game rate differed from the one before, on average, in µs (0.13.0) |
 | `send_gap_max_ms`, `send_stalls` | the game's own sending that second: its longest gap between sends and the stalls (100 ms to 2 s) that ended in it (0.13.0) |
+| `tcp_tx_msgs_s`, `tcp_rx_msgs_s` | the game's TCP send and receive calls that second (0.18.0) |
+| `tcp_retransmits` | segments the game's TCP connections sent again that second; only for a game that talks TCP (0.18.0) |
 | `events` | match start and end, tier changes, server changes, the server going quiet for 2 s or more while the game kept sending (a stall in the match's summary; the `stalls` column is the meter's own count and doesn't include it) |
 
 There are no addresses in it, so it can be attached to a "Share match

@@ -25,7 +25,13 @@
 //! | `stalls` | stalls the meter finished counting this second |
 //! | `send_gap_max_ms`, `send_stalls` | the game's own sending, timed as it sends: its longest gap that second (ms) and stalls (100 ms to 2 s) ended in it; a stall in `stalls` with none here is the network or the server |
 //! | `jitter_us` | how much each gap at game rate differed from the one before, on average, to the microsecond |
+//! | `tcp_tx_msgs_s`, `tcp_rx_msgs_s` | the game's TCP send and receive calls this second |
+//! | `tcp_retransmits` | segments its TCP connections sent again this second (a game that talks TCP; empty otherwise) |
 //! | `events` | match start and end, tier and server changes, outages |
+//!
+//! For a game that talks TCP (the first line says "over TCP"), the gap
+//! columns are between the game's receives on its TCP connections, keyed
+//! by local port like a UDP game's, and the server columns are empty.
 //!
 //! Addresses aren't written, only letters, so a timeline can be shared.
 //! Timelines live in the run directory (`/run/bpfrag`, in memory), so a
@@ -47,7 +53,8 @@ type PortSoFar = (u64, [u64; BUCKETS], u64, u64, u64);
 
 const HEADER: &str = "t,unix,tier,udp_tx_pps,udp_rx_pps,udp_tx_bytes_s,udp_rx_bytes_s,\
 tcp_tx_bytes_s,tcp_rx_bytes_s,server,server_pps,peers,port,gaps,gap_p50_ms,gap_p99_ms,\
-gap_max_ms,stalls,jitter_us,send_gap_max_ms,send_stalls,events";
+gap_max_ms,stalls,jitter_us,send_gap_max_ms,send_stalls,tcp_tx_msgs_s,tcp_rx_msgs_s,\
+tcp_retransmits,events";
 
 /// What one row reports, besides the time.
 #[derive(Default)]
@@ -66,6 +73,9 @@ pub struct Row<'a> {
     /// The game's sending: stalls so far, and this reading's longest gap
     /// (ns), as health gets them.
     pub send: Option<(u64, u64)>,
+    /// Segments the game's TCP connections have sent again so far (a game
+    /// that talks TCP), as a running count.
+    pub tcp_retransmits: Option<u64>,
 }
 
 pub struct Timeline {
@@ -77,6 +87,7 @@ pub struct Timeline {
     /// Each port's packets, histogram and stall count at the last row.
     prev_ports: HashMap<u16, PortSoFar>,
     prev_send_stalls: Option<u64>,
+    prev_retrans: Option<u64>,
     events: Vec<String>,
 }
 
@@ -113,6 +124,7 @@ impl Timeline {
             prev: None,
             prev_ports: HashMap::new(),
             prev_send_stalls: None,
+            prev_retrans: None,
             events: Vec::new(),
         })
     }
@@ -143,6 +155,22 @@ impl Timeline {
             ],
             _ => Default::default(),
         };
+        let tcp_msgs = match (r.sample, self.prev.as_ref()) {
+            (Some(s), Some(p)) => format!(
+                "{},{}",
+                rate(s.tcp_tx_msgs, p.tcp_tx_msgs),
+                rate(s.tcp_rx_msgs, p.tcp_rx_msgs)
+            ),
+            _ => ",".into(),
+        };
+        let retrans = match r.tcp_retransmits {
+            Some(n) => {
+                let d = n.saturating_sub(self.prev_retrans.unwrap_or(n));
+                self.prev_retrans = Some(n);
+                d.to_string()
+            }
+            None => String::new(),
+        };
         if let Some(s) = r.sample {
             self.prev = Some(*s);
         }
@@ -168,7 +196,7 @@ impl Timeline {
         let events = std::mem::take(&mut self.events).join("; ");
         writeln!(
             self.out,
-            "{:.1},{unix},{},{},{server},{server_pps},{},{},{send},{}",
+            "{:.1},{unix},{},{},{server},{server_pps},{},{},{send},{tcp_msgs},{retrans},{}",
             now.duration_since(self.start).as_secs_f64(),
             r.tier,
             rates.join(","),

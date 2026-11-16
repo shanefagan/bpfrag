@@ -207,12 +207,29 @@ exits or its TCP goes quiet for 30 seconds. Its packets are marked like a
 UDP game's: every TCP connection the game sends on, matched by the whole
 connection (addresses and ports), since a game that opens a new connection
 per zone leaves local ports behind that other processes soon reuse. Bulk
-demotion, Wi-Fi power save and the experiments work as for any match. There
-are no packet gap figures yet; the end-of-match line is the session's
-rates, message sizes and how steady it was, and with `[capture] timeline
-= true` its timeline has the game's TCP bytes each second
-(`docs/scripts/graphs.py` lists such timelines but leaves them out of its
-graphs). Rates are of send and receive
+demotion, Wi-Fi power save and the experiments work as for any match.
+
+Its health line (0.18.0) has the same figures as a UDP game's, measured
+where a TCP game feels them: the gaps are between the game's receives,
+not between packets arriving. When a segment is lost, the packets behind
+it still reach the machine, but the game gets nothing until the
+retransmission lands. The line also counts the segments the game's own
+connections sent again (what this machine sent and lost; the server's
+retransmissions can't be seen from here, and show as receive gaps), and
+ends with the session's rates and message sizes:
+
+```
+Path of Exile 2: receive gaps half ≤33 ms, 99% ≤41 ms, longest 212 ms, 1 stall (100 ms+), jitter 900 µs; none of its own segments sent again; no drops; TCP for 20m09s: typically 13 sends/s and 30 receives/s, 11 and 158 bytes each, rate variation 0.09, 3 MB in all
+```
+
+A stall is counted as for UDP: nothing for 100 ms to 2 s, then the usual
+rate again. Longer quiet (a town, a loading screen, where a game sends a
+message or two a second) isn't one. Receives within 4 ms of each other
+count as one. With `[capture] timeline = true` its timeline says "over
+TCP" in its first line and has the same columns, plus the game's TCP
+messages and retransmissions each second; `docs/scripts/graphs.py` lists
+such timelines but leaves them out of its graphs, and `matches.py` gives
+them `transport` = `tcp` and compares them apart from UDP games. Rates are of send and receive
 calls, not packets. "Rate variation" is the mean deviation of the
 per-second rate over its mean: near 0 for a game that ticks like a
 metronome, far above 1 for a download.

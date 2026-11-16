@@ -134,6 +134,14 @@ class Process:
             self.proc.wait()
 
 
+    def freeze(self, secs):
+        """Stop the process dead for `secs`: for a game, a hiccup in both
+        directions."""
+        self.proc.send_signal(signal.SIGSTOP)
+        time.sleep(secs)
+        self.proc.send_signal(signal.SIGCONT)
+
+
 class Game(Process):
     """The fake game: a process that looks like a Steam game to bpfrag and
     sends `rate` packets a second of `size` bytes to the echo server."""
@@ -150,23 +158,20 @@ class Game(Process):
         """Change the send rate (the game reads it within a second)."""
         self.ctl.write_text(str(rate))
 
-    def freeze(self, secs):
-        """Stop the game dead for `secs`: a hiccup in both directions."""
-        self.proc.send_signal(signal.SIGSTOP)
-        time.sleep(secs)
-        self.proc.send_signal(signal.SIGCONT)
-
 
 class Health(dict):
     """A match's health line, as numbers.
 
     The one place that knows the line's wording. Keys: p50_ms, p99_ms,
-    longest_ms, stalls, jitter_us, send_longest_ms, send_stalls (those
-    present in the line), and `line`, the text itself.
+    longest_ms, stalls, jitter_us, send_longest_ms, send_stalls,
+    tcp_retransmits (those present in the line), and `line`, the text
+    itself. A game that talks TCP has "receive gaps" where a UDP one has
+    "packet gaps".
     """
 
     FIELDS = (
-        ("p50_ms", r"packet gaps half ≤(\d+) ms"),
+        ("p50_ms", r"(?:packet|receive) gaps half ≤(\d+) ms"),
+        ("tcp_retransmits", r"(\d+|none) of its own segments sent again"),
         ("longest_ms", r"gaps half[^;]*?longest (\d+) ms"),
         ("stalls", r"gaps half[^;]*?(\d+) stalls? \(100 ms\+\)"),
         ("jitter_us", r"jitter (\d+) µs"),
@@ -186,7 +191,7 @@ class Health(dict):
         for key, pattern in self.FIELDS:
             m = re.search(pattern, line)
             if m:
-                self[key] = int(m.group(1))
+                self[key] = 0 if m.group(1) == "none" else int(m.group(1))
 
 
 class Daemon:
@@ -247,7 +252,7 @@ class Daemon:
 
     def health(self, game="fakeshooter", timeout=10.0, count=1):
         """The health line of the game's latest match, once it's logged."""
-        return Health(self.wait_for(rf"{game}: packet gaps", timeout, count))
+        return Health(self.wait_for(rf"{game}: (?:packet|receive) gaps", timeout, count))
 
     # -- asking it things ------------------------------------------------
 

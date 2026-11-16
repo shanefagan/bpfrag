@@ -32,11 +32,18 @@ STAMP = re.compile(
 )
 STARTED = re.compile(r"bpfrag (\S+) started( in dry-run mode)?")
 DETECTED = re.compile(r"Match detected: (.+?) \(pid \d+\) at ~(\d+) pkt/s .* -> (\w+) \[(.*)\]$")
+# a game that talks TCP: "... talks TCP like a multiplayer game, ~13 sends/s
+# and ~30 receives/s -> COMPETITIVE until it stops [Steam app 1]"
+DETECTED_TCP = re.compile(
+    r"Match detected: (.+?) \(pid \d+\) talks TCP like a multiplayer game, ~(\d+) sends/s "
+    r"and ~(\d+) receives/s -> (\w+) until it stops \[(.*)\]$"
+)
+RETRANS = re.compile(r"; (\d+|none) of its own segments sent again")
 RETIER = re.compile(r": traffic now ~\d+ pkt/s .*; (\w+) -> (\w+)$")
 ENDED = re.compile(r"Match ended after (\S+) \((.*)\); settings restored")
 SEND = re.compile(r"the game's own sending: longest gap (\d+) ms, (\d+) stalls?")
 GAPS = re.compile(
-    r"packet gaps half (≤\d+|over \d+) ms, 99% (≤\d+|over \d+) ms, "
+    r"(?:packet|receive) gaps half (≤\d+|over \d+) ms, 99% (≤\d+|over \d+) ms, "
     r"longest (\d+) ms, (\d+) stalls? \(100 ms\+\)(?:, jitter (\d+) µs)?"
 )
 DROPS = re.compile(
@@ -54,12 +61,12 @@ SILENT = re.compile(
 EXPERIMENT = re.compile(r"; experiment: (\S+) (on|off)\b(?: \(no effect: ([^)]*)\))?")
 
 FIELDS = [
-    "label", "started", "game", "mode", "version", "start_tier", "peak_tier",
+    "label", "started", "game", "transport", "mode", "version", "start_tier", "peak_tier",
     "duration_s", "end_reason", "start_pps", "gap_p50_ms", "gap_p99_ms",
     "gap_longest_ms", "stalls", "jitter_us", "send_longest_ms", "send_stalls",
     "socket_drops", "game_socket_drops", "backlog_drops",
     "nic_drops", "squeezed", "server_changes", "silences",
-    "silence_longest_s", "rx_queue", "game_tcp", "bulk",
+    "silence_longest_s", "rx_queue", "game_tcp", "tcp_retransmits", "bulk",
     "bulk_marked",
     "experiment", "arm", "no_effect", "reason",
 ]
@@ -99,9 +106,19 @@ def parse(lines, label):
         elif m := DETECTED.search(line):
             cur = {
                 "label": label, "started": stamp, "game": m.group(1),
+                "transport": "udp",
                 "mode": mode, "version": version, "start_tier": m.group(3),
                 "peak_tier": m.group(3), "start_pps": m.group(2),
                 "reason": m.group(4),
+            }
+        elif m := DETECTED_TCP.search(line):
+            # start_pps: its sends and receives a second together
+            cur = {
+                "label": label, "started": stamp, "game": m.group(1),
+                "transport": "tcp",
+                "mode": mode, "version": version, "start_tier": m.group(4),
+                "peak_tier": m.group(4), "start_pps": str(int(m.group(2)) + int(m.group(3))),
+                "reason": m.group(5),
             }
         elif cur and (m := RETIER.search(line)):
             if m.group(2) in TIERS and TIERS.index(m.group(2)) > TIERS.index(cur["peak_tier"]):
@@ -109,7 +126,11 @@ def parse(lines, label):
         elif cur and (m := ENDED.search(line)):
             cur["duration_s"] = secs(m.group(1))
             cur["end_reason"] = m.group(2)
-        elif cur and "end_reason" in cur and line.find(f"{cur['game']}: packet gaps") >= 0:
+        elif cur and "end_reason" in cur and re.search(
+            re.escape(cur["game"]) + r": (?:packet|receive) gaps", line
+        ):
+            if r := RETRANS.search(line):
+                cur["tcp_retransmits"] = "0" if r.group(1) == "none" else r.group(1)
             if m := GAPS.search(line):
                 cur["gap_p50_ms"], cur["gap_p99_ms"] = ms(m.group(1)), ms(m.group(2))
                 cur["gap_longest_ms"], cur["stalls"] = m.group(3), m.group(4)
@@ -187,6 +208,12 @@ def compare(rows, field, min_minutes):
     """Medians per group (an experiment arm, a label, tuned vs dry-run)."""
     rows = [r for r in rows if num(r, "duration_s") and num(r, "duration_s") >= min_minutes * 60
             and r.get("gap_p99_ms") not in (None, "")]
+    # A TCP game's gaps are between its receives, at its own message rate:
+    # not comparable with a UDP game's packet gaps.
+    tcp = [r for r in rows if r.get("transport") == "tcp"]
+    if tcp and len(tcp) < len(rows):
+        print(f"left out: {len(tcp)} matches of games that talk TCP (compare those on their own)")
+        rows = [r for r in rows if r.get("transport") != "tcp"]
     groups = {}
     for r in rows:
         groups.setdefault(r.get(field) or "(none)", []).append(r)

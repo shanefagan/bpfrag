@@ -222,6 +222,9 @@ pub fn health_dict(h: Option<&Health>) -> PropMap {
     put(&mut m, "nic_drops", Box::new(h.nic_drops));
     put(&mut m, "squeezed", Box::new(h.squeezed));
     put(&mut m, "game_tcp_bytes", Box::new(h.game_tcp_bytes));
+    if let Some(n) = h.tcp_retransmits {
+        put(&mut m, "tcp_retransmits", Box::new(n));
+    }
     put(
         &mut m,
         "server_changes",

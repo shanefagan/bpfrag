@@ -100,8 +100,9 @@ restored. `reason` is what ended it: `game exited`, `netcode quiet for 15s`,
 the daemon shuts down mid-match. `health` holds the match's connection
 health, the same numbers as the log line (see
 [measuring.md](measuring.md)); a key is missing when there is nothing to
-report, and the dict is empty when bpfrag stopped, and for a game that
-talks TCP (no gap figures for those yet):
+report, and the dict is empty when bpfrag stopped. For a game that talks
+TCP the gap figures are between its receives, and `tcp_retransmits` (t)
+is the segments its connections sent again (0.18.0):
 
 | Key | Type | Meaning |
 |---|---|---|
