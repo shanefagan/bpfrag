@@ -160,6 +160,16 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-15** (0.17.1, Path of Exile 2): the first tuned TCP session,
+  20 minutes, detected at its start and held at COMPETITIVE until the
+  game exited. 3.1 MB in, 0.19 MB out. Ten stretches of 5–17 s at a
+  trickle (under 200 bytes a second) didn't end the match: the stream
+  never stopped completely.
+- **2026-11-14 evening** (0.17.1, Deadlock, four matches back to back in
+  one game session): all clean, 99% 17–18 ms, longest 39–42 ms, no stalls
+  in play. Once the game's state arrived 74 s in, after a 612 ms quiet,
+  and was left out as loading, as 0.16.3 intended. Deadlock's TCP started
+  no match of its own.
 - **2026-11-14** (0.16.3, Path of Exile 2, observed): one 21-minute
   session, TCP only. The client sends about 13 small messages a second
   against the server's 30, not 30 each way as noted before. Steady (rate
