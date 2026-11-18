@@ -31,7 +31,7 @@ timelines by `docs/scripts/graphs.py` (2026-11-11 to -14, 25 matches).
   19 Deadlock matches (2026-11-04 to -10). What made matches differ was
   the relay they were on. Both taken out of the profiles in 0.16.0.
 - **Socket buffers:** the game's own sockets never dropped a packet in
-  play, with or without bigger buffers (15 matches, 2026-11-02 to -08).
+  play, with or without bigger buffers (18 matches, 2026-11-02 to -18).
   The one time they did, 4 packets with the kernel's default buffers,
   Trackmania was closing: it stopped reading its socket for two seconds
   while the server kept sending. The machine-wide count (about one drop a
@@ -45,7 +45,10 @@ timelines by `docs/scripts/graphs.py` (2026-11-11 to -14, 25 matches).
   ([experiment 14](experiments.md#14-writeback-during-a-big-download)).
 - **DSCP, bulk demotion, Wi-Fi power save:** not measured yet. On a
   wired line with no queue (as here), there's nothing for them to do. A
-  day of bulk-demotion matches (2026-11-14) had nothing to demote.
+  day of bulk-demotion matches (2026-11-14) had nothing to demote; on
+  2026-11-17 four matches had a browser moving 30–221 MB (3 demoted, 1
+  not), with no difference, as expected with no queue that reads the
+  mark.
 - **How much matches differ:** in 17 matches where nothing was expected
   to differ (writeback with nothing writing much, bulk with nothing to
   demote), no comparison came closer than p 0.4, and jitter ranged from
@@ -61,11 +64,13 @@ timelines by `docs/scripts/graphs.py` (2026-11-11 to -14, 25 matches).
 - **Deadlock** (Valve, through Steam's relays): 64 updates a second
   against people, 32 while the player is dead, on the end screen, or in
   a bot match (where each update comes as two packets 2 ms apart). A
-  pause keeps the full 64 a second, each update tiny. The game also
-  talks TCP throughout (2.5–5 MB a game), loads over TCP in its first
-  minute, runs its menu against a server of its own over loopback, and
-  pings Steam's relays for a second or two as it starts. Its relay can
-  change mid-game, with no break.
+  pause keeps the full 64 a second, each update tiny. Its menu runs
+  against a server of its own over loopback, and it pings Steam's relays
+  for a second or two as it starts. Its TCP is nearly all to this machine
+  too: over the network it moves about 33 KB as each game ends and
+  nothing in play. (The 2.5–5 MB a game, and the load in the first
+  minute, recorded before 0.17.0 were TCP to this machine, which 0.17.0
+  stopped counting.) Its relay can change mid-game, with no break.
 - **Trackmania:** the client sends about 200 packets a second while
   racing and the server about 90, dropping to about 50 between races.
   It stays in one session for an hour, moving between rooms (servers),
@@ -163,6 +168,14 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-17 and -18** (0.17.1, Deadlock, wired): 10 matches of 5
+  minutes or more, all clean: 99% 17–18 ms, longest 39–45 ms, no gap of
+  50 ms or more in play. One stall in the health lines, 618 ms, was the
+  game's state arriving 4 s into play (a bug, fixed in 0.18.1). A
+  mid-match relay change cost nothing. A browser moved 30–221 MB in four
+  matches, demoted in three: no difference. Socket buffers 2 off / 1 on:
+  no drops either way. Over the network, the game's TCP was about 33 KB
+  a match, all as it ended.
 - **2026-11-15** (0.17.1, Path of Exile 2): the first tuned TCP session,
   20 minutes, detected at its start and held at COMPETITIVE until the
   game exited. 3.1 MB in, 0.19 MB out. Ten stretches of 5–17 s at a
@@ -269,6 +282,12 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 
 ## Bugs found and what they taught
 
+- **0.18.0: the game's state arriving just after the first minute still
+  counted as a stall.** 0.16.3 told the state's burst from play by the
+  usual rate, which play only knows after 10 readings. On 2026-11-17 the
+  state came 64 s into a match, 4 s into play, and the 618 ms quiet
+  before it was a stall. 0.18.1 learns the usual rate during the first
+  minute too, for that check, until play has its own.
 - **0.16.2: a game that started after the first minute counted its
   start as play.** Play counts from a minute in, and Deadlock's game
   state usually arrives well before that. Once it came 100 s in, and the
