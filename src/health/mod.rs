@@ -533,6 +533,10 @@ struct Play {
     /// gap (ms): what "usual" is.
     rates: Vec<u64>,
     intervals: Vec<u32>,
+    /// The same, over the settling minute: what tells the game's state
+    /// arriving in play's first LEARN readings, before `rates` has enough.
+    settle_rates: Vec<u64>,
+    settle_intervals: Vec<u32>,
     /// Usual-rate readings' gaps: counted, and the latest END_TRIM, which
     /// are counted once later ones come.
     counted: Option<Gaps>,
@@ -580,12 +584,16 @@ impl Play {
             self.prev_send_stalls,
             self.send_whole,
         );
+        let settle_rates = std::mem::take(&mut self.settle_rates);
+        let settle_intervals = std::mem::take(&mut self.settle_intervals);
         *self = Play {
             started,
             prev_tcp,
             prev_tx,
             prev_send_stalls,
             send_whole,
+            settle_rates,
+            settle_intervals,
             base: Some(ports.to_vec()),
             prev: Some(ports.to_vec()),
             ..Play::default()
@@ -607,10 +615,21 @@ impl Play {
     }
 
     /// Is this reading the game's state arriving: more updates than usual,
-    /// under half the usual interval apart? Only once the usual is known.
+    /// under half the usual interval apart? Only once the usual is known:
+    /// from play, or until play has LEARN readings, from the settling
+    /// minute. The state can arrive a few seconds into play (Deadlock,
+    /// 2026-11-17 15:55, 64 s into the match), before play alone has
+    /// taught the usual.
     fn state_arriving(&self, d: &Gaps) -> bool {
-        let rate = median(&self.rates).unwrap_or(0);
-        let usual_ms = median(&self.intervals).unwrap_or(0);
+        let (rates, intervals) = if self.rates.len() >= LEARN {
+            (&self.rates, &self.intervals)
+        } else if self.settle_rates.len() >= LEARN {
+            (&self.settle_rates, &self.settle_intervals)
+        } else {
+            return false;
+        };
+        let rate = median(rates).unwrap_or(0);
+        let usual_ms = median(intervals).unwrap_or(0);
         d.updates > rate && d.quantile_ms(0.5).is_some_and(|ms| ms * 2 < usual_ms)
     }
 
@@ -677,6 +696,16 @@ impl Play {
             return Gaps::match_flows(ports);
         };
         if self.base.is_none() {
+            // Settling: nothing counts yet, but the usual rate is learned,
+            // for the state check in play's first seconds. A load or the
+            // state arriving in this minute is a reading or two of sixty,
+            // so the median is play's.
+            if let Some(d) = Gaps::match_flows(&since(ports, &prev)).filter(|d| d.updates > 0) {
+                self.settle_rates.push(d.updates);
+                if let Some(ms) = d.quantile_ms(0.5) {
+                    self.settle_intervals.push(ms);
+                }
+            }
             return Gaps::match_flows(ports);
         }
         let delta = since(ports, &prev);
@@ -716,7 +745,7 @@ impl Play {
             && sent
                 .is_some_and(|d| d.saturating_mul(QUIET_SENDING) < median(&self.sent).unwrap_or(0));
         let big_tcp = tcp.is_some_and(|d| d >= LOADING_BYTES) && !(learned && usual_now);
-        let state = learned && gaps.as_ref().is_some_and(|d| self.state_arriving(d));
+        let state = gaps.as_ref().is_some_and(|d| self.state_arriving(d));
         let burst = quiet || big_tcp || state || self.unanswered >= SILENT_READINGS;
         if state {
             // the quiet before the state often ends in the reading before
@@ -1361,6 +1390,56 @@ mod tests {
         let g = port.silent(&mut p).unwrap();
         assert_eq!(g.stalls, 0, "{g:?}");
         assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn the_games_state_arriving_just_after_settling_isnt_play() {
+        // Deadlock, 2026-11-17 15:55: the match settled at 60 s, and at
+        // 64 s the server went quiet for 618 ms, then sent the game's
+        // state: 52 updates about 5 ms apart, then 206. Play had four
+        // readings, too few to know its usual rate from play alone.
+        let mut port = Port::new();
+        let mut p = Play::default();
+        p.start();
+        for _ in 0..55 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        let (ports, _) = port.next();
+        p.settle(&ports);
+        for _ in 0..4 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        port.after_quiet(&mut p, 618, 52, 4, 3);
+        port.second(&mut p, 206, 4, 3);
+        for _ in 0..60 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 0, "{g:?}");
+        assert!(g.max_gap_ns < 100_000_000, "{g:?}");
+    }
+
+    #[test]
+    fn a_hiccup_just_after_settling_is_play() {
+        // the same quiet, followed by play at the usual rate: a real stall
+        let mut port = Port::new();
+        let mut p = Play::default();
+        p.start();
+        for _ in 0..55 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        let (ports, _) = port.next();
+        p.settle(&ports);
+        for _ in 0..4 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        port.stall(&mut p, 618);
+        for _ in 0..60 {
+            port.second(&mut p, 64, 15, 1);
+        }
+        let g = port.silent(&mut p).unwrap();
+        assert_eq!(g.stalls, 1, "{g:?}");
+        assert_eq!(g.max_gap_ns, 618_000_000, "{g:?}");
     }
 
     #[test]

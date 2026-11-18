@@ -63,7 +63,9 @@ Limits to keep in mind:
   load comes in bursts). From 0.16.3, so is a second in which the server
   sends more updates than usual at under half the usual interval (the
   game's state arriving as a game starts, usually in the first minute but
-  once 100 s in), with the second before it. Don't compare gap figures
+  once 100 s in), with the second before it; from 0.18.1 also in play's
+  first ten seconds, judged on the usual rate of the first minute. Don't
+  compare gap figures
   across 0.10.0, 0.11.0 or 0.12.0.
 - **Pauses count as play.** A paused Deadlock match keeps its full 64
   updates a second, each one tiny, so it's indistinguishable from play
