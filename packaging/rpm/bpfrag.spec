@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.18.0
+Version:        0.18.1
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Sat Nov 21 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.1-1
+- The game's state arriving in the first seconds after the first minute is no longer counted as a stall, and a timeline's rates are per second between its samples.
+
 * Mon Nov 16 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.0-1
 - A TCP game's health line has the gaps between its receives and its own retransmissions; an experiment's match says when its setting had nothing to do.
 

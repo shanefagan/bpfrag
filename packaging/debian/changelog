@@ -1,3 +1,9 @@
+bpfrag (0.18.1-1) unstable; urgency=medium
+
+  * The game's state arriving in the first seconds after the first minute is no longer counted as a stall, and a timeline's rates are per second between its samples.
+
+ -- Shane Fagan <shane@performativenonsense.com>  Sat, 21 Nov 2026 14:00:46 +0000
+
 bpfrag (0.18.0-1) unstable; urgency=medium
 
   * A TCP game's health line has the gaps between its receives and its own retransmissions; an experiment's match says when its setting had nothing to do.
