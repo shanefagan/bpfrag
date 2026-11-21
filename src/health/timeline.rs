@@ -62,6 +62,12 @@ pub struct Row<'a> {
     pub tier: &'a str,
     /// The game's cumulative counters, if it's still running.
     pub sample: Option<&'a Sample>,
+    /// Seconds since the previous sample was read: what the rates are
+    /// per. The daemon reads its counters at the start of a tick and
+    /// writes the row near its end, after work that can take a fifth of a
+    /// second (listing /proc), so the time between rows isn't the time
+    /// between samples. None: the time since the last row.
+    pub dt: Option<f64>,
     /// The meter's per-port statistics (cumulative).
     pub ports: &'a [(u16, bpf_intf::port_rx)],
     /// The current server's label and packets a second.
@@ -138,10 +144,13 @@ impl Timeline {
         self.events.push(e.into());
     }
 
-    /// Write one row: rates since the last row.
+    /// Write one row: rates since the last row, per `r.dt`.
     pub fn row(&mut self, r: &Row) -> io::Result<()> {
         let now = Instant::now();
-        let dt = now.duration_since(self.last).as_secs_f64().max(0.001);
+        let dt =
+            r.dt.filter(|d| *d > 0.0)
+                .unwrap_or_else(|| now.duration_since(self.last).as_secs_f64())
+                .max(0.001);
         self.last = now;
         let rate = |a: u64, b: u64| format!("{:.0}", a.saturating_sub(b) as f64 / dt);
         let rates = match (r.sample, self.prev.as_ref()) {
@@ -433,6 +442,9 @@ mod tests {
         t.row(&Row {
             tier: "INTENSE",
             sample: Some(&s),
+            // the counters were read a second apart, whenever the row is
+            // written
+            dt: Some(1.0),
             // a 120 ms stall finished, and 60 more 16 ms gaps
             ports: &[(27015, port(125, &[(15, 123), (63, 1)], 1))],
             server: Some(("B:27031".into(), 61.0)),
@@ -488,7 +500,7 @@ mod tests {
         assert_eq!(at(&r2, "stalls"), "1");
         assert_eq!(at(&r2, "peers"), "1");
         assert_eq!(at(&r2, "port"), "27015");
-        assert!(at(&r2, "udp_rx_pps").parse::<f64>().unwrap() > 0.0);
+        assert_eq!(at(&r2, "udp_rx_pps"), "64", "per second between samples");
         assert_eq!(at(&cols(lines[4]), "gap_max_ms"), "72", "timed exactly");
         assert_eq!(
             at(&cols(lines[5]), "gap_max_ms"),

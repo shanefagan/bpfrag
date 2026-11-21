@@ -4,6 +4,7 @@ their traffic looks like a multiplayer game's, and only then."""
 
 import csv
 import re
+import statistics
 import subprocess
 import sys
 import time
@@ -45,10 +46,13 @@ def test_a_tcp_game_is_tuned_and_marked_until_it_exits(rig):
     assert rows[0].startswith("# bpfrag ") and "] over TCP; experiment: none" in rows[0], rows[0]
     assert "match detected (COMPETITIVE)" in rows[2], rows[:3]
     assert "match ended (game exited)" in rows[-1], rows[-1]
-    seconds = list(csv.DictReader(rows[1:]))
-    play = seconds[len(seconds) // 2]
-    assert 18 <= int(play["tcp_rx_msgs_s"]) <= 22 and play["tcp_retransmits"] == "0", play
-    assert 18 <= int(play["gaps"]) <= 22, play
+    # the median of its whole seconds: the fake game catches up after a
+    # slow moment, so one second on a busy machine can hold a few more
+    play = [r for r in csv.DictReader(rows[1:]) if r["tcp_rx_msgs_s"]]
+    assert play, rows
+    assert 18 <= statistics.median(int(r["tcp_rx_msgs_s"]) for r in play) <= 22, play
+    assert 18 <= statistics.median(int(r["gaps"]) for r in play) <= 22, play
+    assert {r["tcp_retransmits"] for r in play} == {"0"}, play
     # docs/scripts/matches.py reads a TCP game's match too
     out = subprocess.run(
         [sys.executable, REPO / "docs/scripts/matches.py", "-", "--min-minutes", "0"],

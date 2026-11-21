@@ -829,6 +829,7 @@ impl<'a> Tuner<'a> {
             let row = health::timeline::Row {
                 tier: s.tier.name(),
                 sample: samples.iter().find(|x| x.tgid == s.tgid),
+                dt: Some(dt),
                 ports: &ports,
                 server: self.health.server(),
                 peers: self.health.active_peers(),
