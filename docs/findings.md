@@ -168,6 +168,17 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 (play only), 0.11.0 (gaps between updates, at the usual rate) and 0.12.0
 (loading left out).
 
+- **2026-11-22** (0.18.1, Deadlock): the four matches from 14:02 to
+  15:06 (one game session, 10–20 minutes each) went out over Wi-Fi with
+  the wire plugged in, and their gap figures are wrong: left out. At boot
+  NetworkManager's address-conflict check on the wired link was answered
+  by the machine's own Wi-Fi card, and 8 s later it made Wi-Fi the
+  default route. Most of the server's packets still came back on the
+  wire, where the meter wasn't listening: it saw 14–18% of them (435–809
+  stalls, longest 5–18 s, none real; the game's own sending was steady).
+  A bug, fixed in 0.18.2. Once NetworkManager moved back to the wire and
+  the game restarted, two matches were clean: 99% ≤18 ms, longest
+  39–44 ms, no stalls.
 - **2026-11-17 and -18** (0.17.1, Deadlock, wired): 10 matches of 5
   minutes or more, all clean: 99% 17–18 ms, longest 39–45 ms, no gap of
   50 ms or more in play. One stall in the health lines, 618 ms, was the
@@ -282,6 +293,13 @@ Newest first. Versions matter: the gap figures changed meaning in 0.10.0
 
 ## Bugs found and what they taught
 
+- **0.18.1: the meter listened only where the game's packets could
+  leave.** With wired and Wi-Fi on one network, each card answers ARP for
+  the other's address, so a server's packets can come in on the link the
+  game doesn't send on. On 2026-11-22 they did, and the meter saw a sixth
+  of Deadlock's packets: hundreds of stalls that never happened. 0.18.2
+  listens on every interface with an address, and logs when the server's
+  packets arrive on a link the game doesn't send on.
 - **0.18.0: the game's state arriving just after the first minute still
   counted as a stall.** 0.16.3 told the state's burst from play by the
   usual rate, which play only knows after 10 readings. On 2026-11-17 the
