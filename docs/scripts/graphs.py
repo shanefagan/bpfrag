@@ -22,6 +22,10 @@ Reads timeline CSVs (`[capture] timeline = true` writes one per match to
   is the fair test (picked at random per match, so the server, the time
   of day and the relay even out).
 
+Matches whose arrival meter saw under half of the game's received
+packets in play are left out, and named on stderr: their gaps are the
+meter's, not the network's.
+
 It also prints the numbers behind each graph, as the table to go with
 it. Play is worked out as the daemon does (health/mod.rs): from a minute
 in, loading and the end screen left out; the figures agree with the
@@ -49,6 +53,10 @@ SETTLE_S = 60  # health/mod.rs SETTLE
 END_TRIM = 5  # readings before the last at the usual rate
 LOADING_HOLD = 3
 STALL_MS = 100
+# A match whose meter saw less than this share of the game's received
+# packets in play is left out: its gaps are the meter's, not the network's
+# (before 0.18.2, packets arriving on a link the game didn't send on).
+MIN_SEEN = 0.5
 
 # "# bpfrag 0.16.3 (dry run); Deadlock (pid 1) [Steam app 1422450]; experiment: writeback off"
 HEADER = re.compile(
@@ -126,6 +134,8 @@ class Match:
         self.stalls = [int(num(r["stalls"]) or 0) for r in self.rows]
         self.jitter = [num(r["jitter_us"]) for r in self.rows]
         self.sent = [num(r["udp_tx_pps"]) or 0 for r in self.rows]
+        self.received = [num(r["udp_rx_pps"]) or 0 for r in self.rows]
+        self.from_server = [num(r.get("server_pps")) or 0 for r in self.rows]
         self.tcp_rx = [num(r["tcp_rx_bytes_s"]) or 0 for r in self.rows]
         self.events = [r["events"] for r in self.rows]
         # "experiment had no effect (nothing to demote)": the setting had
@@ -159,6 +169,12 @@ class Match:
         self.upto = usual[-1] - END_TRIM if usual else None
         self.play = [i for i in play if i not in loading and self.upto is not None and i <= self.upto]
         self.usual_play = [i for i in self.play if self.usual(i)]
+        # The share of the game's received packets the meter timed, from a
+        # minute in to the last ten seconds (loopback, as the match ends):
+        # every second, as a blind meter leaves seconds out of play.
+        after = [i for i in range(n - 10) if self.t[i] >= SETTLE_S]
+        rx = sum(self.received[i] for i in after)
+        self.seen = None if self.tcp or not rx else sum(self.from_server[i] for i in after) / rx
 
     def tuned(self):
         """True if bpfrag tuned everything it would, False if it changed
@@ -648,6 +664,13 @@ def main():
             "talk TCP, or with no gap figures",
             file=sys.stderr,
         )
+    blind = [m for m in matches if m.seen is not None and m.seen < MIN_SEEN]
+    for m in blind:
+        print(
+            f"left out of the graphs: {m.name}, the meter saw {m.seen:.0%} of the game's packets",
+            file=sys.stderr,
+        )
+    matches = [m for m in matches if m not in blind]
     if not matches:
         sys.exit("no timelines with gap figures")
     os.makedirs(a.out, exist_ok=True)
@@ -685,6 +708,7 @@ def main():
             "setting",
             "arm",
             "no_effect",
+            "seen_pct",
             "minutes",
             "p99_ms",
             "longest_ms",
@@ -704,6 +728,7 @@ def main():
                 m.setting or "",
                 m.arm or "",
                 m.no_effect or "",
+                f"{m.seen * 100:.0f}" if m.seen is not None else "",
                 f"{m.minutes:.1f}",
                 fg.get("p99", ""),
                 fg.get("longest", ""),
