@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.18.1
+Version:        0.18.2
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Sun Nov 22 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.2-1
+- The arrival meter listens on every link with an address, so a server's packets coming back on a link the game doesn't send on (wired and Wi-Fi on one network) are timed, and the log says when that happens.
+
 * Sat Nov 21 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.1-1
 - The game's state arriving in the first seconds after the first minute is no longer counted as a stall, and a timeline's rates are per second between its samples.
 
