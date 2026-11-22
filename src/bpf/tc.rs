@@ -132,7 +132,7 @@ impl TcSet {
                         // It only measures: say so once, not every match.
                         if !self.told_meter_failed {
                             self.told_meter_failed = true;
-                            log::info!("packet-gap measurement unavailable: {e:#}");
+                            log::info!("packet-gap measurement unavailable on {}: {e:#}", ifc.name);
                         }
                     } else {
                         warn!("{}: cannot attach {what}: {e:#}", ifc.name);

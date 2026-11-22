@@ -110,6 +110,21 @@ Limits to keep in mind:
   look perfect while the player's latency has doubled. The game's own ping
   shows that; bpfrag doesn't measure round-trip time yet
   ([experiments.md](experiments.md), M3).
+- **On every link with an address (0.18.2).** Linux takes a packet for
+  any of its addresses on any interface, and with wired and Wi-Fi on one
+  network each card answers ARP for the other's address, so the server's
+  packets can arrive on a link the game doesn't send on. Before 0.18.2
+  the meter listened only where the game's packets could leave. On
+  2026-11-22 Deadlock sent over Wi-Fi while most of its server's packets
+  came in on the wire, and the meter saw a sixth of them: hundreds of
+  stalls and outages of several seconds that never happened. Now it
+  listens on every interface with an address, and the log says when the
+  two directions differ ("its packets leave on wlan0 but the server's
+  arrive on eno1"). That line is worth acting on: the game's way out may
+  be the worse link. Turning Wi-Fi off while wired stops it; so do
+  `net.ipv4.conf.all.arp_ignore = 1` (answer ARP only for an address on
+  the card asked) and `arp_announce = 2` (ask from the card's own
+  address) ([ip-sysctl](https://docs.kernel.org/networking/ip-sysctl.html)).
 - **It's the incoming direction only.** DSCP and Wi-Fi contention affect
   the outgoing packets first. The server's view of your packets, or the
   game's own network graph, covers that side.

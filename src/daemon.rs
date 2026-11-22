@@ -38,7 +38,7 @@ use crate::config::{Config, ExperimentPlan, Period, Pool, Profile, TcpMode, Tier
 use crate::detect::bulk::{BulkDetector, BulkEvent};
 use crate::detect::classify::Verdict;
 use crate::detect::classify::{self, ProcfsLookup};
-use crate::detect::egress::Egress;
+use crate::detect::egress::{Egress, arriving_elsewhere};
 use crate::detect::observe::{self, ObsEvent, Observer, Proto, Rules, Summary};
 use crate::detect::tagged::{self, Tagged};
 use crate::detect::{Action, Arrivals, Detector, ProcessLookup, Sample, SessionInfo, Transport};
@@ -192,6 +192,10 @@ pub struct Tuner<'a> {
     last_path_check: Instant,
     /// Which links the game's packets actually leave on.
     egress: Egress,
+    /// Which links the server's packets come in on, from the meter, and
+    /// whether this match was told they aren't the ones it leaves on.
+    arrivals: Egress,
+    told_arriving: bool,
     /// Finished matches, newest first.
     recent: VecDeque<RecentMatch>,
     /// `[detect] tcp = "tune"` or "observe": games that talk TCP.
@@ -354,6 +358,8 @@ impl<'a> Tuner<'a> {
             applied_paths: Paths::default(),
             last_path_check: Instant::now(),
             egress: Egress::default(),
+            arrivals: Egress::default(),
+            told_arriving: false,
             recent: VecDeque::new(),
         })
     }
@@ -380,6 +386,25 @@ impl<'a> Tuner<'a> {
             v.extend(net::iface_by_index(ifindex));
         }
         v
+    }
+
+    /// Where the arrival meter listens: where the game's packets can come
+    /// in, which isn't only where they leave. Linux takes a packet for any
+    /// of its addresses on any interface, and with wired and Wi-Fi on one
+    /// network each answers ARP for the other's address, so the server's
+    /// packets can arrive on a link the game doesn't send on. Before
+    /// 0.18.2 the meter sat only on the candidates, and on 22 November saw
+    /// a sixth of Deadlock's packets: it sent on wlan0 while most came back
+    /// on eno1, which had no default route then. The meter only counts, so
+    /// it goes on every addressed link, configured interfaces or not.
+    fn meter_ifaces(&self, ifindex: u32) -> Vec<Iface> {
+        let mut v = self.candidate_ifaces(ifindex);
+        for i in net::addressed_ifaces() {
+            if !v.iter().any(|c| c.ifindex == i.ifindex) {
+                v.push(i);
+            }
+        }
+        with_loopback(v)
     }
 
     /// Where the game's packets arrived since the last reading: from
@@ -461,8 +486,7 @@ impl<'a> Tuner<'a> {
         let mut changes = self.knobs.apply(&profile, &ifaces, &skip);
         maps::watch(&self.skel, s.tgid, true);
         // The meter only observes, so it runs in every tier and in dry-run.
-        self.meter
-            .attach(&self.skel, &with_loopback(marker.clone()));
+        self.meter.attach(&self.skel, &self.meter_ifaces(s.ifindex));
         if profile.dscp {
             let names: Vec<&str> = marker.iter().map(|i| i.name.as_str()).collect();
             if self.dry_run {
@@ -508,6 +532,8 @@ impl<'a> Tuner<'a> {
         maps::tcp_match(&mut self.skel, false);
         self.health.finish();
         self.egress.reset();
+        self.arrivals.reset();
+        self.told_arriving = false;
         self.bulk.reset();
         maps::clear_bulk(&mut self.skel);
         if self.tcp_games.is_none() {
@@ -592,6 +618,8 @@ impl<'a> Tuner<'a> {
                 }
                 maps::count_tcp(&mut self.skel, true);
                 self.egress.reset();
+                self.arrivals.reset();
+                self.told_arriving = false;
                 // Learn the game's ports (for the marker and the meter) and
                 // take the health baselines before anything changes.
                 maps::clear_port_rx(&self.skel);
@@ -730,7 +758,7 @@ impl<'a> Tuner<'a> {
                 maps::clear_port_rx(&self.skel);
                 maps::track_ports(&self.skel, tgid, true);
                 maps::watch(&self.skel, tgid, true);
-                let ifaces = with_loopback(self.candidate_ifaces(ifindex));
+                let ifaces = self.meter_ifaces(ifindex);
                 self.meter.attach(&self.skel, &ifaces);
                 self.meter_prev.clear();
             }
@@ -848,6 +876,13 @@ impl<'a> Tuner<'a> {
         self.last_path_check = Instant::now();
         self.egress
             .update(&maps::game_packets(&self.skel), self.last_path_check);
+        let came_in: Vec<(u32, u64)> = maps::meter_packets(&self.skel)
+            .into_iter()
+            .filter(|(_, _, local)| !local)
+            .map(|(i, n, _)| (i, n))
+            .collect();
+        self.arrivals.update(&came_in, self.last_path_check);
+        self.tell_if_arriving_elsewhere(&s.name);
         let profile = self.profile_now(s.tier);
         let (marker, knobs) = self.targets_for(&s, &profile);
         self.health
@@ -886,6 +921,34 @@ impl<'a> Tuner<'a> {
             );
         }
         self.apply_tier(&s);
+    }
+
+    /// Say once a match when the server's packets come in on a link the
+    /// game doesn't send on. Worth knowing: the way out may be the worse
+    /// link (Wi-Fi while the wire is plugged in), and it's what two links
+    /// on one network do, each answering ARP for the other's address.
+    fn tell_if_arriving_elsewhere(&mut self, game: &str) {
+        if self.told_arriving {
+            return;
+        }
+        let other = arriving_elsewhere(&self.egress.ifaces(), &self.arrivals.ifaces());
+        if other.is_empty() {
+            return;
+        }
+        self.told_arriving = true;
+        let names = |v: Vec<u32>| {
+            let mut n: Vec<String> = v.into_iter().filter_map(net::ifname).collect();
+            n.sort();
+            n.join(",")
+        };
+        let (out, back) = (names(self.egress.ifaces()), names(other));
+        info!(
+            "{game}: its packets leave on {out} but the server's arrive on {back}; \
+             two links on one network do that, each answering ARP for the other's address"
+        );
+        if let Some(t) = self.timeline.as_mut() {
+            t.event(format!("arriving on {back} not {out}"));
+        }
     }
 
     /// The profile this match uses for `tier`: the configured one, minus

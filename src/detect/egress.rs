@@ -8,6 +8,10 @@
 //! brief route flap) don't move per-interface settings back and forth.
 //! Silence moves nothing: while the game sends nothing (loading, between
 //! rounds) the interfaces it last used stay its path.
+//!
+//! Fed the arrival meter's counters instead, the same tracker says which
+//! links the server's packets come in on, which needn't be the same ones
+//! ([`arriving_elsewhere`]).
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -63,6 +67,20 @@ impl Egress {
         v.sort_unstable();
         v
     }
+}
+
+/// Links the game's packets arrive on (an `Egress` fed by the arrival
+/// meter's counters) that it doesn't send on. Empty while where it sends
+/// isn't known: no marker in a dry run, or in an arm without DSCP.
+pub fn arriving_elsewhere(sends: &[u32], arrives: &[u32]) -> Vec<u32> {
+    if sends.is_empty() {
+        return Vec::new();
+    }
+    arrives
+        .iter()
+        .copied()
+        .filter(|i| !sends.contains(i))
+        .collect()
 }
 
 #[cfg(test)]
@@ -122,6 +140,29 @@ mod tests {
         // the next match goes out over wlan0 only
         e.update(&[(2, 600), (3, 300)], t1 + Duration::from_secs(2));
         assert_eq!(e.ifaces(), vec![3]);
+    }
+
+    #[test]
+    fn replies_coming_in_on_another_link_are_found() {
+        let t0 = Instant::now();
+        let (mut out, mut back) = (Egress::default(), Egress::default());
+        // Deadlock on 22 November: sent on wlan0 (3), and the server's
+        // packets came back mostly on eno1 (2), the rest on wlan0
+        out.update(&[(2, 0), (3, 130)], t0);
+        back.update(&[(2, 170), (3, 30)], t0);
+        assert_eq!(arriving_elsewhere(&out.ifaces(), &back.ifaces()), vec![2]);
+    }
+
+    #[test]
+    fn replies_on_the_link_the_game_sends_on_are_not_news() {
+        let t0 = Instant::now();
+        let (mut out, mut back) = (Egress::default(), Egress::default());
+        // a few relay pings answered on the other link don't count either
+        out.update(&[(2, 130), (3, 0)], t0);
+        back.update(&[(2, 200), (3, 3)], t0);
+        assert!(arriving_elsewhere(&out.ifaces(), &back.ifaces()).is_empty());
+        // nothing to compare with when no marker counted the way out
+        assert!(arriving_elsewhere(&[], &[2]).is_empty());
     }
 
     #[test]

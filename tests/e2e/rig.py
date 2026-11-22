@@ -16,6 +16,7 @@ Nothing here sleeps for a fixed time to let something happen: wait_for()
 polls for the event, so a slow machine is slow, not wrong.
 """
 
+import contextlib
 import os
 import re
 import shutil
@@ -354,12 +355,38 @@ class Rig:
             )  # fmt: skip
         self.baseline = self.sysctls()
 
+    @contextlib.contextmanager
+    def second_link(self):
+        """A second link from this machine to the server's network,
+        "bpfrag2" (10.99.0.5, no route of its own), that the server
+        answers the game through: what a router does when its ARP entry
+        for the address the game sends from points at the machine's other
+        card, as with wired and Wi-Fi on one network. The game's packets
+        still leave on bpfrag0."""
+        srv = ("ip", "-n", "bpfrag-srv")
+        run("ip", "link", "add", "bpfrag2", "type", "veth", "peer", "name", "bpfrag3")
+        try:
+            run("ip", "link", "set", "bpfrag3", "netns", "bpfrag-srv")
+            run("ip", "addr", "add", "10.99.0.5/24", "dev", "bpfrag2", "noprefixroute")
+            # loose: the server's address is routed through bpfrag0, not here
+            set_sysctl("net.ipv4.conf.bpfrag2.rp_filter", 2)
+            run("ip", "link", "set", "bpfrag2", "up")
+            mac = Path("/sys/class/net/bpfrag2/address").read_text().strip()
+            run(*srv, "link", "set", "bpfrag3", "up")
+            run(*srv, "neigh", "add", "10.99.0.1", "lladdr", mac, "dev", "bpfrag3",
+                "nud", "permanent")  # fmt: skip
+            run(*srv, "route", "add", "10.99.0.1/32", "dev", "bpfrag3")
+            yield
+        finally:
+            run("ip", "link", "del", "bpfrag2", check=False)
+
     def down(self):
         self.end_processes()
         if self._server:
             self._server.exit()
         for cmd in (
             ("ip", "netns", "del", "bpfrag-srv"),
+            ("ip", "link", "del", "bpfrag2"),
             ("ip", "link", "del", "bpfrag0"),
             ("ip", "link", "del", "bpfrag-ingress"),
             ("ip", "link", "del", "bpfrag-egress"),

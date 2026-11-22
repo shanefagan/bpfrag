@@ -27,7 +27,7 @@
 //! | `jitter_us` | how much each gap at game rate differed from the one before, on average, to the microsecond |
 //! | `tcp_tx_msgs_s`, `tcp_rx_msgs_s` | the game's TCP send and receive calls this second |
 //! | `tcp_retransmits` | segments its TCP connections sent again this second (a game that talks TCP; empty otherwise) |
-//! | `events` | match start and end, tier and server changes, outages |
+//! | `events` | match start and end, tier and server changes, outages, the server's packets arriving on a link the game doesn't send on |
 //!
 //! For a game that talks TCP (the first line says "over TCP"), the gap
 //! columns are between the game's receives on its TCP connections, keyed

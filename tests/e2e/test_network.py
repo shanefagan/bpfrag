@@ -16,6 +16,24 @@ def test_ipv6_game_packets_are_marked(rig, daemon):
     assert dscps(packets) == {32}, packets
 
 
+def test_the_servers_packets_are_timed_on_a_link_the_game_doesnt_send_on(rig, daemon):
+    """Linux takes a packet for any of its addresses on any interface, and
+    wired and Wi-Fi on one network each answer ARP for the other's address,
+    so the server's packets can come back on a link the game doesn't send
+    on (Deadlock on 22 November: out on wlan0, mostly back on eno1, and the
+    meter, only where the game sent, saw a sixth of them). The meter
+    listens there too, and the log says it's happening."""
+    with rig.second_link():
+        game = rig.game(64)
+        daemon.wait_for_match()
+        daemon.wait_for(r"fakeshooter: receiving from server A:27015 on local port \d+")
+        daemon.wait_for(
+            "fakeshooter: its packets leave on bpfrag0 but the server's arrive on bpfrag2"
+        )
+        game.exit()
+        daemon.wait_for_end()
+
+
 def test_marking_follows_the_game_to_a_new_network_path(rig):
     """No fixed interface list: bpfrag uses the default-route interfaces.
     A default route through the test network appears mid-match (think of

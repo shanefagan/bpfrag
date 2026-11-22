@@ -124,6 +124,57 @@ pub fn default_route_ifaces() -> Vec<Iface> {
     names.iter().filter_map(|n| iface_by_name(n)).collect()
 }
 
+/// Interfaces that are up with an IPv4 address or an IPv6 one beyond
+/// link-local, loopback aside: every link a packet for one of this
+/// machine's addresses can come in on. Linux takes such a packet on any
+/// interface, not only the one holding the address, and two links on one
+/// network (wired and Wi-Fi) each answer ARP for the other's address.
+pub fn addressed_ifaces() -> Vec<Iface> {
+    let mut names: Vec<String> = Vec::new();
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs fills `head` with a list we own until freeifaddrs.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return Vec::new();
+    }
+    let mut p = head;
+    while !p.is_null() {
+        // SAFETY: p is a node of the list getifaddrs returned, not yet freed.
+        let ifa = unsafe { &*p };
+        p = ifa.ifa_next;
+        let up = ifa.ifa_flags & libc::IFF_UP as libc::c_uint != 0;
+        let lo = ifa.ifa_flags & libc::IFF_LOOPBACK as libc::c_uint != 0;
+        if !up || lo || ifa.ifa_addr.is_null() || ifa.ifa_name.is_null() {
+            continue;
+        }
+        // SAFETY: ifa_addr is non-null and points at a sockaddr of the
+        // family it names; an AF_INET6 one is a sockaddr_in6.
+        let addressed = match i32::from(unsafe { (*ifa.ifa_addr).sa_family }) {
+            libc::AF_INET => true,
+            libc::AF_INET6 => {
+                let a = unsafe { &*(ifa.ifa_addr as *const libc::sockaddr_in6) };
+                !is_link_local_v6(&a.sin6_addr.s6_addr)
+            }
+            _ => false, // AF_PACKET: the link itself, not an address
+        };
+        if addressed {
+            // SAFETY: ifa_name is a non-null C string in the list.
+            let name = unsafe { CStr::from_ptr(ifa.ifa_name) };
+            names.push(name.to_string_lossy().into_owned());
+        }
+    }
+    // SAFETY: head came from getifaddrs and is freed once.
+    unsafe { libc::freeifaddrs(head) };
+    names.sort();
+    names.dedup();
+    names.iter().filter_map(|n| iface_by_name(n)).collect()
+}
+
+/// fe80::/10: every IPv6 interface has one, so it says nothing about
+/// which networks the interface is on.
+fn is_link_local_v6(a: &[u8; 16]) -> bool {
+    a[0] == 0xfe && a[1] & 0xc0 == 0x80
+}
+
 /// Kernel driver behind an interface ("igc", "r8169", ...), for messages.
 pub fn driver(ifname: &str) -> String {
     fs::read_link(format!("/sys/class/net/{ifname}/device/driver"))
@@ -155,4 +206,30 @@ pub fn primary_default_route() -> Option<Iface> {
 pub fn is_wireless(ifname: &str) -> bool {
     Path::new(&format!("/sys/class/net/{ifname}/wireless")).exists()
         || Path::new(&format!("/sys/class/net/{ifname}/phy80211")).exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_fe80_slash_10_is_link_local() {
+        let mut a = [0u8; 16];
+        a[0] = 0xfe;
+        a[1] = 0x80;
+        assert!(is_link_local_v6(&a));
+        a[1] = 0xbf;
+        assert!(is_link_local_v6(&a), "fe80::/10 runs to febf::");
+        a[1] = 0xc0;
+        assert!(!is_link_local_v6(&a), "fec0:: is outside it");
+        a[0] = 0xfd;
+        a[1] = 0x00;
+        assert!(!is_link_local_v6(&a), "a ULA is an address on a network");
+    }
+
+    #[test]
+    fn loopback_is_never_an_addressed_interface() {
+        // whatever this machine has, lo is up with 127.0.0.1 and is left out
+        assert!(addressed_ifaces().iter().all(|i| i.name != "lo"));
+    }
 }
