@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.18.2
+Version:        0.18.3
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Mon Nov 23 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.3-1
+- Dependencies: libbpf-sys 1.7.1 (the same libbpf 1.7.0).
+
 * Sun Nov 22 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.2-1
 - The arrival meter listens on every link with an address, so a server's packets coming back on a link the game doesn't send on (wired and Wi-Fi on one network) are timed, and the log says when that happens.
 

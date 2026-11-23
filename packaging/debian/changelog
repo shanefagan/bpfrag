@@ -1,3 +1,9 @@
+bpfrag (0.18.3-1) unstable; urgency=medium
+
+  * Dependencies: libbpf-sys 1.7.1 (the same libbpf 1.7.0).
+
+ -- Shane Fagan <shane@performativenonsense.com>  Mon, 23 Nov 2026 10:16:22 +0000
+
 bpfrag (0.18.2-1) unstable; urgency=medium
 
   * The arrival meter listens on every link with an address, so a server's packets coming back on a link the game doesn't send on (wired and Wi-Fi on one network) are timed, and the log says when that happens.
