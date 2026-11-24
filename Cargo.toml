@@ -26,7 +26,11 @@ serde_json = "1"
 toml = "1.1"
 
 [build-dependencies]
-bindgen = "0.73"
+# Without its default features: prettyplease (unused, build.rs formats with
+# rustfmt) ties bindgen's syn to prettyplease's, which bindgen's version
+# range doesn't, and a lockfile with the two on different majors fails to
+# build. "logging" only feeds a logger build scripts don't have.
+bindgen = { version = "0.73", default-features = false, features = ["runtime"] }
 libbpf-cargo = "0.27"
 
 [profile.release]
