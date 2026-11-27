@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -92,6 +93,25 @@ def sysctl(name):
 
 def set_sysctl(name, value):
     run("sysctl", "-qw", f"{name}={value}")
+
+
+def settle():
+    """Let udev finish with new interfaces. systemd applies sysctl.d's
+    per-interface defaults (net.ipv4.conf.*.rp_filter among them) to each
+    interface as it appears, which can land after, and undo, a setting the
+    rig made first."""
+    if shutil.which("udevadm"):
+        run("udevadm", "settle", "--timeout=10", check=False)
+
+
+def reverse_path_drops():
+    """Packets the kernel has dropped for failing the reverse-path filter."""
+    lines = Path("/proc/net/netstat").read_text().splitlines()
+    for names, values in zip(lines[::2], lines[1::2]):
+        if names.startswith("TcpExt:"):
+            row = dict(zip(names.split()[1:], values.split()[1:]))
+            return int(row.get("IPReversePathFilter", 0))
+    return 0
 
 
 def wait_until(what, test, timeout=15.0, every=0.1):
@@ -368,17 +388,42 @@ class Rig:
         try:
             run("ip", "link", "set", "bpfrag3", "netns", "bpfrag-srv")
             run("ip", "addr", "add", "10.99.0.5/24", "dev", "bpfrag2", "noprefixroute")
-            # loose: the server's address is routed through bpfrag0, not here
-            set_sysctl("net.ipv4.conf.bpfrag2.rp_filter", 2)
             run("ip", "link", "set", "bpfrag2", "up")
             mac = Path("/sys/class/net/bpfrag2/address").read_text().strip()
             run(*srv, "link", "set", "bpfrag3", "up")
             run(*srv, "neigh", "add", "10.99.0.1", "lladdr", mac, "dev", "bpfrag3",
                 "nud", "permanent")  # fmt: skip
             run(*srv, "route", "add", "10.99.0.1/32", "dev", "bpfrag3")
+            self._echo_through_second_link()
             yield
         finally:
             run("ip", "link", "del", "bpfrag2", check=False)
+
+    def _echo_through_second_link(self):
+        """Make sure the server's echo comes back through bpfrag2, or fail
+        here saying why. The reverse-path filter has to be loose there, as
+        the server's address is routed through bpfrag0: strict, the kernel
+        drops every reply, the game hears nothing, and no match starts (on
+        GitHub's runners, until udev had been waited for)."""
+        settle()
+        before = reverse_path_drops()
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.bind(("10.99.0.1", 0))
+            s.settimeout(0.5)
+            for _ in range(10):
+                set_sysctl("net.ipv4.conf.bpfrag2.rp_filter", 2)
+                s.sendto(b"probe", (SERVER, GAME_PORT))
+                try:
+                    s.recv(64)
+                    return
+                except TimeoutError:
+                    settle()
+        conf = Path("/proc/sys/net/ipv4/conf")
+        rpf = {i: (conf / i / "rp_filter").read_text().strip() for i in ("all", "bpfrag2")}
+        raise AssertionError(
+            f"the server's echo never came back through bpfrag2 (rp_filter {rpf}; "
+            f"{reverse_path_drops() - before} dropped by the reverse-path filter)"
+        )
 
     def down(self):
         self.end_processes()
