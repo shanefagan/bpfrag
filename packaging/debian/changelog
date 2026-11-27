@@ -1,3 +1,9 @@
+bpfrag (0.18.4-1) unstable; urgency=medium
+
+  * Dependencies: anyhow 1.0.105, clap 4.6.10, ctrlc 3.5.3, toml 1.2.3.
+
+ -- Shane Fagan <shane@performativenonsense.com>  Fri, 27 Nov 2026 14:32:08 +0000
+
 bpfrag (0.18.3-1) unstable; urgency=medium
 
   * Dependencies: libbpf-sys 1.7.1 (the same libbpf 1.7.0).

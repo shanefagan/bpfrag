@@ -10,7 +10,7 @@
 %global _lto_cflags %{nil}
 
 Name:           bpfrag
-Version:        0.18.3
+Version:        0.18.4
 Release:        1%{?dist}
 Summary:        eBPF network tuning for competitive gaming that undoes itself
 
@@ -117,6 +117,9 @@ fi
 %config(noreplace) %{_sysconfdir}/default/bpfrag
 
 %changelog
+* Fri Nov 27 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.4-1
+- Dependencies: anyhow 1.0.105, clap 4.6.10, ctrlc 3.5.3, toml 1.2.3.
+
 * Mon Nov 23 2026 Shane Fagan <shane@performativenonsense.com> - 0.18.3-1
 - Dependencies: libbpf-sys 1.7.1 (the same libbpf 1.7.0).
 
