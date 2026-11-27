@@ -47,9 +47,40 @@ use super::{BUCKETS, Gaps};
 use crate::bpf_intf;
 use crate::detect::Sample;
 
-/// A port's counters at the last row: packets, histogram, stalls, and
-/// the jitter count and sum.
-type PortSoFar = (u64, [u64; BUCKETS], u64, u64, u64);
+/// A port's counters at the last row.
+#[derive(Clone, Copy)]
+struct PortSoFar {
+    pkts: u64,
+    updates: u64,
+    hist: [u64; BUCKETS],
+    stalls: u64,
+    jitter_n: u64,
+    jitter_ns: u64,
+}
+
+impl Default for PortSoFar {
+    fn default() -> Self {
+        PortSoFar {
+            pkts: 0,
+            updates: 0,
+            hist: [0; BUCKETS],
+            stalls: 0,
+            jitter_n: 0,
+            jitter_ns: 0,
+        }
+    }
+}
+
+/// What a port received since the last row.
+struct PortDelta {
+    pkts: u64,
+    updates: u64,
+    hist: [u64; BUCKETS],
+    stalls: u64,
+    longest_ns: u64,
+    jitter_n: u64,
+    jitter_ns: u64,
+}
 
 const HEADER: &str = "t,unix,tier,udp_tx_pps,udp_rx_pps,udp_tx_bytes_s,udp_rx_bytes_s,\
 tcp_tx_bytes_s,tcp_rx_bytes_s,server,server_pps,peers,port,gaps,gap_p50_ms,gap_p99_ms,\
@@ -90,7 +121,7 @@ pub struct Timeline {
     start: Instant,
     last: Instant,
     prev: Option<Sample>,
-    /// Each port's packets, histogram and stall count at the last row.
+    /// Each port's counters at the last row.
     prev_ports: HashMap<u16, PortSoFar>,
     prev_send_stalls: Option<u64>,
     prev_retrans: Option<u64>,
@@ -223,7 +254,11 @@ impl Timeline {
     }
 
     /// "port,gaps,p50,p99,max,stalls,jitter" since the last row, over the ports
-    /// that received at least a tenth of what the busiest did this second.
+    /// that received at least a tenth of the updates the busiest did this
+    /// second, as the health meter counts them. Packets would leave out a
+    /// relay's new port in the second the game moves to it: its first
+    /// updates come a packet each, against the old port's two or three, and
+    /// the gap the move cost (97 to 99 ms on 27 November) is on the new port.
     fn gaps_since_last(
         &mut self,
         ports: &[(u16, bpf_intf::port_rx)],
@@ -233,51 +268,77 @@ impl Timeline {
         let mut deltas = Vec::with_capacity(ports.len());
         for (port, r) in ports {
             let g = Gaps::from_bpf(*port, r);
-            let (pkts, hist, stalls, jn, js) = match self.prev_ports.get(port) {
+            let was = match self.prev_ports.get(port) {
                 // an entry the LRU map dropped and made again starts over
-                Some(&(p, h, s, jn, js)) if p <= g.pkts => (p, h, s, jn, js),
-                _ => (0, [0u64; BUCKETS], 0, 0, 0),
+                Some(was) if was.pkts <= g.pkts => *was,
+                _ => PortSoFar::default(),
             };
-            let mut d = [0u64; BUCKETS];
-            for (x, (a, b)) in d.iter_mut().zip(g.hist.iter().zip(hist.iter())) {
+            let mut hist = [0u64; BUCKETS];
+            for (x, (a, b)) in hist.iter_mut().zip(g.hist.iter().zip(was.hist.iter())) {
                 *x = a.saturating_sub(*b);
             }
             // this reading's longest gap, timed exactly, if the port had one
-            let longest = reading
+            let longest_ns = reading
                 .filter(|n| r.reading == *n)
                 .map_or(0, |_| r.reading_max_ns);
             deltas.push((
                 *port,
-                g.pkts - pkts,
-                d,
-                g.stalls.saturating_sub(stalls),
-                longest,
-                (
-                    g.jitter_n.saturating_sub(jn),
-                    g.sum_jitter_ns.saturating_sub(js),
-                ),
+                PortDelta {
+                    pkts: g.pkts - was.pkts,
+                    updates: g.updates.saturating_sub(was.updates),
+                    hist,
+                    stalls: g.stalls.saturating_sub(was.stalls),
+                    longest_ns,
+                    jitter_n: g.jitter_n.saturating_sub(was.jitter_n),
+                    jitter_ns: g.sum_jitter_ns.saturating_sub(was.jitter_ns),
+                },
             ));
             now.insert(
                 *port,
-                (g.pkts, g.hist, g.stalls, g.jitter_n, g.sum_jitter_ns),
+                PortSoFar {
+                    pkts: g.pkts,
+                    updates: g.updates,
+                    hist: g.hist,
+                    stalls: g.stalls,
+                    jitter_n: g.jitter_n,
+                    jitter_ns: g.sum_jitter_ns,
+                },
             );
         }
         self.prev_ports = now;
-        let Some(&(port, most, ..)) = deltas.iter().max_by_key(|d| d.1).filter(|d| d.1 > 0) else {
+        // the port column and its packets are the busiest port's
+        let Some((port, most)) = deltas
+            .iter()
+            .map(|(p, d)| (*p, d.pkts))
+            .max_by_key(|&(_, n)| n)
+            .filter(|&(_, n)| n > 0)
+        else {
             return ",0,,,,0,".into();
+        };
+        // updates where the meter counted them, packets otherwise
+        let busiest_updates = deltas.iter().map(|(_, d)| d.updates).max().unwrap_or(0);
+        let counts = |d: &PortDelta| {
+            if busiest_updates > 0 {
+                (d.updates, busiest_updates)
+            } else {
+                (d.pkts, most)
+            }
         };
         let mut hist = [0u64; BUCKETS];
         let mut stalls = 0;
         let mut longest_ns = 0;
         let (mut jitter_n, mut jitter_ns) = (0, 0);
-        for (_, _, d, s, l, (jn, js)) in deltas.iter().filter(|d| d.1.saturating_mul(10) >= most) {
-            for (h, x) in hist.iter_mut().zip(d.iter()) {
+        for (_, d) in deltas.iter().filter(|(_, d)| {
+            let (n, busiest) = counts(d);
+            n.saturating_mul(10) >= busiest
+        }) {
+            for (h, x) in hist.iter_mut().zip(d.hist.iter()) {
                 *h += x;
             }
-            stalls += s;
-            longest_ns = longest_ns.max(*l);
-            jitter_n += jn;
-            jitter_ns += js;
+            stalls += d.stalls;
+            longest_ns = longest_ns.max(d.longest_ns);
+            jitter_n += d.jitter_n;
+            jitter_ns += d.jitter_ns;
         }
         let this = Gaps {
             port,
@@ -509,6 +570,41 @@ mod tests {
         );
         let r3 = cols(lines[6]);
         assert_eq!(r3.len(), head.len(), "an empty row keeps its columns");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_relays_new_port_counts_by_updates_like_the_health_meter() {
+        let dir = tmp("new-port");
+        let mut t = Timeline::create(&dir, 5, 1_793_300_000, "Deadlock", "bpfrag test").unwrap();
+        // 27 November, 11:46: the second Deadlock moved to a relay's new
+        // port. The old one still had most of it, 138 packets in 60
+        // updates; the new one 8 packets, 8 updates, and the 99 ms gap the
+        // move cost. Under a tenth of the packets, over a tenth of the
+        // updates: the health meter counted that gap, so the row must too.
+        let mut old = port(138, &[(15, 59)], 0);
+        old.updates = 60;
+        old.reading = 4;
+        old.reading_max_ns = 18_000_000;
+        let mut new = port(8, &[(15, 6), (63, 1)], 0);
+        new.updates = 8;
+        new.reading = 4;
+        new.reading_max_ns = 99_000_000;
+        t.row(&Row {
+            tier: "COMPETITIVE",
+            ports: &[(44826, old), (39782, new)],
+            reading: Some(4),
+            ..Default::default()
+        })
+        .unwrap();
+        let path = t.path().to_path_buf();
+        t.finish().unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let head: Vec<&str> = HEADER.split(',').collect();
+        let row: Vec<&str> = text.lines().nth(2).unwrap().split(',').collect();
+        let at = |name: &str| row[head.iter().position(|h| *h == name).unwrap()];
+        assert_eq!(at("port"), "44826", "the port column is still the busiest");
+        assert_eq!(at("gap_max_ms"), "99");
         let _ = fs::remove_dir_all(&dir);
     }
 
