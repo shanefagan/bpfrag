@@ -21,22 +21,52 @@ const MIN_SHARE: f64 = 0.10;
 /// How long an interface stays counted after its share drops.
 const HOLD: Duration = Duration::from_secs(30);
 
+/// Packets a second a link must take, besides its share, to count as one
+/// the server's packets arrive on. The server sends 32 to 128 a second;
+/// relay pings a handful. On 2026-11-26 a few ping replies on wlan0 as a
+/// match ended, when little else was arriving, made a tenth of the window.
+const ARRIVING_MIN_PPS: f64 = 20.0;
+
 #[derive(Debug, Default)]
 pub struct Egress {
     /// Cumulative counts at the last update.
     last: HashMap<u32, u64>,
     /// ifindex -> when it last carried at least MIN_SHARE.
     active: HashMap<u32, Instant>,
+    /// The rate a link needs besides its share: 0 for the way out.
+    min_pps: f64,
+    /// When the counters were last read.
+    last_at: Option<Instant>,
 }
 
 impl Egress {
+    /// A tracker for the arrival meter's counters. A link needs
+    /// ARRIVING_MIN_PPS besides its share, so a few relay pings answered on
+    /// another link don't count, and the first read after a reset only sets
+    /// the baseline: until then the counters hold everything since the
+    /// meter went on, pings in the menu included.
+    pub fn arrivals() -> Self {
+        Egress {
+            min_pps: ARRIVING_MIN_PPS,
+            ..Egress::default()
+        }
+    }
+
     pub fn reset(&mut self) {
         self.last.clear();
         self.active.clear();
+        self.last_at = None;
     }
 
     /// Feed the marker's cumulative (ifindex, game packets) counters.
     pub fn update(&mut self, counts: &[(u32, u64)], now: Instant) {
+        let secs = self.last_at.map(|t| now.duration_since(t).as_secs_f64());
+        self.last_at = Some(now);
+        if self.min_pps > 0.0 && secs.is_none() {
+            self.last = counts.iter().copied().collect();
+            return;
+        }
+        let fast_enough = |d: u64| secs.is_none_or(|s| d as f64 >= self.min_pps * s);
         let deltas: Vec<(u32, u64)> = counts
             .iter()
             .map(|&(i, c)| {
@@ -48,7 +78,7 @@ impl Egress {
         let total: u64 = deltas.iter().map(|(_, d)| d).sum();
         if total > 0 {
             for &(i, d) in &deltas {
-                if d > 0 && d as f64 >= MIN_SHARE * total as f64 {
+                if d > 0 && d as f64 >= MIN_SHARE * total as f64 && fast_enough(d) {
                     self.active.insert(i, now);
                 }
             }
@@ -145,24 +175,52 @@ mod tests {
     #[test]
     fn replies_coming_in_on_another_link_are_found() {
         let t0 = Instant::now();
-        let (mut out, mut back) = (Egress::default(), Egress::default());
-        // Deadlock on 22 November: sent on wlan0 (3), and the server's
-        // packets came back mostly on eno1 (2), the rest on wlan0
-        out.update(&[(2, 0), (3, 130)], t0);
-        back.update(&[(2, 170), (3, 30)], t0);
+        let t1 = t0 + Duration::from_secs(2);
+        let (mut out, mut back) = (Egress::default(), Egress::arrivals());
+        // Deadlock on 22 November: sent on wlan0 (3), and over two seconds
+        // the server's packets came back mostly on eno1 (2), some on wlan0
+        out.update(&[(2, 0), (3, 130)], t1);
+        back.update(&[(2, 0), (3, 0)], t0);
+        back.update(&[(2, 170), (3, 30)], t1);
         assert_eq!(arriving_elsewhere(&out.ifaces(), &back.ifaces()), vec![2]);
     }
 
     #[test]
     fn replies_on_the_link_the_game_sends_on_are_not_news() {
         let t0 = Instant::now();
-        let (mut out, mut back) = (Egress::default(), Egress::default());
-        // a few relay pings answered on the other link don't count either
-        out.update(&[(2, 130), (3, 0)], t0);
-        back.update(&[(2, 200), (3, 3)], t0);
+        let t1 = t0 + Duration::from_secs(2);
+        let (mut out, mut back) = (Egress::default(), Egress::arrivals());
+        out.update(&[(2, 130), (3, 0)], t1);
+        back.update(&[(2, 0), (3, 0)], t0);
+        back.update(&[(2, 200), (3, 3)], t1);
         assert!(arriving_elsewhere(&out.ifaces(), &back.ifaces()).is_empty());
         // nothing to compare with when no marker counted the way out
         assert!(arriving_elsewhere(&[], &[2]).is_empty());
+    }
+
+    #[test]
+    fn a_few_pings_answered_on_another_link_as_the_match_ends_are_not_news() {
+        let t0 = Instant::now();
+        let t1 = t0 + Duration::from_secs(2);
+        let (mut out, mut back) = (Egress::default(), Egress::arrivals());
+        // 26 November, 22:28: the end screen's 32 updates a second fading
+        // out on eno1 (2), and eight relay ping replies on wlan0 (3) in the
+        // same two seconds: a sixth of the window, but four a second
+        out.update(&[(2, 40), (3, 0)], t1);
+        back.update(&[(2, 0), (3, 0)], t0);
+        back.update(&[(2, 40), (3, 8)], t1);
+        assert!(arriving_elsewhere(&out.ifaces(), &back.ifaces()).is_empty());
+    }
+
+    #[test]
+    fn the_first_read_of_the_arrival_counters_only_sets_the_baseline() {
+        let t0 = Instant::now();
+        let mut back = Egress::arrivals();
+        // everything since the meter went on, relay pings in the menu too
+        back.update(&[(2, 10), (3, 500)], t0);
+        assert!(back.ifaces().is_empty());
+        back.update(&[(2, 210), (3, 500)], t0 + Duration::from_secs(2));
+        assert_eq!(back.ifaces(), vec![2]);
     }
 
     #[test]

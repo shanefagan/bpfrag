@@ -358,7 +358,7 @@ impl<'a> Tuner<'a> {
             applied_paths: Paths::default(),
             last_path_check: Instant::now(),
             egress: Egress::default(),
-            arrivals: Egress::default(),
+            arrivals: Egress::arrivals(),
             told_arriving: false,
             recent: VecDeque::new(),
         })
